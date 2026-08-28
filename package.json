@@ -1,0 +1,36 @@
+{
+  "name": "deskmcp-gateway",
+  "version": "0.9.0",
+  "description": "DeskMCP — open-source local desktop bridge for ChatGPT on Windows",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/edmen12/deskmcp.git"
+  },
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/src/index.js",
+    "stop": "node dist/src/stop.js"
+  },
+  "keywords": ["mcp", "chatgpt", "windows", "desktop", "local-first", "open-source"],
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@wonderwhy-er/desktop-commander": "0.2.47",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.3.0",
+    "typescript": "7.0.2"
+  },
+  "overrides": {
+    "sharp": "0.35.4",
+    "uuid": "11.1.1"
+  }
+}

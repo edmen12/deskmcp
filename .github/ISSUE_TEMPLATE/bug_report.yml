@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible DeskMCP problem
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve DeskMCP. Do not paste API keys, Tunnel runtime keys, or private file contents.
+  - type: input
+    id: version
+    attributes:
+      label: DeskMCP version
+      placeholder: 0.9.0
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Permission profile
+      options: [Read, Write, Full]
+    validations:
+      required: true  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: Tell us the smallest sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Windows environment
+      description: Windows version, install type, and anything else relevant. Redact usernames and secrets if needed.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed API keys, Tunnel runtime keys, private file contents, and other secrets from this report.
+          required: true

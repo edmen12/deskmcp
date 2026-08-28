@@ -1,0 +1,48 @@
+# Node / build
+node_modules/
+dist/
+*.log
+
+# Runtime state, secrets, caches, local validation
+runtime/
+test-area/*-write-test.txt
+test-area/*-e2e.txt
+test-area/*.pdf
+src/_probe.txt
+
+# Environment / credentials
+.env
+.env.*
+!.env.example
+tools/tunnel-client/
+
+# WPF local state and generated binaries
+control-panel/wpf/settings.json
+control-panel/wpf/control-panel-error.log
+control-panel/wpf/compile.log
+control-panel/wpf/DeskMCP*.exe
+control-panel/wpf/DesktopMcpControlPanel*.exe
+control-panel/wpf/panel-preview*.png
+control-panel/wpf/preview-*/
+
+# One-off development patches / probes
+control-panel/wpf/*.mjs
+control-panel/wpf/polish_patch.py
+control-panel/wpf/patch-*.ps1
+control-panel/wpf/tunnel_methods.txt
+control-panel/wpf/Panel.v2.xaml
+
+# .NET / IDE generated state
+control-panel/wpf/bin/
+control-panel/wpf/obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Code-signing private material
+*.pfx
+*.p12
+*.pvk
+signing-private/
