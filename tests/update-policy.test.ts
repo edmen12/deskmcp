@@ -1,0 +1,135 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  evaluatePostInstallState,
+  evaluateUpdateExecution,
+  evaluateUpdateMetadata,
+  type ReleaseMetadata,
+  type UpdateManifest
+} from '../src/update-policy.js';
+
+const SHA = 'a'.repeat(64);
+
+function manifest(overrides: Partial<UpdateManifest> = {}): UpdateManifest {
+  return {
+    schemaVersion: 2,
+    product: 'DeskMCP',
+    version: '0.9.2',
+    channel: 'stable',
+    target: 'win-x64',
+    artifact: 'DeskMCP-Setup-0.9.2.exe',
+    sizeBytes: 123456,
+    sha256: SHA,
+    updatePolicy: {
+      preserveUserData: true,
+      preservePermissionProfile: true,
+      fullControlSessionOnly: true,
+      manualInstallerFallback: true,
+      automaticExecutionRequiresImmutableRelease: true,
+      automaticExecutionRequiresAuthenticode: true
+    },
+    ...overrides
+  };
+}
+function release(overrides: Partial<ReleaseMetadata> = {}): ReleaseMetadata {
+  return {
+    immutable: true,
+    draft: false,
+    prerelease: false,
+    tagName: 'v0.9.2',
+    asset: {
+      name: 'DeskMCP-Setup-0.9.2.exe',
+      size: 123456,
+      digest: `sha256:${SHA}`
+    },
+    ...overrides
+  };
+}
+
+test('immutable release metadata permits verified download', () => {
+  const decision = evaluateUpdateMetadata('0.9.1', release(), manifest());
+  assert.equal(decision.kind, 'verified-download-allowed');
+  assert.equal(decision.version, '0.9.2');
+  assert.deepEqual(decision.reasons, []);
+});
+
+test('mutable release is manual-only even when hashes match', () => {
+  const decision = evaluateUpdateMetadata(
+    '0.9.1', release({ immutable: false }), manifest()
+  );
+  assert.equal(decision.kind, 'manual-only');
+  assert.deepEqual(decision.reasons, ['release-not-immutable']);
+});
+test('asset digest mismatch rejects the candidate', () => {
+  const candidate = release({
+    asset: {
+      name: 'DeskMCP-Setup-0.9.2.exe',
+      size: 123456,
+      digest: `sha256:${'b'.repeat(64)}`
+    }
+  });
+  const decision = evaluateUpdateMetadata('0.9.1', candidate, manifest());
+  assert.equal(decision.kind, 'reject');
+  assert.deepEqual(decision.reasons, ['artifact-digest-mismatch']);
+});
+
+test('same or older versions never become update candidates', () => {
+  assert.equal(
+    evaluateUpdateMetadata('0.9.2', release(), manifest()).kind,
+    'up-to-date'
+  );
+  assert.equal(
+    evaluateUpdateMetadata('0.10.0', release(), manifest()).kind,
+    'up-to-date'
+  );
+});
+
+test('unsupported channel is rejected', () => {
+  const decision = evaluateUpdateMetadata(
+    '0.9.1', release(), manifest({ channel: 'beta' })
+  );
+  assert.equal(decision.kind, 'reject');
+  assert.deepEqual(decision.reasons, ['unsupported-channel']);
+});
+
+test('unsupported target stays manual-only', () => {
+  const decision = evaluateUpdateMetadata(
+    '0.9.1', release(), manifest({ target: 'win-arm64' })
+  );
+  assert.equal(decision.kind, 'manual-only');
+  assert.deepEqual(decision.reasons, ['unsupported-target']);
+});
+test('automatic execution requires local Authenticode and pinned publisher trust', () => {
+  const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());
+  const decision = evaluateUpdateExecution(metadata, manifest(), {
+    sha256: SHA,
+    sizeBytes: 123456,
+    authenticodeValid: false,
+    signerMatchesPinnedPublisher: false
+  });
+  assert.equal(decision.kind, 'manual-only');
+  assert.deepEqual(decision.reasons, ['authenticode-invalid', 'publisher-mismatch']);
+});
+
+test('post-install verification detects permission profile changes', () => {
+  const decision = evaluatePostInstallState('read-only', 'workspace-write');
+  assert.equal(decision.kind, 'security-error');
+  assert.deepEqual(decision.reasons, ['permission-profile-change']);
+});
+test('verified signed artifact is eligible before execution', () => {
+  const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());
+  const decision = evaluateUpdateExecution(metadata, manifest(), {
+    sha256: SHA,
+    sizeBytes: 123456,
+    authenticodeValid: true,
+    signerMatchesPinnedPublisher: true
+  });
+  assert.equal(decision.kind, 'auto-install-eligible');
+  assert.deepEqual(decision.reasons, []);
+});
+
+test('post-install verification accepts an unchanged persisted profile', () => {
+  const decision = evaluatePostInstallState('workspace-write', 'workspace-write');
+  assert.equal(decision.kind, 'verified');
+  assert.deepEqual(decision.reasons, []);
+});

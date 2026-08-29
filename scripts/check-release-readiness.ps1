@@ -25,7 +25,7 @@ if (Test-Path -LiteralPath $projectLicense) {
     else { Block 'Root LICENSE is not the expected Apache License 2.0 text' }
 } else { Block 'Apache-2.0 LICENSE is missing' }
 
-foreach ($doc in @('README.md','SECURITY.md','CONTRIBUTING.md','SUPPORT.md','THIRD_PARTY_NOTICES.md','RELEASE_CHECKLIST.md','CHANGELOG.md',('RELEASE_NOTES_' + $Version + '.md'),'LICENSE_OPTIONS.md')) {
+foreach ($doc in @('README.md','SECURITY.md','CONTRIBUTING.md','SUPPORT.md','THIRD_PARTY_NOTICES.md','RELEASE_CHECKLIST.md','CHANGELOG.md','docs\UPDATE_SECURITY.md',('RELEASE_NOTES_' + $Version + '.md'),'LICENSE_OPTIONS.md')) {
     [void](Require-File (Join-Path $ProjectRoot $doc) $doc)
 }
 $secretScan = Join-Path $PSScriptRoot 'scan-release-secrets.ps1'
@@ -77,6 +77,15 @@ if (Require-File $manifestPath 'Release manifest') {
     if ($manifest.sha256 -eq $setupHash) { Pass 'Release manifest SHA256 matches Setup' } else { Block 'Release manifest SHA256 does not match Setup' }
     if ($manifest.version -eq $Version) { Pass 'Release manifest version matches package' } else { Block ('Release manifest version mismatch: ' + $manifest.version) }
     if ($manifest.artifact -eq (Split-Path $Setup -Leaf)) { Pass 'Release manifest artifact name matches Setup' } else { Block ('Release manifest artifact mismatch: ' + $manifest.artifact) }
+    if ($manifest.schemaVersion -eq 2) {
+        Pass 'Release manifest update schema v2'
+        if ($manifest.channel -eq 'stable') { Pass 'Update channel: stable' } else { Block ('Unexpected update channel: ' + $manifest.channel) }
+        $policy = $manifest.updatePolicy
+        $requiredPolicy = $policy -and $policy.preserveUserData -eq $true -and $policy.preservePermissionProfile -eq $true -and
+            $policy.fullControlSessionOnly -eq $true -and $policy.manualInstallerFallback -eq $true -and
+            $policy.automaticExecutionRequiresImmutableRelease -eq $true -and $policy.automaticExecutionRequiresAuthenticode -eq $true
+        if ($requiredPolicy) { Pass 'Safe update policy contract present' } else { Block 'Release manifest safe update policy contract is incomplete' }
+    } else { Warn 'Legacy release manifest schema; automatic update execution must remain disabled' }
 }
 if (Require-File $sumPath 'SHA256SUMS.txt') {
     $sum = (Get-Content -LiteralPath $sumPath -Raw).Trim()
@@ -84,7 +93,7 @@ if (Require-File $sumPath 'SHA256SUMS.txt') {
 }
 
 Warn ('Current release target is Windows x64 only; ARM64 is not built for ' + $Version)
-Warn 'Automatic updater is not implemented; publish updates as explicit new installers'
+Warn 'Automatic execution remains gated on an immutable GitHub Release plus valid pinned-publisher Authenticode; manual installer upgrades remain supported'
 Write-Output '------------------------------------'
 Write-Output ('BLOCKERS=' + $blockers.Count)
 Write-Output ('WARNINGS=' + $warnings.Count)

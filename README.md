@@ -146,7 +146,7 @@ Build the complete Windows release with:
 scripts\build-installer.cmd
 ```
 
-The release pipeline performs Gateway build, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, stage smoke, 13-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
+The release pipeline performs Gateway build, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, stage smoke, 13-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, injected-failure rollback, interrupted-upgrade recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
 
 Generated artifacts live under ignored `runtime\release\` and should be attached to GitHub Releases instead of committed.
 
@@ -162,7 +162,7 @@ Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 ## Current limitations
 
 - Windows x64 only; ARM64 is not packaged yet.
-- No automatic updater yet.
+- The safe-update trust contract is defined and tested, but updater UI/download execution is not enabled yet. Automatic execution remains gated on an immutable release plus valid pinned-publisher Authenticode; manual installer upgrades remain available.
 - The open-source Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until Authenticode signing is added.
 - Some transitive npm dependencies emit deprecation warnings even though the current production `npm audit` reports zero vulnerabilities.
 
@@ -173,7 +173,7 @@ Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 - [Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5)
 - [Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6)
 - [Windows ARM64 packaging](https://github.com/edmen12/deskmcp/issues/7)
-- [Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8)
+- ✅ [Safe update mechanism design](https://github.com/edmen12/deskmcp/issues/8) — trust contract, manifest gates, rollback, and interrupted-install recovery implemented; updater UI remains signing-gated
 - ✅ [Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
 
 ## Support
@@ -190,6 +190,7 @@ Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducibl
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — bundled dependency licensing
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — illustrated installation and usage guide
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — common setup and recovery paths
+- [`docs/UPDATE_SECURITY.md`](docs/UPDATE_SECURITY.md) — update trust model, execution gates, and rollback/recovery contract
 - [`docs/BRAND.md`](docs/BRAND.md) — DeskMCP visual identity and brand rules
 
 ## License

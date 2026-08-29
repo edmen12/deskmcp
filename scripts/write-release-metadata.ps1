@@ -19,8 +19,10 @@ $unknown = @($rows | Where-Object { $_.license -eq 'UNKNOWN' }).Count
 $nodeExe = Join-Path $StageRoot 'node\node.exe'
 $nodeVersion = if (Test-Path -LiteralPath $nodeExe) { ((& $nodeExe --version) | Out-String).Trim().TrimStart('v') } else { 'unknown' }
 $manifest = [ordered]@{
+    schemaVersion = 2
     product = 'DeskMCP'
     version = $Version
+    channel = 'stable'
     target = $Target
     artifact = $artifact.Name
     sizeBytes = [int64]$artifact.Length
@@ -32,6 +34,14 @@ $manifest = [ordered]@{
     nodeVersion = $nodeVersion
     releaseStageSmoke = 'passed'
     installerSmoke = 'passed'
+    updatePolicy = [ordered]@{
+        preserveUserData = $true
+        preservePermissionProfile = $true
+        fullControlSessionOnly = $true
+        manualInstallerFallback = $true
+        automaticExecutionRequiresImmutableRelease = $true
+        automaticExecutionRequiresAuthenticode = $true
+    }
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')
 }
 $manifestPath = Join-Path $ReleaseRoot 'release-manifest.json'

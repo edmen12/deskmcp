@@ -2,6 +2,19 @@
 
 All notable changes to DeskMCP are documented here.
 
+## Unreleased
+
+### Security
+
+- Defined the safe-update trust contract: immutable stable GitHub releases, matching asset/manifest/local SHA-256, and valid pinned-publisher Authenticode before user-confirmed automatic execution is eligible.
+- Added manifest schema v2 update invariants and metadata/execution/post-install policy tests.
+- Added installer rollback for failures after the prior install is backed up, plus recovery from interrupted `.install-*` / `.backup-*` states.
+- Upgrade Setup now preserves an existing **Start with Windows** choice instead of defaulting it back on.
+
+### Changed
+
+- Automatic updater execution remains disabled until a production signing identity is available; manual installer upgrades stay supported.
+
 ## 0.9.1 — 2026-08-29
 
 ### Changed

@@ -127,6 +127,13 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPart
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) 'Installed .NET license is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET notices are missing.'
 
+$rollbackMarker = Join-Path $SmokeRoot 'ROLLBACK_OLD_MARKER.txt'
+[IO.File]::WriteAllText($rollbackMarker, 'old-install-must-survive', [Text.Encoding]::ASCII)
+Write-Output 'STEP=installer-smoke-rollback'
+$failedUpgrade = Start-Process -FilePath $SetupExe -ArgumentList @('--install-test-fail-after-backup', ('"' + $SmokeRoot + '"')) -Wait -PassThru
+Require ($failedUpgrade.ExitCode -eq 10) "Injected rollback test failed: $($failedUpgrade.ExitCode)"
+Require (Test-Path -LiteralPath $rollbackMarker) 'Failed upgrade did not restore the previous install.'
+
 $marker = Join-Path $SmokeRoot 'UPGRADE_OLD_MARKER.txt'
 [IO.File]::WriteAllText($marker, 'old-install-marker', [Text.Encoding]::ASCII)
 Write-Output 'STEP=installer-smoke-upgrade'
@@ -138,6 +145,20 @@ $backupDirs = @(Get-ChildItem -LiteralPath $smokeParent -Directory -Filter 'Desk
 $tempDirs = @(Get-ChildItem -LiteralPath $smokeParent -Directory -Filter 'DesktopMCP.install-*' -ErrorAction SilentlyContinue)
 Require ($backupDirs.Count -eq 0) 'Upgrade left a backup directory behind.'
 Require ($tempDirs.Count -eq 0) 'Upgrade left an install temp directory behind.'
+
+Write-Output 'STEP=installer-smoke-interrupted-recovery'
+$recoveryMarker = Join-Path $SmokeRoot 'RECOVERY_MARKER.txt'
+[IO.File]::WriteAllText($recoveryMarker, 'restore-me', [Text.Encoding]::ASCII)
+$simBackup = $SmokeRoot + '.backup-simulated'
+$simTemp = $SmokeRoot + '.install-simulated'
+Move-Item -LiteralPath $SmokeRoot -Destination $simBackup
+New-Item -ItemType Directory -Path $simTemp | Out-Null
+[IO.File]::WriteAllText((Join-Path $simTemp 'partial.txt'), 'partial', [Text.Encoding]::ASCII)
+$recovery = Start-Process -FilePath $SetupExe -ArgumentList @('--recover-test', ('"' + $SmokeRoot + '"')) -Wait -PassThru
+Require ($recovery.ExitCode -eq 0) "Interrupted recovery failed: $($recovery.ExitCode)"
+Require (Test-Path -LiteralPath $recoveryMarker) 'Interrupted recovery did not restore the prior install.'
+Require (-not (Test-Path -LiteralPath $simBackup)) 'Interrupted recovery left backup state behind.'
+Require (-not (Test-Path -LiteralPath $simTemp)) 'Interrupted recovery left temp state behind.'
 
 Write-Output 'STEP=installer-smoke-runtime'
 $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'

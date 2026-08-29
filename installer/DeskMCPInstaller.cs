@@ -23,6 +23,7 @@ internal sealed class InstallOptions
     public bool RegisterUninstall;
     public bool CreateShortcuts;
     public bool LaunchAfterInstall;
+    public bool SimulateFailureAfterBackup;
 }
 
 internal static class InstallerEngine
@@ -36,14 +37,27 @@ internal static class InstallerEngine
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "DesktopMCP");
     }
 
+    public static bool DefaultAutoStart()
+    {
+        string startup = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "DeskMCP Control Panel.lnk");
+        string legacyStartup = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "Desktop MCP Control Panel.lnk");
+        bool existingInstall = Directory.Exists(DefaultInstallDir());
+        try
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(ProductKey)) existingInstall = existingInstall || key != null;
+        }
+        catch { }
+        return existingInstall ? File.Exists(startup) || File.Exists(legacyStartup) : true;
+    }
+
     public static void Install(InstallOptions options, Action<int, string> progress)
     {
         string finalDir = Path.GetFullPath(options.InstallDir);
         string parent = Path.GetDirectoryName(finalDir);
         Directory.CreateDirectory(parent);
+        RecoverInterruptedInstall(finalDir);
         string tempDir = finalDir + ".install-" + Guid.NewGuid().ToString("N");
         string backupDir = finalDir + ".backup-" + Guid.NewGuid().ToString("N");
-        bool swapped = false;
         bool backedUp = false;
         try
         {
@@ -57,8 +71,9 @@ internal static class InstallerEngine
                 Directory.Move(finalDir, backupDir);
                 backedUp = true;
             }
+            if (options.SimulateFailureAfterBackup)
+                throw new InvalidOperationException("Simulated install failure after backup.");
             Directory.Move(tempDir, finalDir);
-            swapped = true;
             progress(88, "Creating shortcuts…");
             if (options.CreateShortcuts) ConfigureShortcuts(finalDir, options.AutoStart);
             progress(93, "Registering DeskMCP…");
@@ -75,7 +90,7 @@ internal static class InstallerEngine
         }
         catch
         {
-            if (swapped && backedUp && Directory.Exists(backupDir))
+            if (backedUp && Directory.Exists(backupDir))
             {
                 try { DeleteDirectoryBestEffort(finalDir); Directory.Move(backupDir, finalDir); } catch { }
             }
@@ -85,6 +100,44 @@ internal static class InstallerEngine
         {
             DeleteDirectoryBestEffort(tempDir);
         }
+    }
+
+    public static void RecoverInterruptedInstall(string installDir)
+    {
+        string finalDir = Path.GetFullPath(installDir);
+        string parent = Path.GetDirectoryName(finalDir);
+        if (String.IsNullOrEmpty(parent) || !Directory.Exists(parent)) return;
+        string name = Path.GetFileName(finalDir);
+
+        foreach (string temp in Directory.GetDirectories(parent, name + ".install-*"))
+            DeleteDirectoryBestEffort(temp);
+
+        string[] backups = Directory.GetDirectories(parent, name + ".backup-*");
+        if (backups.Length == 0) return;
+        if (Directory.Exists(finalDir) && IsValidPayload(finalDir))
+        {
+            foreach (string backup in backups) DeleteDirectoryBestEffort(backup);
+            return;
+        }
+
+        string restore = null;
+        DateTime newest = DateTime.MinValue;
+        foreach (string backup in backups)
+        {
+            if (!IsValidPayload(backup)) continue;
+            DateTime changed = Directory.GetLastWriteTimeUtc(backup);
+            if (restore == null || changed > newest) { restore = backup; newest = changed; }
+        }
+        if (restore == null) return;
+        if (Directory.Exists(finalDir)) DeleteDirectoryBestEffort(finalDir);
+        Directory.Move(restore, finalDir);
+        foreach (string backup in backups) if (Directory.Exists(backup)) DeleteDirectoryBestEffort(backup);
+    }
+
+    private static bool IsValidPayload(string root)
+    {
+        try { VerifyPayload(root); return true; }
+        catch { return false; }
     }
 
     private static void ExtractPayload(string destination, Action<int, string> progress)
@@ -348,7 +401,7 @@ internal sealed class InstallerForm : Form
 
         autoStart = new CheckBox();
         autoStart.Text = "Start DeskMCP with Windows";
-        autoStart.Checked = true;
+        autoStart.Checked = InstallerEngine.DefaultAutoStart();
         autoStart.AutoSize = true;
         autoStart.Location = new Point(36, 177);
         Controls.Add(autoStart);
@@ -450,7 +503,12 @@ internal static class InstallerProgram
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length >= 2 && args[0] == "--install-test")
+        if (args.Length >= 2 && args[0] == "--recover-test")
+        {
+            try { InstallerEngine.RecoverInterruptedInstall(Path.GetFullPath(args[1])); return 0; }
+            catch { return 12; }
+        }
+        if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup"))
         {
             try
             {
@@ -460,6 +518,7 @@ internal static class InstallerProgram
                 test.RegisterUninstall = false;
                 test.CreateShortcuts = false;
                 test.LaunchAfterInstall = false;
+                test.SimulateFailureAfterBackup = args[0] == "--install-test-fail-after-backup";
                 InstallerEngine.Install(test, delegate { });
                 return 0;
             }

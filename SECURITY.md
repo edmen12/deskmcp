@@ -16,6 +16,9 @@ DeskMCP is designed around a local trust boundary:
 - Sensitive credential paths are denied by default and pre-excluded from search.
 - Runtime Tunnel keys are protected with Windows DPAPI.
 - Audit logs are metadata-only.
+- Future updater execution is fail-closed: immutable release metadata, matching SHA-256, and valid pinned-publisher Authenticode are required before a downloaded installer can become eligible for user-confirmed execution.
+
+The updater threat model and rollback/recovery contract are documented in [`docs/UPDATE_SECURITY.md`](docs/UPDATE_SECURITY.md).
 
 Do not expose port `8765` directly to a LAN or the public Internet.
 

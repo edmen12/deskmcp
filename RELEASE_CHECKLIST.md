@@ -21,7 +21,9 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] Sensitive search paths are excluded before ripgrep reads file contents.
 - [x] Tray exit semantics distinguish keeping services running from quitting DeskMCP.
 - [x] Release-stage smoke: read-only profile, 13 tools, single instance, Node cleanup, directory lockcheck.
-- [x] Installer smoke: install, upgrade, runtime, uninstall all exit 0.
+- [x] Installer smoke: install, injected failure rollback, upgrade, interrupted-install recovery, runtime, uninstall all pass.
+- [x] Safe-update contract: manifest schema v2, immutable-release/digest gates, local Authenticode/publisher gate, post-install profile verification.
+- [x] Upgrade Setup preserves an existing **Start with Windows** choice instead of silently enabling it.
 - [x] Production npm audit: 0 vulnerabilities.
 - [x] Repository secret hygiene scan: 0 findings.
 - [x] Release manifest and SHA256SUMS match the final Setup binary.
@@ -52,7 +54,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 ## Documented limitations — not blockers for the current win-x64 release
 
 - [ ] ARM64 build is not provided. Label the release **Windows x64**.
-- [ ] Automatic updater is not implemented. Publish upgrades as a new installer; add Authenticode signing when a production certificate is available.
+- [ ] Updater UI/download execution is not implemented. The safe-update contract is complete, but automatic execution remains intentionally blocked until a production Authenticode identity is available and future releases are immutable. Manual installer upgrades remain the fallback.
 - [ ] Upstream deprecated npm dependencies remain in Desktop Commander / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
 
 ## Current validated artifact

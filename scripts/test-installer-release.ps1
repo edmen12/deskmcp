@@ -18,6 +18,14 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'THIRD_PARTY_NOTICES.md'))
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-packages.csv')) 'Production Node license inventory missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) '.NET distribution license missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) '.NET third-party notices missing.'
+$rollbackMarker=Join-Path $SmokeRoot 'ROLLBACK_MARKER.txt'
+Set-Content -LiteralPath $rollbackMarker -Value 'old-install-must-survive' -Encoding ASCII
+Write-Output 'TEST=upgrade-failure-rollback'
+$failed=Start-Process -FilePath $Setup -ArgumentList @('--install-test-fail-after-backup',('"'+$SmokeRoot+'"')) -Wait -PassThru
+Require ($failed.ExitCode -eq 10) "Injected rollback test exit=$($failed.ExitCode)"
+Require (Test-Path -LiteralPath $rollbackMarker) 'Failed upgrade did not restore previous install.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.exe')) 'Failed upgrade left install missing.'
+
 $marker=Join-Path $SmokeRoot 'UPGRADE_MARKER.txt'
 Set-Content -LiteralPath $marker -Value 'old' -Encoding ASCII
 Write-Output 'TEST=upgrade'
@@ -27,6 +35,20 @@ Require (-not(Test-Path -LiteralPath $marker)) 'Upgrade marker survived.'
 $parent=Split-Path $SmokeRoot -Parent
 Require (@(Get-ChildItem -LiteralPath $parent -Directory -Filter 'DesktopMCP.backup-*' -ErrorAction SilentlyContinue).Count -eq 0) 'Backup directory remained.'
 Require (@(Get-ChildItem -LiteralPath $parent -Directory -Filter 'DesktopMCP.install-*' -ErrorAction SilentlyContinue).Count -eq 0) 'Install temp remained.'
+
+Write-Output 'TEST=interrupted-upgrade-recovery'
+$recoveryMarker=Join-Path $SmokeRoot 'RECOVERY_MARKER.txt'
+Set-Content -LiteralPath $recoveryMarker -Value 'restore-me' -Encoding ASCII
+$simBackup=$SmokeRoot+'.backup-simulated'
+$simTemp=$SmokeRoot+'.install-simulated'
+Move-Item -LiteralPath $SmokeRoot -Destination $simBackup
+New-Item -ItemType Directory -Path $simTemp | Out-Null
+Set-Content -LiteralPath (Join-Path $simTemp 'partial.txt') -Value 'partial' -Encoding ASCII
+$recover=Start-Process -FilePath $Setup -ArgumentList @('--recover-test',('"'+$SmokeRoot+'"')) -Wait -PassThru
+Require ($recover.ExitCode -eq 0) "Recovery exit=$($recover.ExitCode)"
+Require (Test-Path -LiteralPath $recoveryMarker) 'Interrupted upgrade backup was not restored.'
+Require (-not(Test-Path -LiteralPath $simBackup)) 'Recovery backup directory remained.'
+Require (-not(Test-Path -LiteralPath $simTemp)) 'Recovery temp directory remained.'
 Write-Output 'TEST=runtime'
 $panelPath=Join-Path $SmokeRoot 'DeskMCP.exe'
 $panel=Start-Process -FilePath $panelPath -ArgumentList '--startup' -WorkingDirectory $SmokeRoot -PassThru
