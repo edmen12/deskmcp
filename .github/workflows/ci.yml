@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -13,20 +17,20 @@ jobs:
   windows:
     name: Windows x64 build and tests
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node 24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: npm
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
@@ -46,9 +50,23 @@ jobs:
           $p = Start-Process -FilePath .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe -ArgumentList '--update-security-self-test' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Update security self-test failed: $($p.ExitCode)" }
 
+      - name: Runtime reliability self-test
+        shell: powershell
+        run: |
+          $p = Start-Process -FilePath .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe -ArgumentList '--runtime-reliability-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Runtime reliability self-test failed: $($p.ExitCode)" }
+
       - name: Installer UI build
         shell: powershell
         run: .\scripts\test-installer-ui.ps1
+
+      - name: Build and smoke x64 installer
+        shell: powershell
+        run: .\scripts\build-installer.ps1 -Target win-x64
+
+      - name: x64 release readiness
+        shell: powershell
+        run: .\scripts\check-release-readiness.ps1 -Target win-x64
 
       - name: Secret hygiene
         shell: powershell
@@ -61,16 +79,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node 24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: npm
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
@@ -90,6 +108,12 @@ jobs:
           $p = Start-Process -FilePath .\runtime\release-stage\win-arm64\DesktopMCP\DeskMCP.exe -ArgumentList '--update-security-self-test' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "ARM64 update security self-test failed: $($p.ExitCode)" }
 
+      - name: ARM64 runtime reliability self-test
+        shell: powershell
+        run: |
+          $p = Start-Process -FilePath .\runtime\release-stage\win-arm64\DesktopMCP\DeskMCP.exe -ArgumentList '--runtime-reliability-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "ARM64 runtime reliability self-test failed: $($p.ExitCode)" }
+
       - name: ARM64 release readiness
         shell: powershell
         run: .\scripts\check-release-readiness.ps1 -Target win-arm64
@@ -105,10 +129,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node 24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: npm

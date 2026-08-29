@@ -33,6 +33,7 @@ verified_download() {
 rm -rf "$STAGE"
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/node/bin" "$RESOURCES/tunnel-client/bin" "$RESOURCES/gateway"
 
+swift test -c release --package-path control-panel/macos
 swift build -c release --package-path control-panel/macos
 SWIFT_BIN="$(swift build -c release --package-path control-panel/macos --show-bin-path)/DeskMCPMac"
 cp "$SWIFT_BIN" "$CONTENTS/MacOS/DeskMCP"

@@ -45,3 +45,24 @@ test('AuditLogger writes paired metadata-only JSONL records', async () => {
 
   await rm(auditPath, { force: true });
 });
+
+
+test('AuditLogger rotates bounded logs while preserving metadata-only records', async () => {
+  const rotatingPath = path.join(TEST_AREA, 'audit-rotate.jsonl');
+  for (const suffix of ['', '.1', '.2']) await rm(rotatingPath + suffix, { force: true });
+  const audit = new AuditLogger(rotatingPath, 1024, 2);
+  await audit.init();
+
+  await Promise.all(Array.from({ length: 18 }, async (_, index) => {
+    const op = await audit.begin('desktop_read_file', 'read', 'read-only', `C:\\safe\\${index}.txt`);
+    await audit.finish(op, index % 3 === 0 ? 'deny' : 'allow', new Error('ROTATE_SECRET_MUST_NOT_APPEAR'));
+  }));
+
+  const current = await readFile(rotatingPath, 'utf8');
+  const previous = await readFile(rotatingPath + '.1', 'utf8');
+  assert.ok(current.length > 0);
+  assert.ok(previous.length > 0);
+  assert.doesNotMatch(current + previous, /ROTATE_SECRET_MUST_NOT_APPEAR/);
+
+  for (const suffix of ['', '.1', '.2']) await rm(rotatingPath + suffix, { force: true });
+});

@@ -4,7 +4,7 @@ DeskMCP is a personal Apache-2.0 open-source project maintained at [edmen12/desk
 
 ## Signing provider
 
-DeskMCP is preparing an application for the SignPath Foundation open-source code-signing program.
+DeskMCP has submitted its application to the SignPath Foundation open-source code-signing program and is awaiting approval.
 
 **Pending approval:** Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
 

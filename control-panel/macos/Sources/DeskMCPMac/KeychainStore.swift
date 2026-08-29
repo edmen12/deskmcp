@@ -5,7 +5,7 @@ enum KeychainStore {
     private static let service = "com.edmen12.deskmcp.tunnel-runtime"
     private static let account = "runtime-api-key"
 
-    static func read() -> String? {
+    static func read() throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -14,12 +14,19 @@ enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainError.from(status) }
+        guard let data = item as? Data,
+              let value = String(data: data, encoding: .utf8),
+              !value.isEmpty else {
+            throw KeychainError.invalidData
+        }
+        return value
     }
 
     static func save(_ value: String) throws {
+        guard !value.isEmpty else { throw KeychainError.invalidData }
         let data = Data(value.utf8)
         let lookup: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -30,15 +37,17 @@ enum KeychainStore {
         if status == errSecSuccess {
             let update = [kSecValueData as String: data]
             let result = SecItemUpdate(lookup as CFDictionary, update as CFDictionary)
-            guard result == errSecSuccess else { throw KeychainError.status(result) }
-            return
+            guard result == errSecSuccess else { throw KeychainError.from(result) }
+        } else {
+            guard status == errSecItemNotFound else { throw KeychainError.from(status) }
+            var add = lookup
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            let result = SecItemAdd(add as CFDictionary, nil)
+            guard result == errSecSuccess else { throw KeychainError.from(result) }
         }
-        guard status == errSecItemNotFound else { throw KeychainError.status(status) }
-        var add = lookup
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let result = SecItemAdd(add as CFDictionary, nil)
-        guard result == errSecSuccess else { throw KeychainError.status(result) }
+
+        guard try read() == value else { throw KeychainError.invalidData }
     }
 
     static func remove() throws {
@@ -49,13 +58,34 @@ enum KeychainStore {
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.status(status)
+            throw KeychainError.from(status)
         }
     }
 }
 
-enum KeychainError: LocalizedError {
+enum KeychainError: LocalizedError, Equatable {
+    case interactionNotAllowed
+    case accessDenied
+    case unavailable
+    case invalidData
     case status(OSStatus)
-    var errorDescription: String? { "Keychain operation failed (\(statusCode))." }
-    private var statusCode: OSStatus { if case .status(let code) = self { return code }; return errSecInternalError }
+
+    static func from(_ status: OSStatus) -> KeychainError {
+        switch status {
+        case errSecInteractionNotAllowed: return .interactionNotAllowed
+        case errSecAuthFailed, errSecUserCanceled: return .accessDenied
+        case errSecNotAvailable: return .unavailable
+        default: return .status(status)
+        }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .interactionNotAllowed: return "Keychain is locked or interaction is unavailable."
+        case .accessDenied: return "Keychain access was denied."
+        case .unavailable: return "Keychain is currently unavailable."
+        case .invalidData: return "Stored Runtime API Key is unreadable. Re-enter API key."
+        case .status(let code): return "Keychain operation failed (\(code))."
+        }
+    }
 }

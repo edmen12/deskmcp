@@ -12,9 +12,12 @@ $PanelExe = Join-Path $StageRoot 'DeskMCP.exe'
 $NodeExe = Join-Path $StageRoot 'node\node.exe'
 $GatewayRoot = Join-Path $StageRoot 'gateway'
 $SmokeFile = Join-Path $GatewayRoot 'release-smoke.mjs'
-$SettingsDir = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP'
+$SmokeStateRoot = Join-Path $ProjectRoot ('runtime\release-smoke-state\' + $Target + '-' + [Guid]::NewGuid().ToString('N'))
+$SmokeDataRoot = Join-Path $SmokeStateRoot 'local'
+$SettingsDir = Join-Path $SmokeStateRoot 'roaming'
 $SettingsPath = Join-Path $SettingsDir 'settings.json'
-$CreatedSmokeSettings = $false
+$PreviousDataRoot = $env:DESKTOP_MCP_DATA_ROOT
+$PreviousSettingsDir = $env:DESKTOP_MCP_SETTINGS_DIR
 if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
 if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missing.' }
 try {
@@ -26,15 +29,13 @@ try {
 $panel = $null
 $health = $null
 try {
-    if (-not (Test-Path -LiteralPath $SettingsPath)) {
-        New-Item -ItemType Directory -Force -Path $SettingsDir | Out-Null
-        $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
-        [IO.File]::WriteAllText($SettingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
-        $CreatedSmokeSettings = $true
-        Write-Output 'SMOKE_SETTINGS=TEMPORARY_FRESH_USER'
-    } else {
-        Write-Output 'SMOKE_SETTINGS=EXISTING_PRESERVED'
-    }
+    New-Item -ItemType Directory -Force -Path $SettingsDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $SmokeDataRoot | Out-Null
+    $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($SettingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
+    $env:DESKTOP_MCP_DATA_ROOT = $SmokeDataRoot
+    $env:DESKTOP_MCP_SETTINGS_DIR = $SettingsDir
+    Write-Output 'SMOKE_SETTINGS=ISOLATED_TEMPORARY'
     $panel = Start-Process -FilePath $PanelExe -ArgumentList '--startup' -WorkingDirectory $StageRoot -PassThru
     for ($i = 0; $i -lt 90; $i++) {
         try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break } catch { Start-Sleep -Milliseconds 500 }
@@ -83,7 +84,9 @@ try {
     }
     Start-Sleep -Seconds 2
     if (Test-Path -LiteralPath $SmokeFile) { Remove-Item -LiteralPath $SmokeFile -Force }
-    if ($CreatedSmokeSettings -and (Test-Path -LiteralPath $SettingsPath)) { Remove-Item -LiteralPath $SettingsPath -Force }
+    $env:DESKTOP_MCP_DATA_ROOT = $PreviousDataRoot
+    $env:DESKTOP_MCP_SETTINGS_DIR = $PreviousSettingsDir
+    if (Test-Path -LiteralPath $SmokeStateRoot) { Remove-Item -LiteralPath $SmokeStateRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 $left = @()
 foreach ($p in Get-Process -Name node -ErrorAction SilentlyContinue) {

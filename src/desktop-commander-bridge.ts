@@ -1,5 +1,4 @@
 import { access } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { Client } from '@modelcontextprotocol/client';
@@ -35,14 +34,7 @@ const installedDesktopCommanderEntry = path.join(
   PROJECT_ROOT, 'node_modules', '@wonderwhy-er',
   'desktop-commander', 'dist', 'index.js'
 );
-const siblingDesktopCommanderEntry = path.resolve(
-  PROJECT_ROOT, '..', 'DesktopCommanderMCP', 'dist', 'index.js'
-);
-
-export const DEFAULT_DESKTOP_COMMANDER_ENTRY =
-  existsSync(installedDesktopCommanderEntry)
-    ? installedDesktopCommanderEntry
-    : siblingDesktopCommanderEntry;
+export const DEFAULT_DESKTOP_COMMANDER_ENTRY = installedDesktopCommanderEntry;
 
 function elapsedMs(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 100) / 100;

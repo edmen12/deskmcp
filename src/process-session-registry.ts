@@ -10,9 +10,18 @@ interface ProcessSession {
 export class ProcessSessionRegistry {
   private readonly sessions = new Map<string, ProcessSession>();
 
+  constructor(readonly maxSessions = 32) {
+    if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 1024) {
+      throw new Error(`Invalid process session limit: ${maxSessions}`);
+    }
+  }
+
   register(pid: number): string {
     if (!Number.isInteger(pid) || pid <= 0) {
       throw new Error(`Invalid process PID: ${pid}`);
+    }
+    if (this.sessions.size >= this.maxSessions) {
+      throw new PolicyDeniedError(`Process session limit reached (${this.maxSessions}). Terminate an owned session before starting another.`);
     }
     const id = randomUUID();
     this.sessions.set(id, { id, pid, createdAt: Date.now() });

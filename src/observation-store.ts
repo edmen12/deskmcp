@@ -34,7 +34,29 @@ function sameVersion(a: FileObservation, b: FileObservation): boolean {
 export class ObservationStore {
   private readonly observations = new Map<string, FileObservation>();
 
-  constructor(readonly maxBytes = 5 * 1024 * 1024) {}
+  constructor(
+    readonly maxBytes = 5 * 1024 * 1024,
+    readonly maxEntries = 1024
+  ) {
+    if (!Number.isInteger(maxEntries) || maxEntries < 1 || maxEntries > 100000) {
+      throw new Error(`Invalid observation entry limit: ${maxEntries}`);
+    }
+  }
+
+  private remember(filePath: string, observation: FileObservation): void {
+    const key = keyFor(filePath);
+    this.observations.delete(key);
+    this.observations.set(key, observation);
+    while (this.observations.size > this.maxEntries) {
+      const oldest = this.observations.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.observations.delete(oldest);
+    }
+  }
+
+  size(): number {
+    return this.observations.size;
+  }
 
   async capture(filePath: string): Promise<FileObservation> {
     const before = await stat(filePath);
@@ -62,7 +84,7 @@ export class ObservationStore {
 
   async observe(filePath: string): Promise<FileObservation> {
     const observation = await this.capture(filePath);
-    this.observations.set(keyFor(filePath), observation);
+    this.remember(filePath, observation);
     return observation;
   }
 
@@ -75,7 +97,7 @@ export class ObservationStore {
       this.forget(filePath);
       throw new StaleObservationError(filePath);
     }
-    this.observations.set(keyFor(filePath), current);
+    this.remember(filePath, current);
     return current;
   }
 

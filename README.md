@@ -12,7 +12,7 @@
 
 # DeskMCP
 
-**DeskMCP is an open-source Windows MCP policy gateway that gives ChatGPT controlled access to local files and terminal sessions.** It runs a policy gateway on your Windows machine, exposes a stable MCP tool surface, and connects through an OpenAI Tunnel while keeping the local MCP endpoint bound to `127.0.0.1`.
+**DeskMCP is an open-source local-first MCP policy gateway that gives ChatGPT controlled access to local files and terminal sessions.** It runs policy enforcement on your computer, exposes a stable MCP tool surface, and connects through an OpenAI Tunnel while keeping the local MCP endpoint bound to `127.0.0.1`.
 
 The default profile is **Read-only**. Filesystem access is scoped to a workspace you choose locally, sensitive paths are excluded before search, and elevated process capabilities are session-owned rather than arbitrary PID control.
 
@@ -22,7 +22,7 @@ The default profile is **Read-only**. Filesystem access is scoped to a workspace
 
 | | |
 | --- | --- |
-| **Local-first** | The Gateway and policy enforcement run on your Windows machine. |
+| **Local-first** | The Gateway and policy enforcement run on your computer. |
 | **Workspace scoped** | File tools stay inside the folder you explicitly select. |
 | **Secure by default** | First run starts in Read-only mode; Full Control is never persisted. |
 | **Easy to install** | The self-contained Setup does not require Node.js, npm, .NET, Git, or a source checkout. |
@@ -34,7 +34,7 @@ The default profile is **Read-only**. Filesystem access is scoped to a workspace
 
 The tray Control Panel shows Gateway/Tunnel health, the active permission profile, the selected workspace, Windows startup settings, and Tunnel configuration without exposing secrets.
 
-## Quick start
+## Windows quick start
 
 <p align="center">
   <img src="docs/images/quick-start.svg" alt="DeskMCP Quick Start" width="100%" />
@@ -49,7 +49,7 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
 
 Expected result: **13 DeskMCP tools**.
 
-The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. You can skip Tunnel setup during First Run and configure it later.
+The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. Secret writes are verified by immediate DPAPI readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
 ## Architecture
 
 <p align="center">
@@ -104,9 +104,9 @@ The schemas stay discoverable across profiles so the remote connection remains s
 - Lexical and canonical path checks block symlink/junction escapes.
 - Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default.
 - Search injects sensitive-path exclusions **before** Desktop Commander/ripgrep reads candidate files.
-- Writes use read-before-write observations and reject stale changes.
-- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control.
-- Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, or real process PIDs.
+- Writes use read-before-write observations and reject stale changes; the observation cache is bounded to 1024 entries and eviction never widens write permission.
+- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control; at most 32 owned sessions are retained and new sessions are refused at the cap rather than orphaned.
+- Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, or real process PIDs. Writes are serialized and rotate at 10 MB with four bounded backups.
 
 Security reports should use [GitHub Private vulnerability reporting](https://github.com/edmen12/deskmcp/security/advisories/new), not a public issue.
 
@@ -146,7 +146,7 @@ Build the complete Windows release with:
 scripts\build-installer.cmd
 ```
 
-The release pipeline performs Gateway build, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, stage smoke, 13-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, injected-failure rollback, interrupted-upgrade recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
+The release pipeline performs Gateway build, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, stage smoke, 13-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
 
 Generated artifacts live under ignored `runtime\release\` and should be attached to GitHub Releases instead of committed.
 
@@ -161,7 +161,7 @@ Get-FileHash .\runtime\release\DeskMCP-Setup-<version>.exe -Algorithm SHA256
 Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 ## Code signing policy
 
-DeskMCP is preparing an application for the SignPath Foundation open-source signing program. See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) for the signing roles, provenance rules, approval policy, and publisher-pin model.
+DeskMCP has submitted its application to the SignPath Foundation open-source signing program and is awaiting project approval. See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) for the signing roles, provenance rules, approval policy, and publisher-pin model.
 
 **Pending project approval:** Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). No release is represented as SignPath-signed until it carries a valid signature from the approved signing workflow.
 
@@ -209,7 +209,7 @@ Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducibl
 - [`docs/MACOS_DEVELOPER_PREVIEW.md`](docs/MACOS_DEVELOPER_PREVIEW.md) — Apple Silicon Developer Preview download, checksum, and Gatekeeper guidance
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — common setup and recovery paths
 - [`docs/UPDATE_SECURITY.md`](docs/UPDATE_SECURITY.md) — update trust model, execution gates, and rollback/recovery contract
-- [docs/SIGNPATH_APPLICATION.md](docs/SIGNPATH_APPLICATION.md) — SignPath Foundation application readiness and post-approval integration plan
+- [docs/SIGNPATH_APPLICATION.md](docs/SIGNPATH_APPLICATION.md) — SignPath Foundation application status and post-approval integration plan
 - [`docs/BRAND.md`](docs/BRAND.md) — DeskMCP visual identity and brand rules
 
 ## License

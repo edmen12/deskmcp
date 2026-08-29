@@ -1,6 +1,6 @@
-# SignPath Foundation application readiness
+# SignPath Foundation application status
 
-This page records DeskMCP's preparation for a SignPath Foundation open-source code-signing application. It is not evidence that the project has already been accepted or signed.
+This page records DeskMCP's submitted SignPath Foundation open-source code-signing application and the remaining post-submission integration work. Submission is complete; this is not evidence that the project has already been accepted or signed.
 
 ## Project identity
 

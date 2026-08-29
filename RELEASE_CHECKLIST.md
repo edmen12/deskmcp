@@ -12,7 +12,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 ## Recommended distribution hardening
 
 - [ ] **SignPath Foundation OSS code signing approval.**
-  - Application preparation is documented in CODE_SIGNING_POLICY.md and PRIVACY.md.
+  - Application has been submitted; SignPath Foundation approval is still pending.
   - Until approval and a real signed artifact exist, releases remain unsigned/manual-only and must not claim a SignPath signature.
 - [ ] **Production publisher pin enabled only after signed-release verification.**
   - The updater pin set stays empty until a SignPath-signed release identity is available and independently verified.
@@ -31,6 +31,12 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] Repository secret hygiene scan: 0 findings.
 - [x] Release manifest and SHA256SUMS match the final Setup binary.
 - [x] Source portability scan: no hard-coded local project path, TODO/FIXME/HACK/XXX, or old 0.8.0 version markers.
+## Candidate hardening pending hosted CI confirmation
+
+- [x] GitHub Actions third-party steps are pinned to full 40-character commit SHAs.
+- [x] Ordinary `CI` and `macOS Developer Preview` runs cancel superseded runs for the same ref; the manual unsigned release-candidate workflow is intentionally not auto-cancelled.
+- [ ] The new `main` Windows x64 gate passes the complete installer smoke plus release-readiness check on a GitHub-hosted x64 runner.
+- [ ] The new macOS supervisor policy tests and release stage pass on the GitHub-hosted Apple Silicon runner.
 ## Third-party licensing closed
 
 - [x] Actual win-x64 release inventory generated from installed production tree: 501 packages.
@@ -82,10 +88,10 @@ Repository-side preparation:
 Human/SignPath steps that must not be claimed complete before they occur:
 
 - [ ] Maintainer confirms GitHub MFA is enabled.
-- [ ] Submit the SignPath Foundation OSS application at `https://signpath.org/apply`.
+- [x] Submit the SignPath Foundation OSS application at `https://signpath.org/apply`.
 - [ ] SignPath Foundation accepts DeskMCP.
 - [ ] Install/authorize the SignPath GitHub App for `edmen12/deskmcp` as required by the approved setup.
 - [ ] Configure SignPath artifact metadata restrictions and signing policy.
 - [ ] Approve the first signing request manually and verify the returned signer certificate/timestamp.
 - [ ] Add the independently verified certificate SHA-256 to a prior trusted DeskMCP build before enabling signed updater execution.
-- [ ] Add a **Code signing policy** link to the live GitHub Release description before submitting/refreshing the SignPath application; do not change existing v0.9.1 assets.
+- [ ] Add a **Code signing policy** link to the live GitHub Release description before any SignPath application refresh or first signing-integration review; do not change existing v0.9.1 assets.

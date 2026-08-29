@@ -25,12 +25,7 @@ struct PanelView: View {
         } message: {
             Text("Gateway-owned terminal sessions use your current macOS user permissions. Workspace file tools remain scoped, but terminal sessions are not filesystem-sandboxed by that workspace boundary.")
         }
-        .task {
-            while !Task.isCancelled {
-                await model.refreshStatus()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-            }
-        }
+
     }
     private var header: some View {
         HStack(spacing: 12) {
@@ -143,8 +138,10 @@ struct PanelView: View {
                 }
                 Spacer()
                 Button("Quit") {
-                    model.shutdownOwnedServices()
-                    NSApplication.shared.terminate(nil)
+                    Task {
+                        await model.shutdownOwnedServices()
+                        NSApplication.shared.terminate(nil)
+                    }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)

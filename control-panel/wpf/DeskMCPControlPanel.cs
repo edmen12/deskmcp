@@ -101,8 +101,14 @@ internal sealed partial class ControlPanelRuntime
     private Process tunnelProcess;
     private int tunnelRetryIndex;
     private DateTime nextTunnelRetry = DateTime.MinValue;
+    private DateTime tunnelUnreadySince = DateTime.MinValue;
+    private bool tunnelRecoveryInFlight;
+    private bool tunnelCredentialInvalid;
     private bool gatewayStartInFlight;
     private Process gatewayProcess;
+    private int gatewayRetryIndex;
+    private DateTime gatewayUnhealthySince = DateTime.MinValue;
+    private bool gatewayRecoveryInFlight;
     private bool quitting;
     private bool statusRefreshInFlight;
     private bool statusInitialized;
@@ -110,6 +116,8 @@ internal sealed partial class ControlPanelRuntime
     private bool tunnelStartInFlight;
     private DateTime nextGatewayRetry = DateTime.MinValue;
     private DispatcherTimer toastTimer;
+    private static readonly TimeSpan GatewayHealthDeadline = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan TunnelReadinessDeadline = TimeSpan.FromSeconds(45);
 
     private const int HotkeyId = 0x4D43;
     private const uint ModAlt = 0x0001;
@@ -139,9 +147,9 @@ internal sealed partial class ControlPanelRuntime
     {
         baseDir = AppDomain.CurrentDomain.BaseDirectory;
         projectRoot = ResolveGatewayRoot(baseDir);
-        dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP");
+        dataRoot = ResolveStateDirectory("DESKTOP_MCP_DATA_ROOT", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP"));
         logsDir = Path.Combine(dataRoot, "logs");
-        settingsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopMCP");
+        settingsDir = ResolveStateDirectory("DESKTOP_MCP_SETTINGS_DIR", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopMCP"));
         currentWorkspace = Path.Combine(dataRoot, "workspace");
         Directory.CreateDirectory(logsDir);
         Directory.CreateDirectory(settingsDir);
@@ -154,7 +162,7 @@ internal sealed partial class ControlPanelRuntime
         tunnelClientPath = ResolveTunnelClientPath();
         tunnelProfilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tunnel-client", "desktop-mcp.yaml");
         MigrateLegacyData();
-        onboardingCompleted = File.Exists(settingsPath);
+        onboardingCompleted = false;
         window = LoadWindow(xamlPath);
         rootCard = Find<Border>("RootCard");
         try
@@ -245,12 +253,17 @@ internal sealed partial class ControlPanelRuntime
         {
             configured,
             appBaseDir,
-            Path.Combine(appBaseDir, "gateway"),
-            Path.GetFullPath(Path.Combine(appBaseDir, "..", ".."))
+            Path.Combine(appBaseDir, "gateway")
         };
         foreach (string candidate in candidates)
             if (IsGatewayRoot(candidate)) return Path.GetFullPath(candidate);
         throw new DirectoryNotFoundException("DeskMCP Gateway runtime was not found. Set DESKTOP_MCP_GATEWAY_ROOT or install the bundled gateway next to the Control Panel.");
+    }
+
+    private static string ResolveStateDirectory(string environmentName, string defaultPath)
+    {
+        string configured = Environment.GetEnvironmentVariable(environmentName);
+        return String.IsNullOrWhiteSpace(configured) ? Path.GetFullPath(defaultPath) : Path.GetFullPath(configured);
     }
 
     private static string ResolveNodePath(string appBaseDir)
@@ -259,7 +272,7 @@ internal sealed partial class ControlPanelRuntime
         if (!String.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
         foreach (string candidate in new string[] { Path.Combine(appBaseDir, "node", "node.exe"), Path.Combine(appBaseDir, "runtime", "node.exe") })
             if (File.Exists(candidate)) return candidate;
-        return "node.exe";
+        throw new FileNotFoundException("DeskMCP bundled Node runtime is missing. Set DESKTOP_MCP_NODE_PATH explicitly for development overrides.");
     }
 
     private void MigrateLegacyData()
@@ -280,24 +293,25 @@ internal sealed partial class ControlPanelRuntime
 
     private string ResolveTunnelClientPath()
     {
-        string[] roots = new string[] { Path.Combine(baseDir, "tunnel-client"), Path.Combine(baseDir, "tools", "tunnel-client"), Path.Combine(projectRoot, "tools", "tunnel-client") };
-        Version bestVersion = null; string bestPath = null;
-        foreach (string root in roots)
+        string configured = Environment.GetEnvironmentVariable("DESKTOP_MCP_TUNNEL_PATH");
+        if (!String.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return Path.GetFullPath(configured);
+        string contractPath = Path.Combine(baseDir, "release-target.json");
+        if (!File.Exists(contractPath))
+            throw new FileNotFoundException("DeskMCP release target contract is missing. Set DESKTOP_MCP_TUNNEL_PATH explicitly for development overrides.", contractPath);
+        using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(contractPath)))
         {
-            string direct = Path.Combine(root, "bin", "tunnel-client.exe");
-            if (File.Exists(direct) && bestPath == null) bestPath = direct;
-            if (!Directory.Exists(root)) continue;
-            foreach (string dir in Directory.GetDirectories(root))
-        {
-            string candidate = Path.Combine(dir, "bin", "tunnel-client.exe");
-            if (!File.Exists(candidate)) continue;
-            string name = Path.GetFileName(dir); Version parsed;
-            if (name.StartsWith("v", StringComparison.OrdinalIgnoreCase)) name = name.Substring(1);
-            if (!Version.TryParse(name, out parsed)) { if (bestPath == null) bestPath = candidate; continue; }
-            if (bestVersion == null || parsed > bestVersion) { bestVersion = parsed; bestPath = candidate; }
-            }
+            JsonElement versionElement;
+            if (!document.RootElement.TryGetProperty("tunnelVersion", out versionElement))
+                throw new InvalidDataException("DeskMCP release target contract does not declare tunnelVersion.");
+            string version = versionElement.GetString();
+            if (String.IsNullOrWhiteSpace(version) || version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || version.Contains(".."))
+                throw new InvalidDataException("DeskMCP release target contract contains an invalid tunnelVersion.");
+            string bundled = Path.GetFullPath(Path.Combine(baseDir, "tunnel-client", version, "bin", "tunnel-client.exe"));
+            string tunnelRoot = Path.GetFullPath(Path.Combine(baseDir, "tunnel-client")).TrimEnd('\\') + "\\";
+            if (!bundled.StartsWith(tunnelRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(bundled))
+                throw new FileNotFoundException("DeskMCP bundled Tunnel runtime does not match the release target contract.", bundled);
+            return bundled;
         }
-        return bestPath ?? Path.Combine(baseDir, "tunnel-client", "bin", "tunnel-client.exe");
     }
 
     private static bool IsValidTunnelId(string value)
@@ -339,32 +353,80 @@ internal sealed partial class ControlPanelRuntime
         finally { p.Dispose(); }
     }
 
-    private void LoadSettings()
+    private void LogRuntimeError(string context, Exception error)
     {
         try
         {
-            if (!File.Exists(settingsPath)) return;
-            PanelSettings settings = JsonSerializer.Deserialize<PanelSettings>(File.ReadAllText(settingsPath));
-            if (settings == null) return;
-            if (settings.onboardingCompleted.HasValue) onboardingCompleted = settings.onboardingCompleted.Value;
-            if (settings.theme == "system" || settings.theme == "light" || settings.theme == "dark")
-                themeMode = settings.theme;
-            if (settings.modifiers != 0 && settings.virtualKey != 0)
-            {
-                hotkeyModifiers = settings.modifiers;
-                hotkeyVk = settings.virtualKey;
-                if (!String.IsNullOrWhiteSpace(settings.shortcut)) hotkeyText = settings.shortcut;
-            }
-            if (!String.IsNullOrWhiteSpace(settings.workspace) && Directory.Exists(settings.workspace)) currentWorkspace = settings.workspace;
-            if (settings.recentWorkspaces != null) recentWorkspaces = settings.recentWorkspaces;
-            autoStartTunnel = settings.autoStartTunnel;
-            bool downgradePersistedFull = settings.profile == "full-control";
-            persistentProfile = settings.profile == "workspace-write" ? "workspace-write" : "read-only";
-            selectedProfile = persistentProfile;
-            if (IsValidTunnelId(settings.tunnelId)) tunnelId = settings.tunnelId;
-            if (downgradePersistedFull) SaveSettings();
+            string log = Path.Combine(logsDir, "control-panel-error.log");
+            File.AppendAllText(log, DateTime.Now.ToString("s") + " " + context + Environment.NewLine + error + Environment.NewLine + Environment.NewLine);
         }
         catch { }
+    }
+
+    private static PanelSettings ReadPanelSettingsFile(string path)
+    {
+        PanelSettings settings = JsonSerializer.Deserialize<PanelSettings>(File.ReadAllText(path));
+        if (settings == null) throw new InvalidDataException("DeskMCP settings are empty or invalid.");
+        return settings;
+    }
+
+    private void LoadSettings()
+    {
+        PanelSettings settings = null;
+        Exception primaryError = null;
+        bool recoveredBackup = false;
+        try
+        {
+            if (File.Exists(settingsPath)) settings = ReadPanelSettingsFile(settingsPath);
+        }
+        catch (Exception ex) { primaryError = ex; }
+
+        if (settings == null)
+        {
+            string backup = RuntimeReliability.BackupPath(settingsPath);
+            try
+            {
+                if (File.Exists(backup))
+                {
+                    settings = ReadPanelSettingsFile(backup);
+                    recoveredBackup = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogRuntimeError("Settings backup recovery failed.", ex);
+            }
+        }
+
+        if (settings == null)
+        {
+            onboardingCompleted = false;
+            if (primaryError != null) LogRuntimeError("Settings load failed; safe defaults restored.", primaryError);
+            return;
+        }
+
+        onboardingCompleted = settings.onboardingCompleted ?? true;
+        if (settings.theme == "system" || settings.theme == "light" || settings.theme == "dark")
+            themeMode = settings.theme;
+        if (settings.modifiers != 0 && settings.virtualKey != 0)
+        {
+            hotkeyModifiers = settings.modifiers;
+            hotkeyVk = settings.virtualKey;
+            if (!String.IsNullOrWhiteSpace(settings.shortcut)) hotkeyText = settings.shortcut;
+        }
+        if (!String.IsNullOrWhiteSpace(settings.workspace) && Directory.Exists(settings.workspace)) currentWorkspace = settings.workspace;
+        if (settings.recentWorkspaces != null) recentWorkspaces = settings.recentWorkspaces;
+        autoStartTunnel = settings.autoStartTunnel;
+        bool downgradePersistedFull = settings.profile == "full-control";
+        persistentProfile = settings.profile == "workspace-write" ? "workspace-write" : "read-only";
+        selectedProfile = persistentProfile;
+        if (IsValidTunnelId(settings.tunnelId)) tunnelId = settings.tunnelId;
+        if (recoveredBackup)
+        {
+            try { RuntimeReliability.WriteAllTextAtomic(settingsPath, JsonSerializer.Serialize(settings), false); }
+            catch (Exception ex) { LogRuntimeError("Recovered settings could not be restored atomically.", ex); }
+        }
+        if (downgradePersistedFull) SaveSettings();
     }
 
     private void SaveSettings()
@@ -382,9 +444,9 @@ internal sealed partial class ControlPanelRuntime
             settings.profile = persistentProfile;
             settings.tunnelId = tunnelId;
             settings.onboardingCompleted = onboardingCompleted;
-            File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings));
+            RuntimeReliability.WriteAllTextAtomic(settingsPath, JsonSerializer.Serialize(settings), true);
         }
-        catch { }
+        catch (Exception ex) { LogRuntimeError("Settings save failed.", ex); }
     }
 
     private bool GetSystemDarkMode()
@@ -619,19 +681,27 @@ internal sealed partial class ControlPanelRuntime
 
     private void StopGateway()
     {
+        Process owned = gatewayProcess;
+        gatewayProcess = null;
+        gatewayUnhealthySince = DateTime.MinValue;
         try
         {
             Process p = Process.Start(NewHiddenProcess(nodePath, "dist\\src\\stop.js"));
-            if (p != null) p.WaitForExit(5000);
-            Process owned = gatewayProcess;
-            if (owned != null && !owned.HasExited) owned.WaitForExit(5000);
+            if (p != null)
+            {
+                try { if (!p.WaitForExit(5000)) p.Kill(true); }
+                finally { p.Dispose(); }
+            }
+            if (owned != null && !owned.HasExited && !owned.WaitForExit(5000))
+            {
+                owned.Kill(true);
+                owned.WaitForExit(5000);
+            }
         }
-        catch { }
+        catch (Exception ex) { LogRuntimeError("Gateway stop required force cleanup or failed.", ex); }
         finally
         {
-            Process owned = gatewayProcess;
             if (owned != null) { try { owned.Dispose(); } catch { } }
-            gatewayProcess = null;
         }
     }
 
@@ -651,8 +721,24 @@ internal sealed partial class ControlPanelRuntime
         Process p = Process.Start(psi);
         if (p == null) throw new InvalidOperationException("Could not start DeskMCP Gateway.");
         gatewayProcess = p;
+        gatewayUnhealthySince = DateTime.UtcNow;
         p.EnableRaisingEvents = true;
-        p.Exited += delegate { if (Object.ReferenceEquals(gatewayProcess, p)) gatewayProcess = null; try { p.Dispose(); } catch { } };
+        p.Exited += delegate
+        {
+            try
+            {
+                window.Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (!Object.ReferenceEquals(gatewayProcess, p)) return;
+                    gatewayProcess = null;
+                    gatewayUnhealthySince = DateTime.MinValue;
+                    ScheduleGatewayRetry();
+                    UpdateStatus();
+                }));
+            }
+            catch { if (Object.ReferenceEquals(gatewayProcess, p)) gatewayProcess = null; }
+            finally { try { p.Dispose(); } catch { } }
+        };
     }
 
     private void RestartGateway(string profile)
@@ -954,7 +1040,7 @@ internal sealed partial class ControlPanelRuntime
             bool keyConfigured = HasTunnelKey();
             tunnelDot.Fill = BrushFrom(idConfigured && keyConfigured ? "#FF9F0A" : "#8E8E93");
             if (!idConfigured) tunnelText.Text = "Set Tunnel ID";
-            else if (!keyConfigured) tunnelText.Text = "Add API key";
+            else if (!keyConfigured) tunnelText.Text = tunnelCredentialInvalid ? "Re-enter API key" : "Add API key";
             else if (!autoStartTunnel) tunnelText.Text = "Stopped";
             else if (OwnedTunnelRunning()) tunnelText.Text = "Connecting…";
             else tunnelText.Text = "Offline";
@@ -1131,34 +1217,50 @@ internal sealed partial class ControlPanelRuntime
 
     private bool HasTunnelKey()
     {
-        return File.Exists(tunnelSecretPath);
+        return !tunnelCredentialInvalid && File.Exists(tunnelSecretPath);
     }
 
     private void SaveTunnelKey(string key)
     {
         byte[] plain = Encoding.UTF8.GetBytes(key);
         byte[] encrypted = null;
+        byte[] stored = null;
+        byte[] verified = null;
         try
         {
             encrypted = ProtectedData.Protect(plain, TunnelEntropy, DataProtectionScope.CurrentUser);
-            Directory.CreateDirectory(Path.GetDirectoryName(tunnelSecretPath));
-            File.WriteAllBytes(tunnelSecretPath, encrypted);
+            RuntimeReliability.WriteAllBytesAtomic(tunnelSecretPath, encrypted, false);
+            stored = File.ReadAllBytes(tunnelSecretPath);
+            verified = ProtectedData.Unprotect(stored, TunnelEntropy, DataProtectionScope.CurrentUser);
+            if (!CryptographicOperations.FixedTimeEquals(plain, verified))
+                throw new CryptographicException("Tunnel Runtime Key verification failed after save.");
+            tunnelCredentialInvalid = false;
             try { File.SetAttributes(tunnelSecretPath, FileAttributes.Hidden); } catch { }
         }
         finally
         {
             if (plain != null) Array.Clear(plain, 0, plain.Length);
             if (encrypted != null) Array.Clear(encrypted, 0, encrypted.Length);
+            if (stored != null) Array.Clear(stored, 0, stored.Length);
+            if (verified != null) Array.Clear(verified, 0, verified.Length);
         }
     }
 
     private string LoadTunnelKey()
-    {        byte[] encrypted = File.ReadAllBytes(tunnelSecretPath);
+    {
+        byte[] encrypted = null;
         byte[] plain = null;
         try
         {
+            encrypted = File.ReadAllBytes(tunnelSecretPath);
             plain = ProtectedData.Unprotect(encrypted, TunnelEntropy, DataProtectionScope.CurrentUser);
+            tunnelCredentialInvalid = false;
             return Encoding.UTF8.GetString(plain);
+        }
+        catch (Exception ex)
+        {
+            tunnelCredentialInvalid = true;
+            throw new InvalidDataException("Stored Tunnel Runtime Key is unreadable. Re-enter it.", ex);
         }
         finally
         {
@@ -1181,7 +1283,7 @@ internal sealed partial class ControlPanelRuntime
         {
             if (runtimeState == "Ready") status.Text = "Ready";
             else if (!idConfigured) status.Text = "Tunnel ID required";
-            else if (!keyConfigured) status.Text = "Runtime key required";
+            else if (!keyConfigured) status.Text = tunnelCredentialInvalid ? "Runtime key unreadable · re-enter it" : "Runtime key required";
             else if (!autoStartTunnel) status.Text = "Configured · auto start off";
             else if (OwnedTunnelRunning()) status.Text = "Connecting…";
             else status.Text = "Configured";
@@ -1298,10 +1400,14 @@ internal sealed partial class ControlPanelRuntime
         catch { return false; }
     }    private void ScheduleTunnelRetry()
     {
-        int[] delays = new int[] { 2, 5, 10, 30 };
-        int index = Math.Min(tunnelRetryIndex, delays.Length - 1);
-        nextTunnelRetry = DateTime.UtcNow.AddSeconds(delays[index]);
-        if (tunnelRetryIndex < delays.Length - 1) tunnelRetryIndex++;
+        nextTunnelRetry = DateTime.UtcNow.AddSeconds(RuntimeReliability.RetryDelaySeconds(tunnelRetryIndex));
+        if (tunnelRetryIndex < 3) tunnelRetryIndex++;
+    }
+
+    private void ScheduleGatewayRetry()
+    {
+        nextGatewayRetry = DateTime.UtcNow.AddSeconds(RuntimeReliability.RetryDelaySeconds(gatewayRetryIndex));
+        if (gatewayRetryIndex < 3) gatewayRetryIndex++;
     }
 
     private void StartManagedTunnel()
@@ -1319,11 +1425,23 @@ internal sealed partial class ControlPanelRuntime
             Process p = Process.Start(psi);
             if (p == null) throw new InvalidOperationException("Could not start tunnel-client.");
             tunnelProcess = p;
+            tunnelUnreadySince = DateTime.UtcNow;
             p.EnableRaisingEvents = true;
             p.Exited += delegate
             {
-                try { window.Dispatcher.BeginInvoke(new Action(delegate { tunnelProcess = null; ScheduleTunnelRetry(); UpdateStatus(); })); }
-                catch { tunnelProcess = null; }
+                try
+                {
+                    window.Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        if (!Object.ReferenceEquals(tunnelProcess, p)) return;
+                        tunnelProcess = null;
+                        tunnelUnreadySince = DateTime.MinValue;
+                        ScheduleTunnelRetry();
+                        UpdateStatus();
+                    }));
+                }
+                catch { if (Object.ReferenceEquals(tunnelProcess, p)) tunnelProcess = null; }
+                finally { try { p.Dispose(); } catch { } }
             };
         }
         finally
@@ -1331,22 +1449,23 @@ internal sealed partial class ControlPanelRuntime
             psi.EnvironmentVariables.Remove("CONTROL_PLANE_API_KEY");
             key = null;
         }
-    }    private void StopOwnedTunnel()
+    }
+    private void StopOwnedTunnel()
     {
         Process p = tunnelProcess;
+        tunnelProcess = null;
+        tunnelUnreadySince = DateTime.MinValue;
         if (p == null) return;
         try
         {
             if (!p.HasExited)
             {
-                ProcessStartInfo kill = NewHiddenProcess("taskkill.exe", "/PID " + p.Id + " /T /F");
-                Process kp = Process.Start(kill);
-                if (kp != null) kp.WaitForExit(3000);
+                p.Kill(true);
+                p.WaitForExit(5000);
             }
         }
-        catch { }
-        try { p.Dispose(); } catch { }
-        tunnelProcess = null;
+        catch (Exception ex) { LogRuntimeError("Tunnel process cleanup failed.", ex); }
+        finally { try { p.Dispose(); } catch { } }
     }
 
     private async void ReconnectTunnel()
@@ -1377,21 +1496,47 @@ internal sealed partial class ControlPanelRuntime
     private void EnsureManagedServices(HealthInfo health, bool tunnelReady)
     {
         if (quitting || !onboardingCompleted || updateSecurityHold) return;
+        DateTime now = DateTime.UtcNow;
         if (health == null)
         {
-            if (OwnedGatewayRunning()) { gatewayStartInFlight = true; return; }
-            gatewayStartInFlight = false;
-            if (DateTime.UtcNow >= nextGatewayRetry)
+            if (OwnedGatewayRunning())
             {
                 gatewayStartInFlight = true;
-                nextGatewayRetry = DateTime.UtcNow.AddSeconds(10);
+                if (gatewayUnhealthySince == DateTime.MinValue) gatewayUnhealthySince = now;
+                if (!gatewayRecoveryInFlight && RuntimeReliability.DeadlineExceeded(gatewayUnhealthySince, now, GatewayHealthDeadline))
+                {
+                    gatewayRecoveryInFlight = true;
+                    Task.Run(delegate { StopGateway(); })
+                        .ContinueWith(delegate
+                        {
+                            try
+                            {
+                                window.Dispatcher.BeginInvoke(new Action(delegate
+                                {
+                                    gatewayRecoveryInFlight = false;
+                                    gatewayStartInFlight = false;
+                                    ScheduleGatewayRetry();
+                                    UpdateStatus();
+                                }));
+                            }
+                            catch { gatewayRecoveryInFlight = false; gatewayStartInFlight = false; }
+                        });
+                }
+                return;
+            }
+
+            gatewayUnhealthySince = DateTime.MinValue;
+            gatewayStartInFlight = false;
+            if (!gatewayRecoveryInFlight && now >= nextGatewayRetry)
+            {
+                gatewayStartInFlight = true;
                 Task.Run(delegate { StartGateway(selectedProfile); })
                     .ContinueWith(delegate(Task task)
                     {
                         window.Dispatcher.BeginInvoke(new Action(delegate
                         {
                             gatewayStartInFlight = OwnedGatewayRunning();
-                            if (task.IsFaulted) nextGatewayRetry = DateTime.UtcNow.AddSeconds(10);
+                            if (task.IsFaulted) { gatewayStartInFlight = false; ScheduleGatewayRetry(); }
                             UpdateStatus();
                         }));
                     });
@@ -1400,13 +1545,47 @@ internal sealed partial class ControlPanelRuntime
         }
 
         gatewayStartInFlight = false;
+        gatewayRecoveryInFlight = false;
+        gatewayUnhealthySince = DateTime.MinValue;
+        gatewayRetryIndex = 0;
+        nextGatewayRetry = DateTime.MinValue;
+
         if (tunnelReady)
         {
             tunnelRetryIndex = 0;
             nextTunnelRetry = DateTime.MinValue;
+            tunnelUnreadySince = DateTime.MinValue;
+            tunnelRecoveryInFlight = false;
             return;
         }
-        if (!autoStartTunnel || !IsValidTunnelId(tunnelId) || !HasTunnelKey() || DateTime.UtcNow < nextTunnelRetry || OwnedTunnelRunning() || tunnelStartInFlight) return;
+
+        if (OwnedTunnelRunning())
+        {
+            if (tunnelUnreadySince == DateTime.MinValue) tunnelUnreadySince = now;
+            if (!tunnelRecoveryInFlight && RuntimeReliability.DeadlineExceeded(tunnelUnreadySince, now, TunnelReadinessDeadline))
+            {
+                tunnelRecoveryInFlight = true;
+                Task.Run(delegate { StopOwnedTunnel(); })
+                    .ContinueWith(delegate
+                    {
+                        try
+                        {
+                            window.Dispatcher.BeginInvoke(new Action(delegate
+                            {
+                                tunnelRecoveryInFlight = false;
+                                tunnelStartInFlight = false;
+                                ScheduleTunnelRetry();
+                                UpdateStatus();
+                            }));
+                        }
+                        catch { tunnelRecoveryInFlight = false; tunnelStartInFlight = false; }
+                    });
+            }
+            return;
+        }
+
+        tunnelUnreadySince = DateTime.MinValue;
+        if (!autoStartTunnel || !IsValidTunnelId(tunnelId) || !HasTunnelKey() || now < nextTunnelRetry || tunnelStartInFlight || tunnelRecoveryInFlight) return;
         tunnelStartInFlight = true;
         Task.Run(delegate { StartManagedTunnel(); })
             .ContinueWith(delegate(Task task)
@@ -1416,7 +1595,7 @@ internal sealed partial class ControlPanelRuntime
                     window.Dispatcher.BeginInvoke(new Action(delegate
                     {
                         tunnelStartInFlight = false;
-                        if (task.IsFaulted) ScheduleTunnelRetry();
+                        if (task.IsFaulted && !tunnelCredentialInvalid) ScheduleTunnelRetry();
                         UpdateStatus();
                     }));
                 }
@@ -2154,6 +2333,8 @@ internal static class Program
         {
             if (args.Length > 0 && args[0] == "--update-security-self-test")
                 return ControlPanelRuntime.RunUpdateSecuritySelfTest();
+            if (args.Length > 0 && args[0] == "--runtime-reliability-self-test")
+                return RuntimeReliability.RunSelfTest();
             if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))
             {
                 string mode = args[0];

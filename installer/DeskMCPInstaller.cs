@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using Microsoft.Win32;
 using System.Windows.Forms;
 
@@ -33,6 +34,8 @@ internal static class InstallerEngine
     private const string ProductKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DesktopMCP";
     private const string PayloadResource = "DesktopMCP.Payload.zip";
     private const string HashResource = "DesktopMCP.Payload.sha256";
+    private const string IntegrityManifest = "install-integrity.sha256";
+    private const long DiskSafetyMarginBytes = 64L * 1024L * 1024L;
     public static string DefaultInstallDir()
     {
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "DesktopMCP");
@@ -159,6 +162,7 @@ internal static class InstallerEngine
             progress(8, "Extracting DeskMCP…");
             using (ZipArchive archive = ZipFile.OpenRead(tempZip))
             {
+                EnsureDiskSpaceForExtraction(destination, archive);
                 string root = Path.GetFullPath(destination).TrimEnd('\\') + "\\";
                 int total = Math.Max(1, archive.Entries.Count);
                 for (int i = 0; i < archive.Entries.Count; i++)
@@ -179,6 +183,24 @@ internal static class InstallerEngine
         }
         finally { try { if (File.Exists(tempZip)) File.Delete(tempZip); } catch { } }
     }
+    private static void EnsureDiskSpaceForExtraction(string destination, ZipArchive archive)
+    {
+        long payloadBytes = 0;
+        checked
+        {
+            foreach (ZipArchiveEntry entry in archive.Entries) payloadBytes += entry.Length;
+            payloadBytes += DiskSafetyMarginBytes;
+        }
+        string driveRoot = Path.GetPathRoot(Path.GetFullPath(destination));
+        DriveInfo drive = new DriveInfo(driveRoot);
+        if (drive.AvailableFreeSpace < payloadBytes)
+        {
+            long requiredMb = (payloadBytes + 1024L * 1024L - 1) / (1024L * 1024L);
+            long availableMb = drive.AvailableFreeSpace / (1024L * 1024L);
+            throw new IOException("DeskMCP needs at least " + requiredMb + " MB free on " + drive.Name + "; only " + availableMb + " MB is available.");
+        }
+    }
+
     private static string ReadEmbeddedText(string resourceName)
     {
         using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
@@ -207,9 +229,41 @@ internal static class InstallerEngine
             "Panel.xaml",
             Path.Combine("node", "node.exe"),
             Path.Combine("gateway", "dist", "src", "index.js"),
-            "DeskMCPUninstaller.exe"
+            "release-target.json",
+            "DeskMCPUninstaller.exe",
+            IntegrityManifest
         };
-        foreach (string relative in required) if (!File.Exists(Path.Combine(root, relative))) throw new InvalidDataException("Required payload file is missing: " + relative);
+        foreach (string relative in required)
+            if (!File.Exists(Path.Combine(root, relative))) throw new InvalidDataException("Required payload file is missing: " + relative);
+
+        bool sawPanel = false, sawNode = false, sawGateway = false, sawTunnel = false, sawUninstaller = false;
+        string rootPrefix = Path.GetFullPath(root).TrimEnd('\\') + "\\";
+        foreach (string raw in File.ReadAllLines(Path.Combine(root, IntegrityManifest)))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            if (line.Length < 67 || line[64] != ' ' || line[65] != ' ') throw new InvalidDataException("Malformed DeskMCP integrity manifest entry.");
+            string expected = line.Substring(0, 64).ToLowerInvariant();
+            for (int i = 0; i < expected.Length; i++)
+            {
+                char c = expected[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) throw new InvalidDataException("Malformed DeskMCP integrity hash.");
+            }
+            string relative = line.Substring(66).Replace('/', '\\');
+            if (Path.IsPathRooted(relative) || relative.Contains("..")) throw new InvalidDataException("Unsafe path in DeskMCP integrity manifest.");
+            string full = Path.GetFullPath(Path.Combine(root, relative));
+            if (!full.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
+                throw new InvalidDataException("Integrity-protected payload file is missing: " + relative);
+            string actual = HashFile(full);
+            if (!String.Equals(expected, actual, StringComparison.Ordinal)) throw new InvalidDataException("DeskMCP installed payload integrity check failed: " + relative);
+            if (String.Equals(relative, "DeskMCP.exe", StringComparison.OrdinalIgnoreCase)) sawPanel = true;
+            if (String.Equals(relative, Path.Combine("node", "node.exe"), StringComparison.OrdinalIgnoreCase)) sawNode = true;
+            if (String.Equals(relative, Path.Combine("gateway", "dist", "src", "index.js"), StringComparison.OrdinalIgnoreCase)) sawGateway = true;
+            if (String.Equals(relative, "DeskMCPUninstaller.exe", StringComparison.OrdinalIgnoreCase)) sawUninstaller = true;
+            if (relative.EndsWith(Path.Combine("bin", "tunnel-client.exe"), StringComparison.OrdinalIgnoreCase) && relative.StartsWith("tunnel-client\\", StringComparison.OrdinalIgnoreCase)) sawTunnel = true;
+        }
+        if (!sawPanel || !sawNode || !sawGateway || !sawTunnel || !sawUninstaller)
+            throw new InvalidDataException("DeskMCP integrity manifest does not cover all critical runtime files.");
     }
     private static void StopInstalledProcesses(string installDir)
     {
@@ -630,39 +684,60 @@ internal sealed class InstallerForm : Form
 
 internal static class InstallerProgram
 {
+    private const string InstallerMutexName = @"Local\DeskMCP.Setup.Singleton";
+
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length >= 2 && args[0] == "--recover-test")
-        {
-            try { InstallerEngine.RecoverInterruptedInstall(Path.GetFullPath(args[1])); return 0; }
-            catch { return 12; }
-        }
-        if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup"))
-        {
-            try
-            {
-                InstallOptions test = new InstallOptions();
-                test.InstallDir = Path.GetFullPath(args[1]);
-                test.AutoStart = false;
-                test.RegisterUninstall = false;
-                test.CreateShortcuts = false;
-                test.LaunchAfterInstall = false;
-                test.SimulateFailureAfterBackup = args[0] == "--install-test-fail-after-backup";
-                InstallerEngine.Install(test, delegate { });
-                return 0;
-            }
-            catch { return 10; }
-        }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        InstallerForm form = new InstallerForm();
         if (args.Length >= 2 && args[0] == "--capture-ui")
         {
-            form.CaptureTo(Path.GetFullPath(args[1]));
+            InstallerForm preview = new InstallerForm();
+            preview.CaptureTo(Path.GetFullPath(args[1]));
             return 0;
         }
-        Application.Run(form);
-        return form.ExitCode;
+
+        using (Mutex mutex = new Mutex(false, InstallerMutexName))
+        {
+            bool acquired;
+            try { acquired = mutex.WaitOne(0, false); }
+            catch (AbandonedMutexException) { acquired = true; }
+            if (!acquired)
+            {
+                if (!(args.Length > 0 && args[0].StartsWith("--", StringComparison.Ordinal)))
+                    MessageBox.Show("DeskMCP Setup is already running.", "DeskMCP Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return 11;
+            }
+            try
+            {
+                if (args.Length > 0 && args[0] == "--mutex-test-hold") { Thread.Sleep(3000); return 0; }
+                if (args.Length >= 2 && args[0] == "--recover-test")
+                {
+                    try { InstallerEngine.RecoverInterruptedInstall(Path.GetFullPath(args[1])); return 0; }
+                    catch { return 12; }
+                }
+                if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup"))
+                {
+                    try
+                    {
+                        InstallOptions test = new InstallOptions();
+                        test.InstallDir = Path.GetFullPath(args[1]);
+                        test.AutoStart = false;
+                        test.RegisterUninstall = false;
+                        test.CreateShortcuts = false;
+                        test.LaunchAfterInstall = false;
+                        test.SimulateFailureAfterBackup = args[0] == "--install-test-fail-after-backup";
+                        InstallerEngine.Install(test, delegate { });
+                        return 0;
+                    }
+                    catch { return 10; }
+                }
+                InstallerForm form = new InstallerForm();
+                Application.Run(form);
+                return form.ExitCode;
+            }
+            finally { mutex.ReleaseMutex(); }
+        }
     }
 }

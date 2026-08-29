@@ -75,6 +75,24 @@ Invoke-Native $csc @(
 )
 Require (Test-Path -LiteralPath $UninstallerExe) 'Uninstaller build output is missing.'
 Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskMCPUninstaller.exe') -Force
+Write-Output 'STEP=payload-integrity-manifest'
+$targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
+$tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
+$integrityRelatives = @(
+    'DeskMCP.exe',
+    'Panel.xaml',
+    'node\node.exe',
+    'gateway\dist\src\index.js',
+    'release-target.json',
+    'DeskMCPUninstaller.exe',
+    $tunnelRelative
+)
+$integrityLines = foreach ($relative in $integrityRelatives) {
+    $full = Join-Path $StageRoot $relative
+    Require (Test-Path -LiteralPath $full) ('Integrity-protected payload file is missing: ' + $relative)
+    ((Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLowerInvariant() + '  ' + $relative.Replace('\','/'))
+}
+[IO.File]::WriteAllLines((Join-Path $StageRoot 'install-integrity.sha256'), $integrityLines, [Text.Encoding]::ASCII)
 Write-Output 'STEP=package-payload'
 if (Test-Path -LiteralPath $PayloadZip) { Remove-Item -LiteralPath $PayloadZip -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -103,6 +121,14 @@ Invoke-Native $csc @(
     $InstallerSource
 )
 Require (Test-Path -LiteralPath $SetupExe) 'Setup build output is missing.'
+Write-Output 'STEP=installer-smoke-single-instance'
+$mutexHolder = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -PassThru
+Start-Sleep -Milliseconds 500
+$mutexBlocked = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -Wait -PassThru
+Require ($mutexBlocked.ExitCode -eq 11) ('Second Setup instance was not rejected: ' + $mutexBlocked.ExitCode)
+[void]$mutexHolder.WaitForExit(5000)
+Require ($mutexHolder.HasExited -and $mutexHolder.ExitCode -eq 0) 'Setup mutex holder did not finish cleanly.'
+Write-Output 'INSTALLER_SINGLE_INSTANCE=OK'
 Write-Output 'STEP=installer-smoke-clean'
 if (Test-Path -LiteralPath $SmokeRoot) {
     $oldUninstaller = @(
@@ -130,6 +156,7 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET third-party notices are missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) 'Installed .NET license is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET notices are missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'install-integrity.sha256')) 'Installed integrity manifest is missing.'
 
 $rollbackMarker = Join-Path $SmokeRoot 'ROLLBACK_OLD_MARKER.txt'
 [IO.File]::WriteAllText($rollbackMarker, 'old-install-must-survive', [Text.Encoding]::ASCII)
@@ -158,27 +185,33 @@ $simTemp = $SmokeRoot + '.install-simulated'
 Move-Item -LiteralPath $SmokeRoot -Destination $simBackup
 New-Item -ItemType Directory -Path $simTemp | Out-Null
 [IO.File]::WriteAllText((Join-Path $simTemp 'partial.txt'), 'partial', [Text.Encoding]::ASCII)
+New-Item -ItemType Directory -Force -Path $SmokeRoot, (Join-Path $SmokeRoot 'node'), (Join-Path $SmokeRoot 'gateway\dist\src') | Out-Null
+Copy-Item -LiteralPath (Join-Path $simBackup 'install-integrity.sha256') -Destination (Join-Path $SmokeRoot 'install-integrity.sha256')
+Copy-Item -LiteralPath (Join-Path $simBackup 'release-target.json') -Destination (Join-Path $SmokeRoot 'release-target.json')
+foreach ($relative in @('DeskMCP.exe','Panel.xaml','node\node.exe','gateway\dist\src\index.js','DeskMCPUninstaller.exe')) {
+    [IO.File]::WriteAllText((Join-Path $SmokeRoot $relative), 'corrupt-but-present', [Text.Encoding]::ASCII)
+}
+$corruptContract = Get-Content -LiteralPath (Join-Path $SmokeRoot 'release-target.json') -Raw | ConvertFrom-Json
+$corruptTunnel = Join-Path $SmokeRoot ('tunnel-client\' + [string]$corruptContract.tunnelVersion + '\bin\tunnel-client.exe')
+New-Item -ItemType Directory -Force -Path (Split-Path $corruptTunnel -Parent) | Out-Null
+[IO.File]::WriteAllText($corruptTunnel, 'corrupt-but-present', [Text.Encoding]::ASCII)
 $recovery = Start-Process -FilePath $SetupExe -ArgumentList @('--recover-test', ('"' + $SmokeRoot + '"')) -Wait -PassThru
 Require ($recovery.ExitCode -eq 0) "Interrupted recovery failed: $($recovery.ExitCode)"
 Require (Test-Path -LiteralPath $recoveryMarker) 'Interrupted recovery did not restore the prior install.'
 Require (-not (Test-Path -LiteralPath $simBackup)) 'Interrupted recovery left backup state behind.'
 Require (-not (Test-Path -LiteralPath $simTemp)) 'Interrupted recovery left temp state behind.'
 
-$settingsDir = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP'
+$installerSmokeStateRoot = Join-Path $RuntimeRoot ('installer-smoke-state\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
+$settingsDir = Join-Path $installerSmokeStateRoot 'roaming'
 $settingsPath = Join-Path $settingsDir 'settings.json'
-$createdInstallerSmokeSettings = $false
 $panel = $null
 $health = $null
+$env:DESKMCP_TEST_STATE_ROOT = $installerSmokeStateRoot
 try {
-    if (-not (Test-Path -LiteralPath $settingsPath)) {
-        New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
-        $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
-        [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
-        $createdInstallerSmokeSettings = $true
-        Write-Output 'INSTALLER_SMOKE_SETTINGS=TEMPORARY_FRESH_USER'
-    } else {
-        Write-Output 'INSTALLER_SMOKE_SETTINGS=EXISTING_PRESERVED'
-    }
+    New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
+    $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
+    Write-Output 'INSTALLER_SMOKE_SETTINGS=ISOLATED_TEMPORARY'
 
     Write-Output 'STEP=installer-smoke-runtime'
     $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
@@ -200,7 +233,8 @@ try {
     catch { if ($_.Exception.Message -like 'Gateway remained*') { throw } }
 } finally {
     if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
-    if ($createdInstallerSmokeSettings -and (Test-Path -LiteralPath $settingsPath)) { Remove-Item -LiteralPath $settingsPath -Force }
+    $env:DESKMCP_TEST_STATE_ROOT = $null
+    if (Test-Path -LiteralPath $installerSmokeStateRoot) { try { [IO.Directory]::Delete($installerSmokeStateRoot, $true) } catch { } }
 }
 
 $setupItem = Get-Item -LiteralPath $SetupExe

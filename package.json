@@ -1,7 +1,7 @@
 {
   "name": "deskmcp-gateway",
   "version": "0.9.1",
-  "description": "DeskMCP — open-source local desktop bridge for ChatGPT on Windows",
+  "description": "DeskMCP — open-source local-first desktop bridge for ChatGPT",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
     "mcp",
     "chatgpt",
     "windows",
+    "macos",
     "desktop",
     "local-first",
     "open-source"
