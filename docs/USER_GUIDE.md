@@ -6,7 +6,7 @@ DeskMCP connects ChatGPT to a Windows desktop through an OpenAI Tunnel while kee
 
 ## 1. Install
 
-1. Download `DeskMCP-Setup-0.9.0.exe` from the GitHub Release.
+1. Download `DeskMCP-Setup-<version>.exe` from the GitHub Release.
 2. Run the installer for the current Windows user. Administrator access is not required.
 3. Keep **Start DeskMCP with Windows** enabled if you want the tray app to start automatically after sign-in.
 4. Keep **Open DeskMCP after installation** enabled for the easiest first setup.
@@ -95,7 +95,7 @@ A custom external Workspace is not deleted by the uninstaller.
 The release includes `SHA256SUMS.txt`. In PowerShell:
 
 ```powershell
-Get-FileHash .\DeskMCP-Setup-0.9.0.exe -Algorithm SHA256
+Get-FileHash .\DeskMCP-Setup-<version>.exe -Algorithm SHA256
 ```
 
 Compare the output with the SHA-256 published in the same GitHub Release.

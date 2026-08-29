@@ -48,7 +48,9 @@ function parseRoots(raw: string | undefined): string[] {
 function parseBoolean(raw: string | undefined): boolean {
   if (!raw) return false;
   return raw === '1' || raw.toLowerCase() === 'true';
-}function comparisonPath(value: string): string {
+}
+
+function comparisonPath(value: string): string {
   const normalized = path.normalize(value);
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }

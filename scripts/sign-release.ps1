@@ -6,7 +6,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$Setup = Join-Path $ProjectRoot 'runtime\release\DeskMCP-Setup-0.9.0.exe'
+$Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
+$Setup = Join-Path $ProjectRoot ("runtime\release\DeskMCP-Setup-$Version.exe")
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 Require (Test-Path -LiteralPath $Setup) 'Setup artifact is missing.'
 try {
@@ -53,7 +54,7 @@ Write-Output 'STEP=post-sign-installer-smoke'
 & (Join-Path $PSScriptRoot 'test-installer-release.ps1')
 if ($LASTEXITCODE -ne 0) { throw "Post-sign installer smoke failed: $LASTEXITCODE" }
 Write-Output 'STEP=release-metadata'
-& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $Setup -Version '0.9.0' -Target 'win-x64'
+& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $Setup -Version $Version -Target 'win-x64'
 if ($LASTEXITCODE -ne 0) { throw "Release metadata generation failed: $LASTEXITCODE" }
 Write-Output 'STEP=release-readiness'
 & (Join-Path $PSScriptRoot 'check-release-readiness.ps1') -RequireSigned

@@ -1,9 +1,15 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using Microsoft.Win32;
 using System.Windows.Forms;
+
+[assembly: AssemblyTitle("DeskMCP Uninstaller")]
+[assembly: AssemblyProduct("DeskMCP")]
+[assembly: AssemblyVersion("0.9.1.0")]
+[assembly: AssemblyFileVersion("0.9.1.0")]
 
 internal static class DeskMcpUninstaller
 {

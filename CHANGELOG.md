@@ -2,6 +2,21 @@
 
 All notable changes to DeskMCP are documented here.
 
+## 0.9.1 — 2026-08-29
+
+### Changed
+
+- Unified MCP server/client metadata and runtime log prefixes under the DeskMCP brand.
+- Added Windows file-version metadata for the Control Panel, Setup, and Uninstaller.
+- Made release, smoke-test, signing, readiness, and manifest tooling derive the current package version instead of hard-coding 0.9.0.
+- Added a build-time version-consistency gate across package, Gateway, WPF, Installer, and Uninstaller versions.
+- Made README and User Guide installer examples evergreen instead of release-number-specific.
+
+### Fixed
+
+- Cleaned source formatting artifacts that had survived earlier automated edits.
+- Corrected stale release-policy and package metadata documentation discovered after the 0.9.0 public release.
+
 ## 0.9.0 — 2026-08-29
 
 ### Added
@@ -42,5 +57,4 @@ All notable changes to DeskMCP are documented here.
 - Windows x64 only; no ARM64 package in 0.9.0.
 - No automatic updater; upgrades use a new installer.
 - Current Setup remains unsigned until a production Authenticode certificate is supplied.
-- A project-level open-source LICENSE has not yet been selected.
 - Some upstream transitive dependencies are deprecated even though production audit is currently clean.

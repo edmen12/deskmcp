@@ -7,6 +7,8 @@ const stageRoot = path.resolve(process.argv[3] ?? path.join(projectRoot, 'runtim
 const gatewayRoot = path.join(stageRoot, 'gateway');
 const sourceLicenses = path.join(projectRoot, 'licenses');
 const stageLicenses = path.join(stageRoot, 'licenses');
+const releaseVersion = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).version;
+const nodeVersion = process.version.replace(/^v/, '');
 fs.mkdirSync(sourceLicenses, { recursive: true });
 fs.mkdirSync(stageLicenses, { recursive: true });
 
@@ -16,7 +18,9 @@ const npm = spawnSync(comspec, ['/d', '/s', '/c', 'npm.cmd ls --omit=dev --all -
 });
 if (!npm.stdout?.trim()) throw new Error(`npm ls failed: ${npm.error?.message ?? npm.stderr ?? 'no output'}`);
 const tree = JSON.parse(npm.stdout);
-const packages = new Map();function collect(node) {
+const packages = new Map();
+
+function collect(node) {
   for (const dep of Object.values(node?.dependencies ?? {})) {
     if (!dep?.name || !dep?.version || !dep?.path) continue;
     const key = `${dep.name}@${dep.version}`;
@@ -49,7 +53,9 @@ const rows = [...packages.values()].map(dep => {
     licenseFiles: licenseFiles(dep.path).join(';'),
     relativePath: path.relative(stageRoot, dep.path).replaceAll('\\', '/')
   };
-}).sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));const csvHeader = ['name','version','license','declared_license','license_files','stage_path'];
+}).sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+
+const csvHeader = ['name','version','license','declared_license','license_files','stage_path'];
 const csvLines = [csvHeader.map(csvCell).join(',')];
 for (const row of rows) {
   csvLines.push([
@@ -64,7 +70,9 @@ fs.writeFileSync(path.join(stageLicenses, 'production-node-packages.csv'), csvTe
 const buffersMit = `MIT License\n\nCopyright (c) 2015 James Halliday\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the "Software"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is furnished\nto do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n`;
 for (const dir of [sourceLicenses, stageLicenses]) {
   fs.writeFileSync(path.join(dir, 'buffers-0.1.1-MIT.txt'), buffersMit);
-}const unresolved = rows.filter(row => row.license === 'UNKNOWN');
+}
+
+const unresolved = rows.filter(row => row.license === 'UNKNOWN');
 if (unresolved.length) {
   throw new Error(`Unresolved package licenses: ${unresolved.map(row => `${row.name}@${row.version}`).join(', ')}`);
 }
@@ -78,10 +86,10 @@ const specialLines = special.map(row =>
 ).join('\n') || '- None.';
 
 const notices = `# Third-Party Notices\n\n` +
-`This notice is generated from the actual Windows x64 release stage for DeskMCP 0.9.0. ` +
+`This notice is generated from the actual Windows x64 release stage for DeskMCP ${releaseVersion}. ` +
 `DeskMCP itself is licensed under Apache License 2.0; see the repository root \`LICENSE\`. Third-party components retain the licenses documented below.\n\n` +
 `## Bundled runtimes and major components\n\n` +
-`- **Node.js 24.19.0** — distributed with its upstream \`node/LICENSE\`, which includes Node.js and bundled third-party notices.\n` +
+`- **Node.js ${nodeVersion}** — distributed with its upstream \`node/LICENSE\`, which includes Node.js and bundled third-party notices.\n` +
 `- **.NET 10 Windows self-contained runtime** — the release carries \`licenses/dotnet/LICENSE.txt\` and \`licenses/dotnet/ThirdPartyNotices.txt\` copied from the exact project-local SDK used to publish the WPF application.\n` +
 `- **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream \`LICENSE\`, \`NOTICE\`, third-party licenses text, and SPDX document remain under \`tunnel-client/v0.0.13/bin/\`.\n` +
 `- **Desktop Commander MCP 0.2.47** — MIT. Its package-local license remains in the bundled production \`node_modules\`.\n` +

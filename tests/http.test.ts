@@ -9,7 +9,7 @@ test('safe-test MCP endpoint lists and executes only the three test tools', asyn
   await rm(WRITE_TEST_FILE, { force: true });
   const running = await startHttpServer('127.0.0.1', 0);
   const client = new Client(
-    { name: 'desktop-mcp-test', version: '0.1.0' },
+    { name: 'deskmcp-test', version: '0.1.0' },
     { versionNegotiation: { mode: 'auto' } }
   );
 

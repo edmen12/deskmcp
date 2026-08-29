@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$Setup = Join-Path $ProjectRoot 'runtime\release\DeskMCP-Setup-0.9.0.exe'
+$Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
+$Setup = Join-Path $ProjectRoot ("runtime\release\DeskMCP-Setup-$Version.exe")
 $SmokeRoot = Join-Path $ProjectRoot 'runtime\install-smoke\DesktopMCP'
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 function Wait-Gone([string]$Path){ for($i=0;$i -lt 25;$i++){ if(-not(Test-Path -LiteralPath $Path)){ return }; Start-Sleep -Seconds 1 }; throw "Path remained: $Path" }
@@ -32,7 +33,7 @@ $panel=Start-Process -FilePath $panelPath -ArgumentList '--startup' -WorkingDire
 $health=$null
 for($i=0;$i -lt 90;$i++){ try{$health=Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break}catch{Start-Sleep -Milliseconds 500} }
 Require ($null -ne $health) 'Installed Gateway did not become healthy.'
-Require ($health.version -eq '0.9.0') "Version=$($health.version)"
+Require ($health.version -eq $Version) "Version=$($health.version); expected=$Version"
 Require ($health.policy.profile -eq 'read-only') "Profile=$($health.policy.profile)"
 $nodePath=[IO.Path]::GetFullPath((Join-Path $SmokeRoot 'node\node.exe'))
 $nodes=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
@@ -52,5 +53,5 @@ Write-Output ('INSTALL_EXIT='+$p.ExitCode)
 Write-Output ('UPGRADE_EXIT='+$u.ExitCode)
 Write-Output ('UNINSTALL_EXIT='+$x.ExitCode)
 Write-Output 'RUNTIME_PROFILE=read-only'
-Write-Output 'RUNTIME_VERSION=0.9.0'
+Write-Output ('RUNTIME_VERSION='+$Version)
 Write-Output 'INSTALLED_NODE_CLEANUP=OK'

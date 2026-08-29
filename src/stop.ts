@@ -12,4 +12,4 @@ if (response !== 'OK shutdown') {
   throw new Error(`Unexpected DeskMCP control response: ${response}`);
 }
 
-console.error(`[desktop-mcp] graceful shutdown requested on port ${port}`);
+console.error(`[deskmcp] graceful shutdown requested on port ${port}`);

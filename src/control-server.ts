@@ -50,7 +50,7 @@ function handleSocket(
     socket.end('OK shutdown\n');
     setImmediate(() => {
       void Promise.resolve(onShutdown()).catch(error => {
-        console.error('[desktop-mcp] local control shutdown failed:', error);
+        console.error('[deskmcp] local control shutdown failed:', error);
       });
     });
   });

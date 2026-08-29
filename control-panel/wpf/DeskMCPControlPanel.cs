@@ -1950,7 +1950,7 @@ internal sealed class ControlPanelRuntime
         ((TextBlock)preview.FindName("ProfileBadge")).Foreground = BrushFrom("#007AFF");
         ((TextBlock)preview.FindName("ProfileHint")).Text = "Guarded filesystem writes in workspace";
         ((TextBlock)preview.FindName("ScopeText")).Text = "C:\\Users\\User\\Desktop\\workspace";
-        ((TextBlock)preview.FindName("VersionText")).Text = "Gateway 0.9.0";
+        ((TextBlock)preview.FindName("VersionText")).Text = "Gateway 0.9.1";
         ((Button)preview.FindName("PowerButton")).Content = "Restart Gateway";
         if (firstRunStep >= 0)
         {

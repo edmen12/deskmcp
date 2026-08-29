@@ -70,7 +70,7 @@ export async function startHttpServer(
   );
   const nodeHandler = toNodeHandler(mcpHandler, {
     onerror(error) {
-      console.error('[desktop-mcp] MCP adapter error:', error);
+      console.error('[deskmcp] MCP adapter error:', error);
     }
   });
   const validateHost = localhostHostValidation();

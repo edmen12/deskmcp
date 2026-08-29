@@ -63,14 +63,15 @@ export class DesktopCommanderBridge {
       command: process.execPath,
       args: [this.entry, '--no-onboarding'],
       cwd: path.dirname(this.entry),
-      stderr: 'pipe',      env: {
+      stderr: 'pipe',
+      env: {
         ...getDefaultEnvironment(),
         DC_REMOTE_DEVICE: 'true'
       }
     });
 
     const client = new Client(
-      { name: 'desktop-mcp-gateway', version: '0.9.0' },
+      { name: 'deskmcp-gateway', version: '0.9.1' },
       { versionNegotiation: { mode: 'legacy' } }
     );
 

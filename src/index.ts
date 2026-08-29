@@ -54,7 +54,7 @@ async function cleanupOwnedProcesses(): Promise<void> {
       }
     } catch (error) {
       if (operation) await audit.finish(operation, 'fail', error).catch(() => undefined);
-      console.error(`[desktop-mcp] owned process cleanup failed for ${session.id}:`, error);
+      console.error(`[deskmcp] owned process cleanup failed for ${session.id}:`, error);
       process.exitCode = 1;
     } finally {
       processSessions.forget(session.id);
@@ -65,19 +65,19 @@ async function cleanupOwnedProcesses(): Promise<void> {
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.error(`[desktop-mcp] ${signal}: shutting down`);
+  console.error(`[deskmcp] ${signal}: shutting down`);
 
   try {
     if (control) await control.close();
   } catch (error) {
-    console.error('[desktop-mcp] local control shutdown failed:', error);
+    console.error('[deskmcp] local control shutdown failed:', error);
     process.exitCode = 1;
   }
 
   try {
     if (running) await running.close();
   } catch (error) {
-    console.error('[desktop-mcp] HTTP shutdown failed:', error);
+    console.error('[deskmcp] HTTP shutdown failed:', error);
     process.exitCode = 1;
   }
 
@@ -86,7 +86,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     await bridge.close();
   } catch (error) {
-    console.error('[desktop-mcp] Desktop Commander shutdown failed:', error);
+    console.error('[deskmcp] Desktop Commander shutdown failed:', error);
     process.exitCode = 1;
   }
 }
@@ -110,12 +110,12 @@ try {
   throw error;
 }
 
-console.error(`[desktop-mcp] listening on ${running.url}/mcp`);
-console.error(`[desktop-mcp] policy: ${JSON.stringify(policy.info())}`);
-console.error('[desktop-mcp] audit: enabled');
-console.error('[desktop-mcp] local control: enabled');
+console.error(`[deskmcp] listening on ${running.url}/mcp`);
+console.error(`[deskmcp] policy: ${JSON.stringify(policy.info())}`);
+console.error('[deskmcp] audit: enabled');
+console.error('[deskmcp] local control: enabled');
 console.error(
-  `[desktop-mcp] Desktop Commander connected: ${JSON.stringify(bridge.info())}`
+  `[deskmcp] Desktop Commander connected: ${JSON.stringify(bridge.info())}`
 );
 
 process.once('SIGINT', () => void shutdown('SIGINT'));

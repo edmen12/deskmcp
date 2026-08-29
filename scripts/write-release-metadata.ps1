@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory=$true)][string]$SetupPath,
-    [string]$Version = '0.9.0',
+    [string]$Version,
     [string]$Target = 'win-x64'
 )
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if ([string]::IsNullOrWhiteSpace($Version)) { $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version) }
 $ReleaseRoot = Split-Path ([IO.Path]::GetFullPath($SetupPath)) -Parent
 $StageRoot = Join-Path $ProjectRoot 'runtime\release-stage\DesktopMCP'
 $inventory = Join-Path $StageRoot 'licenses\production-node-packages.csv'
@@ -15,6 +16,8 @@ $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupPath).Hash.ToLowerInva
 $signature = Get-AuthenticodeSignature -LiteralPath $SetupPath
 $rows = @(Import-Csv -LiteralPath $inventory)
 $unknown = @($rows | Where-Object { $_.license -eq 'UNKNOWN' }).Count
+$nodeExe = Join-Path $StageRoot 'node\node.exe'
+$nodeVersion = if (Test-Path -LiteralPath $nodeExe) { ((& $nodeExe --version) | Out-String).Trim().TrimStart('v') } else { 'unknown' }
 $manifest = [ordered]@{
     product = 'DeskMCP'
     version = $Version
@@ -25,8 +28,8 @@ $manifest = [ordered]@{
     authenticodeStatus = [string]$signature.Status
     productionNodePackages = $rows.Count
     unresolvedNodeLicenses = $unknown
-    gatewayVersion = '0.9.0'
-    nodeVersion = '24.19.0'
+    gatewayVersion = $Version
+    nodeVersion = $nodeVersion
     releaseStageSmoke = 'passed'
     installerSmoke = 'passed'
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')
