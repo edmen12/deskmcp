@@ -12,6 +12,9 @@ $PanelExe = Join-Path $StageRoot 'DeskMCP.exe'
 $NodeExe = Join-Path $StageRoot 'node\node.exe'
 $GatewayRoot = Join-Path $StageRoot 'gateway'
 $SmokeFile = Join-Path $GatewayRoot 'release-smoke.mjs'
+$SettingsDir = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP'
+$SettingsPath = Join-Path $SettingsDir 'settings.json'
+$CreatedSmokeSettings = $false
 if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
 if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missing.' }
 try {
@@ -21,9 +24,18 @@ try {
     if ($_.Exception.Message -like 'Port 8765*') { throw }
 }
 $panel = $null
+$health = $null
 try {
+    if (-not (Test-Path -LiteralPath $SettingsPath)) {
+        New-Item -ItemType Directory -Force -Path $SettingsDir | Out-Null
+        $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($SettingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
+        $CreatedSmokeSettings = $true
+        Write-Output 'SMOKE_SETTINGS=TEMPORARY_FRESH_USER'
+    } else {
+        Write-Output 'SMOKE_SETTINGS=EXISTING_PRESERVED'
+    }
     $panel = Start-Process -FilePath $PanelExe -ArgumentList '--startup' -WorkingDirectory $StageRoot -PassThru
-    $health = $null
     for ($i = 0; $i -lt 90; $i++) {
         try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break } catch { Start-Sleep -Milliseconds 500 }
     }
@@ -65,10 +77,13 @@ try {
     Write-Output 'SINGLE_INSTANCE=OK'
 } finally {
     if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
-    Push-Location $GatewayRoot
-    try { & $NodeExe 'dist\src\stop.js' | Out-Null } catch { } finally { Pop-Location }
+    if ($null -ne $health) {
+        Push-Location $GatewayRoot
+        try { & $NodeExe 'dist\src\stop.js' 2>$null | Out-Null } catch { } finally { Pop-Location }
+    }
     Start-Sleep -Seconds 2
     if (Test-Path -LiteralPath $SmokeFile) { Remove-Item -LiteralPath $SmokeFile -Force }
+    if ($CreatedSmokeSettings -and (Test-Path -LiteralPath $SettingsPath)) { Remove-Item -LiteralPath $SettingsPath -Force }
 }
 $left = @()
 foreach ($p in Get-Process -Name node -ErrorAction SilentlyContinue) {
