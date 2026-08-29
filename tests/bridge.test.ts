@@ -447,7 +447,7 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       const processCommand = 'node -i';
       const started = await fullControlClient.callTool({
         name: 'desktop_start_process',
-        arguments: { command: processCommand, timeout_ms: 1000, shell: 'cmd.exe' }
+        arguments: { command: processCommand, timeout_ms: 1000 }
       });
       assert.equal(started.isError, undefined);
       const startedText = JSON.stringify(started.content);
