@@ -1,6 +1,6 @@
 # DeskMCP 0.9.0
 
-DeskMCP 0.9.0 is the first packaged Windows x64 release candidate focused on a simple install-and-connect workflow.
+DeskMCP 0.9.0 is the first public Windows x64 release, focused on a simple install-and-connect workflow.
 
 ## What users get
 
@@ -33,9 +33,8 @@ Use the published `SHA256SUMS.txt` or `release-manifest.json` to verify the Setu
 
 ## Release status
 
-The current build is technically validated for install, upgrade, runtime, and uninstall, but it is **not yet a public open-source release** because:
+This build is validated for install, upgrade, runtime, and uninstall and is released as open source under the **Apache License 2.0**.
 
-- The project-level LICENSE is still an owner decision.
-- The Setup executable has not yet been production Authenticode-signed.
+The Setup executable is currently **unsigned**. This does not block the open-source release, but Windows may show **Unknown Publisher** or a SmartScreen warning until production Authenticode signing is added.
 
 Additional documented limitations: Windows x64 only, no automatic updater, and upstream transitive deprecation warnings remain. See `RELEASE_CHECKLIST.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md`.
