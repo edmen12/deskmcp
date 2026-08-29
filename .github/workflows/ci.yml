@@ -35,9 +35,9 @@ jobs:
       - name: Gateway tests
         run: npm test
 
-      - name: WPF validation
+      - name: WPF build
         shell: powershell
-        run: .\control-panel\wpf\validate.ps1
+        run: dotnet build .\control-panel\wpf\DeskMCP.ControlPanel.csproj -c Release --nologo -p:ContinuousIntegrationBuild=true
 
       - name: Secret hygiene
         shell: powershell
