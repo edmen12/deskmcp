@@ -43,8 +43,8 @@ jobs:
       - name: Update security self-test
         shell: powershell
         run: |
-          & .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe --update-security-self-test
-          if ($LASTEXITCODE -ne 0) { throw "Update security self-test failed: $LASTEXITCODE" }
+          $p = Start-Process -FilePath .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe -ArgumentList '--update-security-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Update security self-test failed: $($p.ExitCode)" }
 
       - name: Installer UI build
         shell: powershell
@@ -87,8 +87,8 @@ jobs:
       - name: ARM64 update security self-test
         shell: powershell
         run: |
-          & .\runtime\release-stage\win-arm64\DesktopMCP\DeskMCP.exe --update-security-self-test
-          if ($LASTEXITCODE -ne 0) { throw "ARM64 update security self-test failed: $LASTEXITCODE" }
+          $p = Start-Process -FilePath .\runtime\release-stage\win-arm64\DesktopMCP\DeskMCP.exe -ArgumentList '--update-security-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "ARM64 update security self-test failed: $($p.ExitCode)" }
 
       - name: ARM64 release readiness
         shell: powershell
