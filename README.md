@@ -166,6 +166,16 @@ Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 - The open-source Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until Authenticode signing is added.
 - Some transitive npm dependencies emit deprecation warnings even though the current production `npm audit` reports zero vulnerabilities.
 
+## Roadmap
+
+Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
+
+- [Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5)
+- [Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6)
+- [Windows ARM64 packaging](https://github.com/edmen12/deskmcp/issues/7)
+- [Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8)
+- [Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9)
+
 ## Support
 
 Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducible bugs, feature requests, and private security reporting, see [`SUPPORT.md`](SUPPORT.md). Never post Tunnel runtime keys, API keys, or private file contents in a public issue.
