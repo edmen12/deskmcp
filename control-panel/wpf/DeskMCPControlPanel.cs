@@ -50,7 +50,7 @@ internal sealed class PanelSettings
     public bool? onboardingCompleted { get; set; }
 }
 
-internal sealed class ControlPanelRuntime
+internal sealed partial class ControlPanelRuntime
 {
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern bool DestroyIcon(IntPtr handle);
@@ -483,7 +483,7 @@ internal sealed class ControlPanelRuntime
             Find<TextBlock>("SettingsTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Button>("SettingsBackButton").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
             Find<Button>("SettingsBackButton").Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
-            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard" })
+            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard", "UpdateCard", "UpdateCard" })
                 Find<Border>(cardName).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
             Find<TextBlock>("WorkspaceLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("WorkspacePathText").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
@@ -495,6 +495,8 @@ internal sealed class ControlPanelRuntime
             Find<TextBlock>("StartupHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("TunnelSettingsLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("TunnelConfigStatus").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+            Find<TextBlock>("UpdateLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+            Find<TextBlock>("UpdateStatus").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("TunnelIdValue").Foreground = BrushFrom(dark ? "#F0F0F3" : "#18181B");
             Find<TextBlock>("TunnelIdFieldLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("TunnelKeyFieldLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
@@ -509,7 +511,7 @@ internal sealed class ControlPanelRuntime
             Find<PasswordBox>("TunnelRuntimeKeyInput").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Border>("ThemeShell").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
             themeIndicator.Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
-            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
+            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
             {
                 Button button = Find<Button>(name);
                 button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
@@ -1830,6 +1832,7 @@ internal sealed class ControlPanelRuntime
         Find<Button>("TunnelSetupCancelButton").Click += delegate { HideTunnelSetupOverlay(); };
         Find<Button>("TunnelSetupSaveButton").Click += delegate { SaveTunnelSetup(); };
         Find<Button>("TunnelReconnectButton").Click += delegate { ReconnectTunnel(); };
+        Find<Button>("UpdateButton").Click += delegate { HandleUpdateButton(); };
         Find<Button>("SettingsButton").Click += delegate { ToggleSettings(); };
         Find<Button>("SettingsBackButton").Click += delegate { if (settingsExpanded) ToggleSettings(); };
         Find<Button>("WorkspaceChangeButton").Click += delegate { ChooseWorkspace(); };
@@ -1997,17 +2000,17 @@ internal sealed class ControlPanelRuntime
         ((Border)preview.FindName("LocalOnlyPill")).BorderBrush = BrushFrom(dark ? "#FF24532F" : "#142E7D32");
         ((TextBlock)preview.FindName("LocalOnlyText")).Foreground = BrushFrom(dark ? "#FF8FE6A8" : "#FF2E7D32");
         ((TextBlock)preview.FindName("SettingsTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "TunnelSettingsLabel", "TunnelIdValue" })
+        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "TunnelSettingsLabel", "TunnelIdValue", "UpdateLabel", "UpdateLabel" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "TunnelConfigStatus" })
+        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "TunnelConfigStatus", "UpdateStatus", "UpdateStatus" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
         ((Border)preview.FindName("ThemeShell")).Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
         ((Border)preview.FindName("ThemeIndicator")).Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
 
-        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard" })
+        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard", "UpdateCard" })
             ((Border)preview.FindName(cardName)).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
 
-        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
+        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
         {
             Button button = (Button)preview.FindName(name);
             button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");

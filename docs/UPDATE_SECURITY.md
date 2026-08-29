@@ -4,7 +4,7 @@ This document defines the trust model for future DeskMCP update checks and insta
 
 ## Current status
 
-DeskMCP still supports manual installer upgrades as the universal fallback. Automatic execution is intentionally gated until future releases satisfy every trust requirement below.
+DeskMCP supports manual installer upgrades as the universal fallback. The Control Panel now has a user-initiated release checker, but automatic download/execution remains intentionally gated until future releases satisfy every trust requirement below.
 
 Existing releases that were published before GitHub release immutability is enabled are **manual-only** for updater purposes. GitHub documents that release immutability applies only to future releases.
 
@@ -79,9 +79,9 @@ User data is intentionally outside the program directory, so program rollback do
 
 Future update-capable releases should be created as drafts, have every asset attached, and only then be published after release immutability is enabled. The release must include:
 
-- `DeskMCP-Setup-<version>.exe`;
-- `release-manifest.json` schema v2 or newer;
-- `SHA256SUMS.txt`;
+- a target-specific Setup artifact (`DeskMCP-Setup-<version>.exe` for Windows x64 and `DeskMCP-Setup-<version>-win-arm64.exe` for Windows ARM64);
+- a target-specific schema-v2 manifest (`release-manifest.json` for Windows x64 and `release-manifest-win-arm64.json` for Windows ARM64);
+- the matching target-specific SHA-256 list;
 - GitHub asset digests for all attached assets;
 - Authenticode when automatic execution is intended.
 ## Threat model
@@ -97,13 +97,13 @@ The design addresses:
 - interrupted program-directory replacement;
 - unsigned or incorrectly signed artifacts being executed automatically.
 
-A fully compromised local Windows account is outside this updater's trust boundary. A compromised GitHub maintainer account can publish a new malicious release, but it still cannot pass the automatic execution gate without the separately protected Authenticode publisher credential. Until #6 is completed, unsigned releases therefore remain manual-only.
+A fully compromised local Windows account is outside this updater's trust boundary. A compromised GitHub maintainer account can publish a new malicious release, but it still cannot pass the automatic execution gate without the separately protected Authenticode publisher credential. Until a pinned Authenticode publisher identity is configured for #8, unsigned releases therefore remain manual-only.
 
 ## Implementation phases
 
-- **Now:** update contract, manifest schema, metadata/execution policy tests, installer rollback and interrupted-install recovery.
-- **Before automatic execution:** complete #6, pin the accepted publisher identity, and enable GitHub release immutability for future releases.
-- **Then:** add Control Panel check/download/install UI using this contract; do not add a second weaker path.
+- **Implemented foundation:** update contract, target-aware schema-v2 manifests, metadata/execution policy tests, installer rollback/interrupted-install recovery, and a user-initiated Control Panel release checker with manual fallback.
+- **Before automatic execution:** configure Authenticode release signing, pin the accepted publisher identity in the installed client, and enable GitHub release immutability for future releases.
+- **Then:** add `.partial` download, local SHA-256/size verification, WinVerifyTrust publisher verification, explicit **Install update**, and post-install profile verification. Do not add a second weaker path.
 
 ## Official references
 

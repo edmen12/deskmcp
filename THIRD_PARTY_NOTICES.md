@@ -5,10 +5,10 @@ This notice is generated from the actual Windows x64 release stage for DeskMCP 0
 ## Bundled runtimes and major components
 
 - **Node.js 24.19.0** — distributed with its upstream `node/LICENSE`, which includes Node.js and bundled third-party notices.
-- **.NET 10 Windows self-contained runtime** — the release carries `licenses/dotnet/LICENSE.txt` and `licenses/dotnet/ThirdPartyNotices.txt` copied from the exact project-local SDK used to publish the WPF application.
+- **.NET 10 Windows x64 self-contained runtime** — the release carries `licenses/dotnet/LICENSE.txt` and `licenses/dotnet/ThirdPartyNotices.txt` copied from the exact SDK used to publish the desktop application.
 - **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream `LICENSE`, `NOTICE`, third-party licenses text, and SPDX document remain under `tunnel-client/v0.0.13/bin/`.
 - **Desktop Commander MCP 0.2.47** — MIT. Its package-local license remains in the bundled production `node_modules`.
-- **sharp win32-x64 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.
+- **sharp-win32-x64 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.
 
 ## Manual license resolution
 
@@ -23,7 +23,7 @@ Evidence:
 
 ## Production Node package inventory
 
-The complete machine-generated inventory is `licenses/production-node-packages.csv`. It records package name, version, resolved license expression, package-local license files, and its path inside the Windows release stage.
+The complete machine-generated inventory is `licenses/production-node-packages.csv`. It records package name, version, resolved license expression, package-local license files, and its path inside the target release stage.
 
 Package/license counts for this stage:
 - MIT: 431
@@ -53,4 +53,4 @@ License expressions requiring special attention or explicit choice:
 
 ## Preservation rule
 
-Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, .NET notices, or tunnel-client notice/SPDX files when optimizing the installer payload.
+Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, or tunnel-client notice/SPDX files when optimizing a release payload.

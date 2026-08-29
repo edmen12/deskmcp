@@ -2,12 +2,15 @@ param(
     [Parameter(Mandatory=$true)][string]$CertificateThumbprint,
     [Parameter(Mandatory=$true)][string]$TimestampUrl,
     [string]$SignToolPath,
-    [switch]$MachineStore
+    [switch]$MachineStore,
+    [ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64'
 )
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
-$Setup = Join-Path $ProjectRoot ("runtime\release\DeskMCP-Setup-$Version.exe")
+$Setup = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 Require (Test-Path -LiteralPath $Setup) 'Setup artifact is missing.'
 try {
@@ -25,7 +28,7 @@ if ([string]::IsNullOrWhiteSpace($SignToolPath)) {
 if ([string]::IsNullOrWhiteSpace($SignToolPath)) {
     $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
     if (Test-Path -LiteralPath $kits) {
-        $candidate = Get-ChildItem -Path (Join-Path $kits '*\x64\signtool.exe') -File -ErrorAction SilentlyContinue |
+        $candidate = Get-ChildItem -Path (Join-Path $kits ('*\' + $TargetConfig.Architecture + '\signtool.exe')) -File -ErrorAction SilentlyContinue |
             Sort-Object FullName -Descending | Select-Object -First 1
         if ($candidate) { $SignToolPath = $candidate.FullName }
     }
@@ -51,13 +54,13 @@ $auth = Get-AuthenticodeSignature -LiteralPath $Setup
 Require ($auth.Status -eq 'Valid') ('Authenticode status is ' + $auth.Status)
 Write-Output ('SIGNED_BY=' + $auth.SignerCertificate.Subject)
 Write-Output 'STEP=post-sign-installer-smoke'
-& (Join-Path $PSScriptRoot 'test-installer-release.ps1')
+& (Join-Path $PSScriptRoot 'test-installer-release.ps1') -Target $Target
 if ($LASTEXITCODE -ne 0) { throw "Post-sign installer smoke failed: $LASTEXITCODE" }
 Write-Output 'STEP=release-metadata'
-& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $Setup -Version $Version -Target 'win-x64'
+& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $Setup -Version $Version -Target $Target
 if ($LASTEXITCODE -ne 0) { throw "Release metadata generation failed: $LASTEXITCODE" }
 Write-Output 'STEP=release-readiness'
-& (Join-Path $PSScriptRoot 'check-release-readiness.ps1') -RequireSigned
+& (Join-Path $PSScriptRoot 'check-release-readiness.ps1') -RequireSigned -Target $Target
 $readiness = $LASTEXITCODE
 if ($readiness -ne 0) { Write-Output ('READINESS_EXIT=' + $readiness) }
 exit $readiness

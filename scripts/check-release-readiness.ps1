@@ -1,9 +1,11 @@
-param([switch]$RequireSigned)
+param([switch]$RequireSigned,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$StageRoot = Join-Path $ProjectRoot 'runtime\release-stage\DesktopMCP'
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
-$Setup = Join-Path $ProjectRoot ("runtime\release\DeskMCP-Setup-$Version.exe")
+$Setup = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
 $blockers = [Collections.Generic.List[string]]::new()
 $warnings = [Collections.Generic.List[string]]::new()
 
@@ -50,16 +52,16 @@ foreach ($item in @(
     @('node\LICENSE','Node.js license/notices'),
     @('tunnel-client\v0.0.13\bin\LICENSE','tunnel-client Apache-2.0 license'),
     @('tunnel-client\v0.0.13\bin\NOTICE','tunnel-client NOTICE'),
-    @('tunnel-client\v0.0.13\bin\tunnel-client-v0.0.13-windows-amd64.spdx.json','tunnel-client SPDX')
+    @(('tunnel-client\v0.0.13\bin\tunnel-client-v0.0.13-' + $TargetConfig.TunnelTriple + '.spdx.json'),'tunnel-client SPDX')
 )) {
     [void](Require-File (Join-Path $StageRoot $item[0]) $item[1])
 }
 
-$sharpReadme = Join-Path $StageRoot 'gateway\node_modules\@img\sharp-win32-x64\README.md'
+$sharpReadme = Join-Path $StageRoot ('gateway\node_modules\@img\' + $TargetConfig.SharpPackage + '\README.md')
 if (Require-File $sharpReadme 'sharp/libvips bundled-library notice') {
-    Warn 'sharp win32-x64 includes LGPL/native libraries; preserve its README/LICENSE and perform release legal review'
+    Warn ($TargetConfig.SharpPackage + ' includes LGPL/native libraries; preserve its README/LICENSE and perform release legal review')
 }
-if (Require-File $Setup 'Windows x64 Setup') {
+if (Require-File $Setup ('Windows Setup ' + $Target)) {
     $setupItem = Get-Item -LiteralPath $Setup
     $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash.ToLowerInvariant()
     Pass ('Setup size MB: ' + [math]::Round($setupItem.Length / 1MB, 1))
@@ -70,12 +72,15 @@ if (Require-File $Setup 'Windows x64 Setup') {
     else { Warn ('Setup is unsigned: ' + $signature.Status + '; allowed for open-source release, Windows may show Unknown Publisher/SmartScreen') }
 }
 
-$manifestPath = Join-Path $ProjectRoot 'runtime\release\release-manifest.json'
-$sumPath = Join-Path $ProjectRoot 'runtime\release\SHA256SUMS.txt'
+$metadataSuffix = if ($Target -eq 'win-x64') { '' } else { '-' + $Target }
+$manifestPath = Join-Path $ProjectRoot ('runtime\release\release-manifest' + $metadataSuffix + '.json')
+$sumPath = Join-Path $ProjectRoot ('runtime\release\SHA256SUMS' + $metadataSuffix + '.txt')
 if (Require-File $manifestPath 'Release manifest') {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.sha256 -eq $setupHash) { Pass 'Release manifest SHA256 matches Setup' } else { Block 'Release manifest SHA256 does not match Setup' }
     if ($manifest.version -eq $Version) { Pass 'Release manifest version matches package' } else { Block ('Release manifest version mismatch: ' + $manifest.version) }
+    if ($manifest.target -eq $Target) { Pass ('Release manifest target: ' + $Target) } else { Block ('Release manifest target mismatch: ' + $manifest.target) }
+    if ($manifest.architecture -eq $TargetConfig.Architecture) { Pass ('Release architecture: ' + $TargetConfig.Architecture) } else { Block ('Release architecture mismatch: ' + $manifest.architecture) }
     if ($manifest.artifact -eq (Split-Path $Setup -Leaf)) { Pass 'Release manifest artifact name matches Setup' } else { Block ('Release manifest artifact mismatch: ' + $manifest.artifact) }
     if ($manifest.schemaVersion -eq 2) {
         Pass 'Release manifest update schema v2'
@@ -92,7 +97,6 @@ if (Require-File $sumPath 'SHA256SUMS.txt') {
     if ($sum.StartsWith($setupHash + '  ')) { Pass 'SHA256SUMS matches Setup' } else { Block 'SHA256SUMS does not match Setup' }
 }
 
-Warn ('Current release target is Windows x64 only; ARM64 is not built for ' + $Version)
 Warn 'Automatic execution remains gated on an immutable GitHub Release plus valid pinned-publisher Authenticode; manual installer upgrades remain supported'
 Write-Output '------------------------------------'
 Write-Output ('BLOCKERS=' + $blockers.Count)

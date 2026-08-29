@@ -5,9 +5,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version) }
 $ReleaseRoot = Split-Path ([IO.Path]::GetFullPath($SetupPath)) -Parent
-$StageRoot = Join-Path $ProjectRoot 'runtime\release-stage\DesktopMCP'
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $inventory = Join-Path $StageRoot 'licenses\production-node-packages.csv'
 if (-not (Test-Path -LiteralPath $SetupPath)) { throw 'Setup artifact is missing.' }
 if (-not (Test-Path -LiteralPath $inventory)) { throw 'License inventory is missing.' }
@@ -16,14 +18,16 @@ $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupPath).Hash.ToLowerInva
 $signature = Get-AuthenticodeSignature -LiteralPath $SetupPath
 $rows = @(Import-Csv -LiteralPath $inventory)
 $unknown = @($rows | Where-Object { $_.license -eq 'UNKNOWN' }).Count
-$nodeExe = Join-Path $StageRoot 'node\node.exe'
-$nodeVersion = if (Test-Path -LiteralPath $nodeExe) { ((& $nodeExe --version) | Out-String).Trim().TrimStart('v') } else { 'unknown' }
+$targetInfoPath = Join-Path $StageRoot 'release-target.json'
+$targetInfo = if (Test-Path -LiteralPath $targetInfoPath) { Get-Content -LiteralPath $targetInfoPath -Raw | ConvertFrom-Json } else { $null }
+$nodeVersion = if ($targetInfo -and $targetInfo.nodeVersion) { [string]$targetInfo.nodeVersion } else { [string]$TargetConfig.NodeVersion }
 $manifest = [ordered]@{
     schemaVersion = 2
     product = 'DeskMCP'
     version = $Version
     channel = 'stable'
     target = $Target
+    architecture = $TargetConfig.Architecture
     artifact = $artifact.Name
     sizeBytes = [int64]$artifact.Length
     sha256 = $sha
@@ -44,8 +48,9 @@ $manifest = [ordered]@{
     }
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')
 }
-$manifestPath = Join-Path $ReleaseRoot 'release-manifest.json'
-$sumPath = Join-Path $ReleaseRoot 'SHA256SUMS.txt'
+$metadataSuffix = if ($Target -eq 'win-x64') { '' } else { '-' + $Target }
+$manifestPath = Join-Path $ReleaseRoot ('release-manifest' + $metadataSuffix + '.json')
+$sumPath = Join-Path $ReleaseRoot ('SHA256SUMS' + $metadataSuffix + '.txt')
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 [IO.File]::WriteAllText($sumPath, ($sha + '  ' + $artifact.Name + [Environment]::NewLine), [Text.Encoding]::ASCII)
 Write-Output ('RELEASE_MANIFEST=' + $manifestPath)

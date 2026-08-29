@@ -1,12 +1,14 @@
-param([switch]$SkipStage)
+param([switch]$SkipStage,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
 $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
-$StageRoot = Join-Path $RuntimeRoot 'release-stage\DesktopMCP'
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $InstallerRoot = Join-Path $ProjectRoot 'installer'
-$BuildRoot = Join-Path $RuntimeRoot 'installer'
+$BuildRoot = Join-Path $RuntimeRoot ('installer\' + $Target)
 $ReleaseRoot = Join-Path $RuntimeRoot 'release'
-$SmokeRoot = Join-Path $RuntimeRoot 'install-smoke\DesktopMCP'
+$SmokeRoot = Join-Path $RuntimeRoot ('install-smoke\' + $Target + '\DesktopMCP')
 $InstallerSource = Join-Path $InstallerRoot 'DeskMCPInstaller.cs'
 $UninstallerSource = Join-Path $InstallerRoot 'DeskMCPUninstaller.cs'
 $UninstallerExe = Join-Path $BuildRoot 'DeskMCPUninstaller.exe'
@@ -14,6 +16,8 @@ $PayloadZip = Join-Path $BuildRoot 'DesktopMCP-payload.zip'
 $PayloadHashFile = Join-Path $BuildRoot 'DesktopMCP-payload.sha256'
 $BrandIcon = Join-Path $ProjectRoot 'assets\brand\DeskMCP.ico'
 $PackageVersion = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
+$expectedHostArch = if ($Target -eq 'win-arm64') { 'ARM64' } else { 'AMD64' }
+if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Installer smoke for ' + $Target + ' requires native host architecture ' + $expectedHostArch + '.') }
 
 function Require([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -48,9 +52,9 @@ Require (Test-Path -LiteralPath $BrandIcon) 'DeskMCP brand icon is missing.'
 
 if (-not $SkipStage) {
     Write-Output 'STEP=release-stage-build'
-    & (Join-Path $PSScriptRoot 'build-release-stage.ps1')
+    & (Join-Path $PSScriptRoot 'build-release-stage.ps1') -Target $Target
     Write-Output 'STEP=release-stage-smoke'
-    & (Join-Path $PSScriptRoot 'test-release-stage.ps1')
+    & (Join-Path $PSScriptRoot 'test-release-stage.ps1') -Target $Target
 } else {
     Write-Output 'STEP=release-stage-skip'
     Require (Test-Path -LiteralPath $StageRoot) 'Release stage is missing.'
@@ -65,7 +69,7 @@ Require ([bool]$csc) 'Windows .NET Framework C# compiler was not found.'
 
 Write-Output 'STEP=compile-uninstaller'
 Invoke-Native $csc @(
-    '/nologo', '/target:winexe', '/platform:x64', '/optimize+',
+    '/nologo', '/target:winexe', ('/platform:' + $TargetConfig.CscPlatform), '/optimize+',
     ('/win32icon:' + $BrandIcon), ('/out:' + $UninstallerExe), '/reference:System.Windows.Forms.dll',
     $UninstallerSource
 )
@@ -86,11 +90,11 @@ $versionMatch = [regex]::Match($installerText, 'public const string Version = "(
 Require $versionMatch.Success 'Could not read installer version from source.'
 $version = $versionMatch.Groups[1].Value
 Require ($version -eq $PackageVersion) "Installer version $version does not match package version $PackageVersion."
-$SetupExe = Join-Path $ReleaseRoot ("DeskMCP-Setup-$version.exe")
+$SetupExe = Join-Path $ReleaseRoot (Get-DeskMcpSetupName $version $TargetConfig)
 
 Write-Output 'STEP=compile-setup'
 Invoke-Native $csc @(
-    '/nologo', '/target:winexe', '/platform:x64', '/optimize+',
+    '/nologo', '/target:winexe', ('/platform:' + $TargetConfig.CscPlatform), '/optimize+',
     ('/win32icon:' + $BrandIcon), ('/out:' + $SetupExe), '/reference:System.Windows.Forms.dll',
     '/reference:System.Drawing.dll', '/reference:System.IO.Compression.dll',
     '/reference:System.IO.Compression.FileSystem.dll',
@@ -184,9 +188,10 @@ $setupItem = Get-Item -LiteralPath $SetupExe
 $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupExe).Hash.ToLowerInvariant()
 $payloadItem = Get-Item -LiteralPath $PayloadZip
 Write-Output 'STEP=release-metadata'
-& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $SetupExe -Version $version -Target 'win-x64'
+& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $SetupExe -Version $version -Target $Target
 Write-Output 'INSTALLER_BUILD_OK'
 Write-Output ('VERSION=' + $version)
+Write-Output ('TARGET=' + $Target)
 Write-Output ('PAYLOAD_MB=' + [math]::Round($payloadItem.Length / 1MB, 1))
 Write-Output ('PAYLOAD_SHA256=' + $payloadHash)
 Write-Output ('SETUP=' + $SetupExe)

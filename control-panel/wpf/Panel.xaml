@@ -349,6 +349,16 @@
                   </Grid>
                 </StackPanel>
               </Border>
+              <Border x:Name="UpdateCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock x:Name="UpdateLabel" Text="Updates" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="UpdateStatus" Text="Not checked" Foreground="#8E8E93" FontSize="10" Margin="0,2,10,0" TextWrapping="Wrap" MaxWidth="240"/>
+                  </StackPanel>
+                  <Button Grid.Column="1" x:Name="UpdateButton" Style="{StaticResource MiniButton}" Content="Check" Padding="12,7"/>
+                </Grid>
+              </Border>
               <Grid Margin="0,0,0,4">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <Button Grid.Column="0" x:Name="FolderButton" Style="{StaticResource MiniButton}" Content="Open Folder"/>

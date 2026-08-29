@@ -8,12 +8,21 @@ const gatewayRoot = path.join(stageRoot, 'gateway');
 const sourceLicenses = path.join(projectRoot, 'licenses');
 const stageLicenses = path.join(stageRoot, 'licenses');
 const releaseVersion = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).version;
-const nodeVersion = process.version.replace(/^v/, '');
+const target = process.argv[4] ?? 'win-x64';
+const nodeVersion = process.argv[5] ?? process.version.replace(/^v/, '');
+const isMac = target === 'darwin-arm64';
+const sharpPackage = isMac ? 'sharp-darwin-arm64' : target === 'win-arm64' ? 'sharp-win32-arm64' : 'sharp-win32-x64';
+const architectureLabel = isMac ? 'macOS ARM64' : target === 'win-arm64' ? 'Windows ARM64' : 'Windows x64';
+const runtimeNotice = isMac ? '' : `- **.NET 10 ${architectureLabel} self-contained runtime** — the release carries \`licenses/dotnet/LICENSE.txt\` and \`licenses/dotnet/ThirdPartyNotices.txt\` copied from the exact SDK used to publish the desktop application.\n`;
 fs.mkdirSync(sourceLicenses, { recursive: true });
 fs.mkdirSync(stageLicenses, { recursive: true });
 
-const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe';
-const npm = spawnSync(comspec, ['/d', '/s', '/c', 'npm.cmd ls --omit=dev --all --json --long'], {
+const isWindows = process.platform === 'win32';
+const npmCommand = isWindows ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'npm';
+const npmArgs = isWindows
+  ? ['/d', '/s', '/c', 'npm.cmd ls --omit=dev --all --json --long']
+  : ['ls', '--omit=dev', '--all', '--json', '--long'];
+const npm = spawnSync(npmCommand, npmArgs, {
   cwd: gatewayRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024
 });
 if (!npm.stdout?.trim()) throw new Error(`npm ls failed: ${npm.error?.message ?? npm.stderr ?? 'no output'}`);
@@ -64,13 +73,12 @@ for (const row of rows) {
   ].map(csvCell).join(','));
 }
 const csvText = `${csvLines.join('\r\n')}\r\n`;
-fs.writeFileSync(path.join(sourceLicenses, 'production-node-packages.csv'), csvText);
+if (target === 'win-x64') fs.writeFileSync(path.join(sourceLicenses, 'production-node-packages.csv'), csvText);
 fs.writeFileSync(path.join(stageLicenses, 'production-node-packages.csv'), csvText);
 
 const buffersMit = `MIT License\n\nCopyright (c) 2015 James Halliday\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the "Software"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is furnished\nto do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n`;
-for (const dir of [sourceLicenses, stageLicenses]) {
-  fs.writeFileSync(path.join(dir, 'buffers-0.1.1-MIT.txt'), buffersMit);
-}
+if (target === 'win-x64') fs.writeFileSync(path.join(sourceLicenses, 'buffers-0.1.1-MIT.txt'), buffersMit);
+fs.writeFileSync(path.join(stageLicenses, 'buffers-0.1.1-MIT.txt'), buffersMit);
 
 const unresolved = rows.filter(row => row.license === 'UNKNOWN');
 if (unresolved.length) {
@@ -86,14 +94,14 @@ const specialLines = special.map(row =>
 ).join('\n') || '- None.';
 
 const notices = `# Third-Party Notices\n\n` +
-`This notice is generated from the actual Windows x64 release stage for DeskMCP ${releaseVersion}. ` +
+`This notice is generated from the actual ${architectureLabel} release stage for DeskMCP ${releaseVersion}. ` +
 `DeskMCP itself is licensed under Apache License 2.0; see the repository root \`LICENSE\`. Third-party components retain the licenses documented below.\n\n` +
 `## Bundled runtimes and major components\n\n` +
 `- **Node.js ${nodeVersion}** — distributed with its upstream \`node/LICENSE\`, which includes Node.js and bundled third-party notices.\n` +
-`- **.NET 10 Windows self-contained runtime** — the release carries \`licenses/dotnet/LICENSE.txt\` and \`licenses/dotnet/ThirdPartyNotices.txt\` copied from the exact project-local SDK used to publish the WPF application.\n` +
+runtimeNotice +
 `- **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream \`LICENSE\`, \`NOTICE\`, third-party licenses text, and SPDX document remain under \`tunnel-client/v0.0.13/bin/\`.\n` +
 `- **Desktop Commander MCP 0.2.47** — MIT. Its package-local license remains in the bundled production \`node_modules\`.\n` +
-`- **sharp win32-x64 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.\n\n` +
+`- **${sharpPackage} 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.\n\n` +
 `## Manual license resolution\n\n` +
 `### buffers 0.1.1\n\n` +
 `The npm package metadata does not declare a license and the published tarball contains no LICENSE file. ` +
@@ -102,13 +110,13 @@ const notices = `# Third-Party Notices\n\n` +
 `Evidence:\n- https://www.npmjs.com/package/buffers\n- https://sources.debian.org/copyright/license/node-buffers/0.1.1-2/\n- https://github.com/substack/node-buffers/commit/1b745ee35d33eb166e15ef1866073a07c6d7de87\n\n` +
 `## Production Node package inventory\n\n` +
 `The complete machine-generated inventory is \`licenses/production-node-packages.csv\`. ` +
-`It records package name, version, resolved license expression, package-local license files, and its path inside the Windows release stage.\n\n` +
+`It records package name, version, resolved license expression, package-local license files, and its path inside the target release stage.\n\n` +
 `Package/license counts for this stage:\n${countLines}\n\n` +
 `For \`jszip\` and \`pizzip\`, this distribution elects the MIT option expressly offered by their dual-license files.\n\n` +
 `License expressions requiring special attention or explicit choice:\n${specialLines}\n\n` +
 `## Preservation rule\n\n` +
-`Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, .NET notices, or tunnel-client notice/SPDX files when optimizing the installer payload.\n`;
-fs.writeFileSync(path.join(projectRoot, 'THIRD_PARTY_NOTICES.md'), notices);
+`Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, or tunnel-client notice/SPDX files when optimizing a release payload.\n`;
+if (target === 'win-x64') fs.writeFileSync(path.join(projectRoot, 'THIRD_PARTY_NOTICES.md'), notices);
 fs.writeFileSync(path.join(stageLicenses, 'THIRD_PARTY_NOTICES.md'), notices);
 fs.writeFileSync(path.join(stageRoot, 'THIRD_PARTY_NOTICES.md'), notices);
 console.log(`THIRD_PARTY_PACKAGES=${rows.length}`);

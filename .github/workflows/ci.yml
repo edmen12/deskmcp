@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   windows:
-    name: Windows build and tests
+    name: Windows x64 build and tests
     runs-on: windows-latest
     timeout-minutes: 20
 
@@ -24,6 +24,7 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v6
         with:
@@ -46,3 +47,72 @@ jobs:
       - name: Secret hygiene
         shell: powershell
         run: .\scripts\scan-release-secrets.ps1
+
+  windows-arm64:
+    name: Windows ARM64 release validation
+    runs-on: windows-11-arm
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Gateway tests
+        run: npm test
+
+      - name: Build and smoke ARM64 installer
+        shell: powershell
+        run: .\scripts\build-installer.ps1 -Target win-arm64
+
+      - name: ARM64 release readiness
+        shell: powershell
+        run: .\scripts\check-release-readiness.ps1 -Target win-arm64
+
+      - name: Secret hygiene
+        shell: powershell
+        run: .\scripts\scan-release-secrets.ps1
+
+  macos-arm64-core:
+    name: macOS ARM64 core validation
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify native runner
+        shell: bash
+        run: |
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Gateway and Desktop Commander tests
+        run: npm test
+
+      - name: Build native macOS release stage
+        shell: bash
+        run: bash scripts/build-macos-stage.sh

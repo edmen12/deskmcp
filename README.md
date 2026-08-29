@@ -161,9 +161,10 @@ Get-FileHash .\runtime\release\DeskMCP-Setup-<version>.exe -Algorithm SHA256
 Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 ## Current limitations
 
-- Windows x64 only; ARM64 is not packaged yet.
-- The safe-update trust contract is defined and tested, but updater UI/download execution is not enabled yet. Automatic execution remains gated on an immutable release plus valid pinned-publisher Authenticode; manual installer upgrades remain available.
-- The open-source Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until Authenticode signing is added.
+- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging is implemented on `main` and is being validated before a public ARM64 release.
+- A native macOS ARM64 menu-bar client and release stage are implemented on `main`, but current macOS artifacts are ad-hoc-signed test bundles only. Public macOS distribution still requires Developer ID signing and notarization.
+- Settings can perform a user-initiated GitHub Release update check. Automatic installer execution remains gated on an immutable release plus valid pinned-publisher Authenticode; manual installer upgrades remain available.
+- The open-source Windows Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until a release signing identity is configured.
 - Some transitive npm dependencies emit deprecation warnings even though the current production `npm audit` reports zero vulnerabilities.
 
 ## Roadmap
@@ -171,10 +172,10 @@ Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 
 - [Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5)
-- [Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6)
-- [Windows ARM64 packaging](https://github.com/edmen12/deskmcp/issues/7)
-- ✅ [Safe update mechanism design](https://github.com/edmen12/deskmcp/issues/8) — trust contract, manifest gates, rollback, and interrupted-install recovery implemented; updater UI remains signing-gated
-- ✅ [Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
+- 🚧 **#6 — macOS native client and packaging** — SwiftUI menu bar, Keychain, Login Item, Darwin ARM64 runtime stage; Developer ID signing/notarization and native CI closure remain
+- 🚧 [#7 — Windows ARM64 packaging](https://github.com/edmen12/deskmcp/issues/7) — target-aware runtime/installer pipeline and native ARM64 CI validation
+- 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — trust contract, schema-v2 manifest gates, rollback/recovery, architecture-aware checker UI; automatic execution remains Authenticode/publisher-pin gated
+- ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
 
 ## Support
 

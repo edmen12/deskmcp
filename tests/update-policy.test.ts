@@ -92,12 +92,29 @@ test('unsupported channel is rejected', () => {
   assert.deepEqual(decision.reasons, ['unsupported-channel']);
 });
 
-test('unsupported target stays manual-only', () => {
+test('release target must match the installed architecture', () => {
   const decision = evaluateUpdateMetadata(
-    '0.9.1', release(), manifest({ target: 'win-arm64' })
+    '0.9.1', release(), manifest({ target: 'win-arm64' }), 'win-x64'
   );
   assert.equal(decision.kind, 'manual-only');
-  assert.deepEqual(decision.reasons, ['unsupported-target']);
+  assert.deepEqual(decision.reasons, ['target-mismatch']);
+});
+
+test('Windows ARM64 accepts a matching ARM64 release asset', () => {
+  const armManifest = manifest({
+    target: 'win-arm64',
+    artifact: 'DeskMCP-Setup-0.9.2-win-arm64.exe'
+  });
+  const armRelease = release({
+    asset: {
+      name: 'DeskMCP-Setup-0.9.2-win-arm64.exe',
+      size: 123456,
+      digest: `sha256:${SHA}`
+    }
+  });
+  const decision = evaluateUpdateMetadata('0.9.1', armRelease, armManifest, 'win-arm64');
+  assert.equal(decision.kind, 'verified-download-allowed');
+  assert.deepEqual(decision.reasons, []);
 });
 test('automatic execution requires local Authenticode and pinned publisher trust', () => {
   const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());

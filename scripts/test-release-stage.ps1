@@ -1,6 +1,12 @@
+param([ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$StageRoot = Join-Path $ProjectRoot 'runtime\release-stage\DesktopMCP'
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
+$hostArch = [string]$env:PROCESSOR_ARCHITECTURE
+if ($Target -eq 'win-arm64' -and $hostArch -ne 'ARM64') { throw 'ARM64 runtime smoke requires a native Windows ARM64 runner.' }
+if ($Target -eq 'win-x64' -and $hostArch -ne 'AMD64') { throw 'x64 runtime smoke requires a native Windows x64 runner.' }
 $Version = (Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version
 $PanelExe = Join-Path $StageRoot 'DeskMCP.exe'
 $NodeExe = Join-Path $StageRoot 'node\node.exe'
@@ -51,6 +57,7 @@ try {
     $after = (Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $PanelExe }).Count
     if ($second.ExitCode -ne 0 -or $before -ne 1 -or $after -ne 1) { throw 'Single-instance validation failed.' }
     Write-Output 'RELEASE_SMOKE_RUNTIME_OK'
+    Write-Output ('TARGET=' + $Target)
     Write-Output ('PROFILE=' + $health.policy.profile)
     Write-Output ('VERSION=' + $health.version)
     Write-Output ('STAGE_NODE_COUNT=' + $stageNodes.Count)

@@ -24,7 +24,7 @@ export interface UpdateManifest {
 export interface ReleaseAssetMetadata {
   readonly name: string;
   readonly size: number;
-  readonly digest?: string;
+  readonly digest?: string | undefined;
 }
 export interface ReleaseMetadata {
   readonly immutable: boolean;
@@ -69,7 +69,7 @@ function parseVersion(value: string): readonly [number, number, number] | null {
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
-function compareVersions(left: string, right: string): number | null {
+export function compareVersions(left: string, right: string): number | null {
   const a = parseVersion(left);
   const b = parseVersion(right);
   if (!a || !b) return null;
@@ -96,7 +96,8 @@ function requiredPolicyIsPresent(policy: UpdateManifestPolicy): boolean {
 export function evaluateUpdateMetadata(
   currentVersion: string,
   release: ReleaseMetadata,
-  manifest: UpdateManifest
+  manifest: UpdateManifest,
+  installedTarget = 'win-x64'
 ): UpdateMetadataDecision {
   const reasons: string[] = [];
   const comparison = compareVersions(manifest.version, currentVersion);
@@ -104,7 +105,7 @@ export function evaluateUpdateMetadata(
   if (release.draft || release.prerelease) return { kind: 'reject', reasons: ['non-stable-release'] };
   if (manifest.product !== 'DeskMCP') return { kind: 'reject', reasons: ['wrong-product'] };
   if (manifest.channel !== 'stable') return { kind: 'reject', reasons: ['unsupported-channel'] };
-  if (manifest.target !== 'win-x64') return { kind: 'manual-only', version: manifest.version, reasons: ['unsupported-target'] };
+  if (manifest.target !== installedTarget) return { kind: 'manual-only', version: manifest.version, reasons: ['target-mismatch'] };
   if (release.tagName !== `v${manifest.version}`) return { kind: 'reject', reasons: ['tag-version-mismatch'] };
   if (release.asset.name !== manifest.artifact) return { kind: 'reject', reasons: ['artifact-name-mismatch'] };
   if (release.asset.size !== manifest.sizeBytes) return { kind: 'reject', reasons: ['artifact-size-mismatch'] };

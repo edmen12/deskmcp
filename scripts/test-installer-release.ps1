@@ -1,8 +1,13 @@
+param([ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
-$Setup = Join-Path $ProjectRoot ("runtime\release\DeskMCP-Setup-$Version.exe")
-$SmokeRoot = Join-Path $ProjectRoot 'runtime\install-smoke\DesktopMCP'
+$Setup = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
+$SmokeRoot = Join-Path $ProjectRoot ('runtime\install-smoke\' + $Target + '\DesktopMCP')
+$expectedHostArch = if ($Target -eq 'win-arm64') { 'ARM64' } else { 'AMD64' }
+if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Installer release test for ' + $Target + ' requires native host architecture ' + $expectedHostArch + '.') }
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 function Wait-Gone([string]$Path){ for($i=0;$i -lt 25;$i++){ if(-not(Test-Path -LiteralPath $Path)){ return }; Start-Sleep -Seconds 1 }; throw "Path remained: $Path" }
 Require (Test-Path -LiteralPath $Setup) 'Setup is missing.'
@@ -70,6 +75,7 @@ Require ($left.Count -eq 0) "Installed node cleanup left=$($left.Count)"
 try{ Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null; throw 'Gateway remained online.' }catch{ if($_.Exception.Message -like 'Gateway remained*'){ throw } }
 $setupHash=(Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash.ToLowerInvariant()
 Write-Output 'INSTALLER_RELEASE_TEST_OK'
+Write-Output ('TARGET='+$Target)
 Write-Output ('SETUP_SHA256='+$setupHash)
 Write-Output ('INSTALL_EXIT='+$p.ExitCode)
 Write-Output ('UPGRADE_EXIT='+$u.ExitCode)
