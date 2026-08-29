@@ -2,7 +2,8 @@ param([switch]$RequireSigned)
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $StageRoot = Join-Path $ProjectRoot 'runtime\release-stage\DesktopMCP'
-$Setup = Join-Path $ProjectRoot 'runtime\release\DeskMCP-Setup-0.9.0.exe'
+$Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
+$Setup = Join-Path $ProjectRoot ("runtime\release\DeskMCP-Setup-$Version.exe")
 $blockers = [Collections.Generic.List[string]]::new()
 $warnings = [Collections.Generic.List[string]]::new()
 
@@ -24,7 +25,7 @@ if (Test-Path -LiteralPath $projectLicense) {
     else { Block 'Root LICENSE is not the expected Apache License 2.0 text' }
 } else { Block 'Apache-2.0 LICENSE is missing' }
 
-foreach ($doc in @('README.md','SECURITY.md','CONTRIBUTING.md','THIRD_PARTY_NOTICES.md','RELEASE_CHECKLIST.md','CHANGELOG.md','RELEASE_NOTES_0.9.0.md','LICENSE_OPTIONS.md')) {
+foreach ($doc in @('README.md','SECURITY.md','CONTRIBUTING.md','SUPPORT.md','THIRD_PARTY_NOTICES.md','RELEASE_CHECKLIST.md','CHANGELOG.md',('RELEASE_NOTES_' + $Version + '.md'),'LICENSE_OPTIONS.md')) {
     [void](Require-File (Join-Path $ProjectRoot $doc) $doc)
 }
 $secretScan = Join-Path $PSScriptRoot 'scan-release-secrets.ps1'
@@ -74,13 +75,15 @@ $sumPath = Join-Path $ProjectRoot 'runtime\release\SHA256SUMS.txt'
 if (Require-File $manifestPath 'Release manifest') {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.sha256 -eq $setupHash) { Pass 'Release manifest SHA256 matches Setup' } else { Block 'Release manifest SHA256 does not match Setup' }
+    if ($manifest.version -eq $Version) { Pass 'Release manifest version matches package' } else { Block ('Release manifest version mismatch: ' + $manifest.version) }
+    if ($manifest.artifact -eq (Split-Path $Setup -Leaf)) { Pass 'Release manifest artifact name matches Setup' } else { Block ('Release manifest artifact mismatch: ' + $manifest.artifact) }
 }
 if (Require-File $sumPath 'SHA256SUMS.txt') {
     $sum = (Get-Content -LiteralPath $sumPath -Raw).Trim()
     if ($sum.StartsWith($setupHash + '  ')) { Pass 'SHA256SUMS matches Setup' } else { Block 'SHA256SUMS does not match Setup' }
 }
 
-Warn 'Current release target is Windows x64 only; ARM64 is not built in 0.9.0'
+Warn ('Current release target is Windows x64 only; ARM64 is not built for ' + $Version)
 Warn 'Automatic updater is not implemented; publish updates as explicit new installers'
 Write-Output '------------------------------------'
 Write-Output ('BLOCKERS=' + $blockers.Count)

@@ -44,7 +44,9 @@ function safeSearchFilePattern(filePattern: string | undefined, allowSensitivePa
   if (allowSensitivePaths) return filePattern;
   const pieces = filePattern?.split('|').map(value => value.trim()).filter(Boolean) ?? [];
   return [...pieces, ...SENSITIVE_SEARCH_EXCLUDE_GLOBS].join('|');
-}function parseSessionId(text: string): string | null {
+}
+
+function parseSessionId(text: string): string | null {
   const match = text.match(/Started .* session: ([^\r\n]+)/);
   return match?.[1]?.trim() ?? null;
 }
@@ -71,7 +73,9 @@ function parseEntries(text: string): DesktopSearchEntry[] {
     if (file?.[1]) entries.push({ type: 'file', file: file[1] });
   }
   return entries;
-}function dedupe(entries: readonly DesktopSearchEntry[]): DesktopSearchEntry[] {
+}
+
+function dedupe(entries: readonly DesktopSearchEntry[]): DesktopSearchEntry[] {
   const seen = new Set<string>();
   const output: DesktopSearchEntry[] = [];
   for (const entry of entries) {
@@ -108,7 +112,9 @@ export class SafeSearchRunner {
       if (output.length >= maxResults) break;
     }
     return output;
-  }  async run(options: SafeSearchOptions): Promise<DesktopCommanderToolResult> {
+  }
+
+  async run(options: SafeSearchOptions): Promise<DesktopCommanderToolResult> {
     const prefilteredFilePattern = safeSearchFilePattern(
       options.filePattern,
       this.policy.allowSensitivePaths

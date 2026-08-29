@@ -13,6 +13,7 @@ $UninstallerExe = Join-Path $BuildRoot 'DeskMCPUninstaller.exe'
 $PayloadZip = Join-Path $BuildRoot 'DesktopMCP-payload.zip'
 $PayloadHashFile = Join-Path $BuildRoot 'DesktopMCP-payload.sha256'
 $BrandIcon = Join-Path $ProjectRoot 'assets\brand\DeskMCP.ico'
+$PackageVersion = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
 
 function Require([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -84,6 +85,7 @@ $installerText = Get-Content -LiteralPath $InstallerSource -Raw
 $versionMatch = [regex]::Match($installerText, 'public const string Version = "([^"]+)"')
 Require $versionMatch.Success 'Could not read installer version from source.'
 $version = $versionMatch.Groups[1].Value
+Require ($version -eq $PackageVersion) "Installer version $version does not match package version $PackageVersion."
 $SetupExe = Join-Path $ReleaseRoot ("DeskMCP-Setup-$version.exe")
 
 Write-Output 'STEP=compile-setup'
@@ -122,8 +124,6 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'LICENSE')) 'Installed Apa
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'THIRD_PARTY_NOTICES.md')) 'Installed third-party notices are missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-packages.csv')) 'Installed production license inventory is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET third-party notices are missing.'
-Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'THIRD_PARTY_NOTICES.md')) 'Installed third-party notices are missing.'
-Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-packages.csv')) 'Installed Node license inventory is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) 'Installed .NET license is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET notices are missing.'
 
@@ -149,7 +149,7 @@ for ($i = 0; $i -lt 90; $i++) {
 }
 Require ($null -ne $health) 'Installed Gateway did not become healthy within 45 seconds.'
 Require ($health.policy.profile -eq 'read-only') "Unexpected installed profile: $($health.policy.profile)"
-Require ($health.version -eq '0.9.0') "Unexpected installed Gateway version: $($health.version)"
+Require ($health.version -eq $version) "Unexpected installed Gateway version: $($health.version); expected $version"
 
 Write-Output 'STEP=installer-smoke-uninstall'
 $installedUninstaller = Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'

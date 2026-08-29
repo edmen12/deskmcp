@@ -27,7 +27,7 @@ const searchSensitivePath = path.join(TEST_AREA, '.env.search-e2e');
 
 function makeClient(version: string): Client {
   return new Client(
-    { name: 'desktop-mcp-bridge-test', version },
+    { name: 'deskmcp-bridge-test', version },
     { versionNegotiation: { mode: 'auto' } }
   );
 }

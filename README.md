@@ -40,7 +40,7 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
   <img src="docs/images/quick-start.svg" alt="DeskMCP Quick Start" width="100%" />
 </p>
 
-1. Download `DeskMCP-Setup-0.9.0.exe` from the [latest GitHub Release](https://github.com/edmen12/deskmcp/releases/latest) and run it.
+1. Download `DeskMCP-Setup-<version>.exe` from the [latest GitHub Release](https://github.com/edmen12/deskmcp/releases/latest) and run it.
 2. Choose the workspace DeskMCP may access.
 3. In OpenAI Platform, create a Tunnel and copy its **Tunnel ID** and **Runtime API Key** into First Run.
 4. In ChatGPT open **Plugins → New plugin**.
@@ -155,13 +155,13 @@ Generated artifacts live under ignored `runtime\release\` and should be attached
 A completed release build writes `SHA256SUMS.txt` and `release-manifest.json` beside the final installer.
 
 ```powershell
-Get-FileHash .\runtime\release\DeskMCP-Setup-0.9.0.exe -Algorithm SHA256
+Get-FileHash .\runtime\release\DeskMCP-Setup-<version>.exe -Algorithm SHA256
 ```
 
 Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 ## Current limitations
 
-- Windows x64 only; ARM64 is not packaged in 0.9.0.
+- Windows x64 only; ARM64 is not packaged yet.
 - No automatic updater yet.
 - The open-source Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until Authenticode signing is added.
 - Some transitive npm dependencies emit deprecation warnings even though the current production `npm audit` reports zero vulnerabilities.

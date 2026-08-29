@@ -1,4 +1,4 @@
-# DeskMCP 0.9.0 Release Checklist
+# DeskMCP Release Checklist
 
 This file separates hard public-release blockers from documented limitations.
 Run `scripts\check-release-readiness.ps1` before publishing an installer.
@@ -40,7 +40,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 - [ ] **sharp/libvips redistribution reviewed.**
   - Preserve `@img/sharp-win32-x64` package LICENSE and README; the package declares `Apache-2.0 AND LGPL-3.0-or-later` and bundles native libraries.
-  - This is a release review warning, not an automatic 0.9.0 build blocker in the machine gate.
+  - This is a release review warning, not an automatic build blocker in the machine gate.
 
 ## Manual clean-user QA still required
 
@@ -49,7 +49,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [ ] Complete First Run from the installed build and confirm ChatGPT scans exactly 13 tools.
 - [ ] Verify normal uninstall keeps DeskMCP user data; separately verify explicit purge removes DeskMCP AppData only.
 
-## Documented limitations — not blockers for a 0.9.0 win-x64 release
+## Documented limitations — not blockers for the current win-x64 release
 
 - [ ] ARM64 build is not provided. Label the release **Windows x64**.
 - [ ] Automatic updater is not implemented. Publish upgrades as a new installer; add Authenticode signing when a production certificate is available.
@@ -57,10 +57,8 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 ## Current validated artifact
 
-`runtime\release\DeskMCP-Setup-0.9.0.exe`
+The release pipeline writes the current installer to:
 
-SHA-256 at the latest completed installer smoke:
+`runtime\release\DeskMCP-Setup-<version>.exe`
 
-`1c8601e9a96a2ac8de94b4479622716c72bdaeedd02a04812dda4b9f840090ab`
-
-Rebuilds intentionally change the hash; publish only the hash produced by the final release build (or the final signed build when signing is used).
+Treat the generated `SHA256SUMS.txt` and `release-manifest.json` beside that installer as the source of truth for the final release hash, version, target, and signature status. Rebuilds intentionally change the hash.

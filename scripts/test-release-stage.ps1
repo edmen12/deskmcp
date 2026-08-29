@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $StageRoot = Join-Path $ProjectRoot 'runtime\release-stage\DesktopMCP'
+$Version = (Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version
 $PanelExe = Join-Path $StageRoot 'DeskMCP.exe'
 $NodeExe = Join-Path $StageRoot 'node\node.exe'
 $GatewayRoot = Join-Path $StageRoot 'gateway'
@@ -22,6 +23,7 @@ try {
     }
     if ($null -eq $health) { throw 'Release-stage Gateway did not become healthy within 45 seconds.' }
     if ($health.policy.profile -ne 'read-only') { throw "Unexpected profile: $($health.policy.profile)" }
+    if ($health.version -ne $Version) { throw "Unexpected Gateway version: $($health.version); expected $Version" }
     $targetNode = [IO.Path]::GetFullPath($NodeExe)
     $stageNodes = @()
     foreach ($p in Get-Process -Name node -ErrorAction SilentlyContinue) {
@@ -30,7 +32,7 @@ try {
     if ($stageNodes.Count -ne 2) { throw "Expected 2 stage Node processes, found $($stageNodes.Count)." }
     @'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-const client = new Client({ name: 'release-smoke', version: '0.9.0' });
+const client = new Client({ name: 'deskmcp-release-smoke', version: '1.0.0' });
 try {
   await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8765/mcp')));
   const listed = await client.listTools();
