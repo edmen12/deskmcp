@@ -1,10 +1,10 @@
-param([ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
+param([ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64',[string]$SetupPath)
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
-$Setup = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
+$Setup = if ([string]::IsNullOrWhiteSpace($SetupPath)) { Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig) } else { [IO.Path]::GetFullPath($SetupPath) }
 $SmokeRoot = Join-Path $ProjectRoot ('runtime\install-smoke\' + $Target + '\DesktopMCP')
 $expectedHostArch = if ($Target -eq 'win-arm64') { 'ARM64' } else { 'AMD64' }
 if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Installer release test for ' + $Target + ' requires native host architecture ' + $expectedHostArch + '.') }

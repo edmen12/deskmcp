@@ -11,8 +11,11 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 ## Recommended distribution hardening
 
-- [ ] **Authenticode code signing.**
-  - Optional for the open-source release; recommended later to provide a verified Windows publisher and reduce Unknown Publisher / SmartScreen friction.
+- [ ] **SignPath Foundation OSS code signing approval.**
+  - Application preparation is documented in CODE_SIGNING_POLICY.md and PRIVACY.md.
+  - Until approval and a real signed artifact exist, releases remain unsigned/manual-only and must not claim a SignPath signature.
+- [ ] **Production publisher pin enabled only after signed-release verification.**
+  - The updater pin set stays empty until a SignPath-signed release identity is available and independently verified.
 
 ## Release engineering already closed
 
@@ -53,8 +56,8 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 ## Documented limitations — not blockers for the current win-x64 release
 
-- [ ] ARM64 build is not provided. Label the release **Windows x64**.
-- [ ] Updater UI/download execution is not implemented. The safe-update contract is complete, but automatic execution remains intentionally blocked until a production Authenticode identity is available and future releases are immutable. Manual installer upgrades remain the fallback.
+- [x] Windows ARM64 build/install/upgrade/runtime/uninstall validation passes on the native GitHub ARM64 runner; the current public v0.9.1 asset remains Windows x64 and is not mutated.
+- [x] Updater download/verify/install/post-install security-hold path is implemented and passes x64 + ARM64 self-tests. Automatic execution remains intentionally blocked until SignPath approval, a verified production publisher pin, and immutable future releases are available.
 - [ ] Upstream deprecated npm dependencies remain in Desktop Commander / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
 
 ## Current validated artifact
@@ -64,3 +67,25 @@ The release pipeline writes the current installer to:
 `runtime\release\DeskMCP-Setup-<version>.exe`
 
 Treat the generated `SHA256SUMS.txt` and `release-manifest.json` beside that installer as the source of truth for the final release hash, version, target, and signature status. Rebuilds intentionally change the hash.
+
+## SignPath Foundation OSS signing application
+
+Repository-side preparation:
+
+- [x] OSI-approved Apache-2.0 project license.
+- [x] Public released project with documented install and uninstall behavior.
+- [x] `CODE_SIGNING_POLICY.md` documents signing provider, roles, provenance and manual approval.
+- [x] `PRIVACY.md` documents local data and user-controlled network communication.
+- [x] GitHub-hosted x64 and ARM64 unsigned release-candidate workflow prepared for origin verification.
+- [x] Signed-artifact finalization script verifies Authenticode/timestamp, re-runs installer smoke, regenerates final metadata and requires signed readiness.
+
+Human/SignPath steps that must not be claimed complete before they occur:
+
+- [ ] Maintainer confirms GitHub MFA is enabled.
+- [ ] Submit the SignPath Foundation OSS application at `https://signpath.org/apply`.
+- [ ] SignPath Foundation accepts DeskMCP.
+- [ ] Install/authorize the SignPath GitHub App for `edmen12/deskmcp` as required by the approved setup.
+- [ ] Configure SignPath artifact metadata restrictions and signing policy.
+- [ ] Approve the first signing request manually and verify the returned signer certificate/timestamp.
+- [ ] Add the independently verified certificate SHA-256 to a prior trusted DeskMCP build before enabling signed updater execution.
+- [ ] Add a **Code signing policy** link to the live GitHub Release description before submitting/refreshing the SignPath application; do not change existing v0.9.1 assets.

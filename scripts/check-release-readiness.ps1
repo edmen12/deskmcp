@@ -1,11 +1,12 @@
-param([switch]$RequireSigned,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
+param([switch]$RequireSigned,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64',[string]$SetupPath)
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
-$Setup = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
+$Setup = if ([string]::IsNullOrWhiteSpace($SetupPath)) { Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig) } else { [IO.Path]::GetFullPath($SetupPath) }
+$ReleaseRoot = Split-Path $Setup -Parent
 $blockers = [Collections.Generic.List[string]]::new()
 $warnings = [Collections.Generic.List[string]]::new()
 
@@ -27,7 +28,7 @@ if (Test-Path -LiteralPath $projectLicense) {
     else { Block 'Root LICENSE is not the expected Apache License 2.0 text' }
 } else { Block 'Apache-2.0 LICENSE is missing' }
 
-foreach ($doc in @('README.md','SECURITY.md','CONTRIBUTING.md','SUPPORT.md','THIRD_PARTY_NOTICES.md','RELEASE_CHECKLIST.md','CHANGELOG.md','docs\UPDATE_SECURITY.md',('RELEASE_NOTES_' + $Version + '.md'),'LICENSE_OPTIONS.md')) {
+foreach ($doc in @('README.md','SECURITY.md','PRIVACY.md','CODE_SIGNING_POLICY.md','CONTRIBUTING.md','SUPPORT.md','THIRD_PARTY_NOTICES.md','RELEASE_CHECKLIST.md','CHANGELOG.md','docs\UPDATE_SECURITY.md','docs\SIGNPATH_APPLICATION.md',('RELEASE_NOTES_' + $Version + '.md'),'LICENSE_OPTIONS.md')) {
     [void](Require-File (Join-Path $ProjectRoot $doc) $doc)
 }
 $secretScan = Join-Path $PSScriptRoot 'scan-release-secrets.ps1'
@@ -73,8 +74,8 @@ if (Require-File $Setup ('Windows Setup ' + $Target)) {
 }
 
 $metadataSuffix = if ($Target -eq 'win-x64') { '' } else { '-' + $Target }
-$manifestPath = Join-Path $ProjectRoot ('runtime\release\release-manifest' + $metadataSuffix + '.json')
-$sumPath = Join-Path $ProjectRoot ('runtime\release\SHA256SUMS' + $metadataSuffix + '.txt')
+$manifestPath = Join-Path $ReleaseRoot ('release-manifest' + $metadataSuffix + '.json')
+$sumPath = Join-Path $ReleaseRoot ('SHA256SUMS' + $metadataSuffix + '.txt')
 if (Require-File $manifestPath 'Release manifest') {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.sha256 -eq $setupHash) { Pass 'Release manifest SHA256 matches Setup' } else { Block 'Release manifest SHA256 does not match Setup' }

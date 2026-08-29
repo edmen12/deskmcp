@@ -11,10 +11,11 @@ All notable changes to DeskMCP are documented here.
 - Added the user-controlled updater execution path: `.partial` download, local size/SHA-256 verification, WinVerifyTrust chain validation with revocation checking, compiled certificate SHA-256 publisher pins, explicit install, and fail-closed post-install version/profile verification.
 - Added installer rollback for failures after the prior install is backed up, plus recovery from interrupted `.install-*` / `.backup-*` states.
 - Upgrade Setup now preserves an existing **Start with Windows** choice instead of defaulting it back on.
+- Prepared SignPath Foundation OSS signing: public code-signing/privacy policies, GitHub-hosted unsigned release-candidate provenance workflow, and signed-artifact finalization with Authenticode/timestamp verification and post-sign readiness.
 
 ### Changed
 
-- Automatic updater execution remains disabled until a production signing identity is available; manual installer upgrades stay supported.
+- Automatic updater execution remains disabled while SignPath Foundation approval is pending and until an independently verified production signer certificate is compiled into the publisher-pin set; manual installer upgrades stay supported.
 
 ## 0.9.1 — 2026-08-29
 

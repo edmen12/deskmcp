@@ -21,3 +21,8 @@ The public MCP tool names remain unchanged. Existing 0.9.0 installations can be 
 ## Security and packaging
 
 DeskMCP remains local-first, loopback-only by default, workspace-scoped, and Read-only on first run. Full Control remains session-only. The open-source Windows installer may be unsigned; verify the SHA-256 published with the GitHub Release before running it.
+## Code signing policy
+
+The published v0.9.1 Windows asset remains unsigned and unchanged. DeskMCP is preparing an application for the SignPath Foundation open-source signing program; this does not mean v0.9.1 is SignPath-signed.
+
+See the project [Code signing policy](https://github.com/edmen12/deskmcp/blob/main/CODE_SIGNING_POLICY.md) and [Privacy Policy](https://github.com/edmen12/deskmcp/blob/main/PRIVACY.md). Pending project approval: Free code signing provided by SignPath.io, certificate by SignPath Foundation.

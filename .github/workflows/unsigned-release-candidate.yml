@@ -1,0 +1,108 @@
+name: Unsigned release candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Windows x64 unsigned candidate
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Gateway tests
+        run: npm test
+
+      - name: Build and smoke unsigned x64 installer
+        shell: powershell
+        run: .\scripts\build-installer.ps1 -Target win-x64
+
+      - name: Release readiness
+        shell: powershell
+        run: .\scripts\check-release-readiness.ps1 -Target win-x64
+
+      - name: Secret hygiene
+        shell: powershell
+        run: .\scripts\scan-release-secrets.ps1
+
+      - name: Upload unsigned x64 candidate
+        id: upload-unsigned-x64
+        uses: actions/upload-artifact@v7
+        with:
+          name: deskmcp-unsigned-win-x64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            runtime/release/DeskMCP-Setup-*.exe
+            runtime/release/release-manifest.json
+            runtime/release/SHA256SUMS.txt
+
+  windows-arm64:
+    name: Windows ARM64 unsigned candidate
+    runs-on: windows-11-arm
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Gateway tests
+        run: npm test
+
+      - name: Build and smoke unsigned ARM64 installer
+        shell: powershell
+        run: .\scripts\build-installer.ps1 -Target win-arm64
+
+      - name: Release readiness
+        shell: powershell
+        run: .\scripts\check-release-readiness.ps1 -Target win-arm64
+
+      - name: Secret hygiene
+        shell: powershell
+        run: .\scripts\scan-release-secrets.ps1
+
+      - name: Upload unsigned ARM64 candidate
+        id: upload-unsigned-arm64
+        uses: actions/upload-artifact@v7
+        with:
+          name: deskmcp-unsigned-win-arm64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            runtime/release/DeskMCP-Setup-*-win-arm64.exe
+            runtime/release/release-manifest-win-arm64.json
+            runtime/release/SHA256SUMS-win-arm64.txt

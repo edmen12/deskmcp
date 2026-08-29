@@ -60,3 +60,11 @@ Use synthetic fixtures under `test-area` for tests.
 ## Pull requests
 
 Keep changes focused, describe security-boundary changes explicitly, include tests for new policy behavior, and document any user-visible installer/onboarding change in the README.
+
+## Signing and review roles
+
+DeskMCP's current maintainer, `edmen12`, acts as committer, reviewer, and signing approver. Contributions from other people require maintainer review before merge.
+
+Code-signing requests are separate from merge and CI. Every signing request requires explicit manual approval, and only artifacts built from this public repository and its checked-in build scripts are eligible.
+
+Do not place code-signing private keys, exportable certificates, signing-service credentials, or publisher-pin overrides in the repository. See `CODE_SIGNING_POLICY.md` for the complete policy.

@@ -159,6 +159,14 @@ Get-FileHash .\runtime\release\DeskMCP-Setup-<version>.exe -Algorithm SHA256
 ```
 
 Compare the result with `SHA256SUMS.txt` before running an unsigned build.
+## Code signing policy
+
+DeskMCP is preparing an application for the SignPath Foundation open-source signing program. See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) for the signing roles, provenance rules, approval policy, and publisher-pin model.
+
+**Pending project approval:** Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). No release is represented as SignPath-signed until it carries a valid signature from the approved signing workflow.
+
+Privacy and network behavior are documented in [PRIVACY.md](PRIVACY.md).
+
 ## Current limitations
 
 - The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging and full install/upgrade/runtime/uninstall validation now pass on GitHub's Windows ARM64 runner; the first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
@@ -177,6 +185,12 @@ Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 - 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — download/verify/install/post-install security-hold path is implemented; production Authenticode credential, compiled publisher pin, immutable future release and signed end-to-end execution remain
 - ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
 
+## Support DeskMCP
+
+DeskMCP is free and open-source. If it saves you time and you would like to support ongoing maintenance, you can sponsor the project through **GitHub Sponsors** once the `edmen12` Sponsors profile is approved.
+
+Sponsorship is entirely optional and never changes access to DeskMCP, feature availability, security treatment, or support priority. The repository funding button is configured in `.github/FUNDING.yml`.
+
 ## Support
 
 Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducible bugs, feature requests, and private security reporting, see [`SUPPORT.md`](SUPPORT.md). Never post Tunnel runtime keys, API keys, or private file contents in a public issue.
@@ -185,6 +199,8 @@ Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducibl
 
 - [`SUPPORT.md`](SUPPORT.md) — support channels and reporting guidance
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting and security boundaries
+- [PRIVACY.md](PRIVACY.md) — local data and user-controlled network behavior
+- [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) — SignPath roles, build provenance, approval and publisher-pin policy
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — project changes
 - [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) — release QA
@@ -192,6 +208,7 @@ Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducibl
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — illustrated installation and usage guide
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — common setup and recovery paths
 - [`docs/UPDATE_SECURITY.md`](docs/UPDATE_SECURITY.md) — update trust model, execution gates, and rollback/recovery contract
+- [docs/SIGNPATH_APPLICATION.md](docs/SIGNPATH_APPLICATION.md) — SignPath Foundation application readiness and post-approval integration plan
 - [`docs/BRAND.md`](docs/BRAND.md) — DeskMCP visual identity and brand rules
 
 ## License

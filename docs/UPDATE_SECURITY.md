@@ -102,8 +102,8 @@ A fully compromised local Windows account is outside this updater's trust bounda
 ## Implementation phases
 
 - **Implemented on `main`:** update contract, target-aware schema-v2 manifests, metadata/execution policy tests, installer rollback/interrupted-install recovery, user-initiated release checking, `.partial` download, local size/SHA-256 verification, WinVerifyTrust chain validation, compiled certificate SHA-256 publisher pins, explicit **Install update**, and post-install version/profile security hold verification.
-- **Automatic execution is intentionally disabled in current builds:** the compiled publisher pin set is empty until a real Authenticode release identity is provisioned. Mutable, legacy, unsigned, unpinned, wrong-target, wrong-version, or mismatched artifacts remain manual-only or rejected.
-- **Before enabling signed automatic execution:** provision the protected Authenticode credential, add its certificate SHA-256 pin to a previously trusted build, enable immutable future GitHub Releases, and validate certificate-rotation overlap. Do not add a second weaker path.
+- **Automatic execution is intentionally disabled in current builds:** the compiled publisher pin set is empty while the SignPath Foundation OSS signing application is pending and until a real signed release identity is independently verified. Mutable, legacy, unsigned, unpinned, wrong-target, wrong-version, or mismatched artifacts remain manual-only or rejected.
+- **Before enabling signed automatic execution:** complete SignPath Foundation approval, verify the returned Authenticode signer and timestamp, add the verified certificate SHA-256 pin to a previously trusted build, enable immutable future GitHub Releases, and validate certificate-rotation overlap. Do not add a second weaker path.
 
 ## Official references
 
