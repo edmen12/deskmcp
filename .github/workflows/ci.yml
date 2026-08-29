@@ -39,6 +39,10 @@ jobs:
         shell: powershell
         run: dotnet build .\control-panel\wpf\DeskMCP.ControlPanel.csproj -c Release --nologo -p:ContinuousIntegrationBuild=true
 
+      - name: Installer UI build
+        shell: powershell
+        run: .\scripts\test-installer-ui.ps1
+
       - name: Secret hygiene
         shell: powershell
         run: .\scripts\scan-release-secrets.ps1

@@ -14,7 +14,14 @@ $captures = @(
     @{ Arg='--capture-settings-dark'; File=(Join-Path $runtime 'validation-settings-dark.png'); Label='SETTINGS_DARK_CAPTURE_OK' },
     @{ Arg='--capture-first-run'; File=(Join-Path $runtime 'validation-first-run-workspace.png'); Label='FIRST_RUN_WORKSPACE_OK' },
     @{ Arg='--capture-first-run-tunnel'; File=(Join-Path $runtime 'validation-first-run-tunnel.png'); Label='FIRST_RUN_TUNNEL_OK' },
-    @{ Arg='--capture-first-run-plugin'; File=(Join-Path $runtime 'validation-first-run-plugin.png'); Label='FIRST_RUN_PLUGIN_OK' }
+    @{ Arg='--capture-first-run-plugin'; File=(Join-Path $runtime 'validation-first-run-plugin.png'); Label='FIRST_RUN_PLUGIN_OK' },
+    @{ Arg='--capture-first-run-dark'; File=(Join-Path $runtime 'validation-first-run-workspace-dark.png'); Label='FIRST_RUN_WORKSPACE_DARK_OK' },
+    @{ Arg='--capture-first-run-tunnel-dark'; File=(Join-Path $runtime 'validation-first-run-tunnel-dark.png'); Label='FIRST_RUN_TUNNEL_DARK_OK' },
+    @{ Arg='--capture-first-run-plugin-dark'; File=(Join-Path $runtime 'validation-first-run-plugin-dark.png'); Label='FIRST_RUN_PLUGIN_DARK_OK' },
+    @{ Arg='--capture-tunnel-modal'; File=(Join-Path $runtime 'validation-tunnel-modal.png'); Label='TUNNEL_MODAL_OK' },
+    @{ Arg='--capture-tunnel-modal-dark'; File=(Join-Path $runtime 'validation-tunnel-modal-dark.png'); Label='TUNNEL_MODAL_DARK_OK' },
+    @{ Arg='--capture-full-modal'; File=(Join-Path $runtime 'validation-full-modal.png'); Label='FULL_MODAL_OK' },
+    @{ Arg='--capture-full-modal-dark'; File=(Join-Path $runtime 'validation-full-modal-dark.png'); Label='FULL_MODAL_DARK_OK' }
 )
 foreach ($capture in $captures) {
     Remove-Item -LiteralPath $capture.File -Force -ErrorAction SilentlyContinue

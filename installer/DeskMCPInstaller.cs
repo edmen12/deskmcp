@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.IO.Compression;
 using System.Reflection;
@@ -335,119 +336,235 @@ internal static class InstallerEngine
         try { Directory.Delete(path, true); } catch { }
     }
 }
+internal sealed class RoundedButton : Button
+{
+    public int Radius = 12;
+    public RoundedButton()
+    {
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        UseVisualStyleBackColor = false;
+        Cursor = Cursors.Hand;
+    }
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        int r = Math.Max(2, Math.Min(Radius, Math.Min(Width, Height) / 2));
+        using (GraphicsPath path = new GraphicsPath())
+        {
+            int d = r * 2;
+            path.AddArc(0, 0, d, d, 180, 90);
+            path.AddArc(Width - d - 1, 0, d, d, 270, 90);
+            path.AddArc(Width - d - 1, Height - d - 1, d, d, 0, 90);
+            path.AddArc(0, Height - d - 1, d, d, 90, 90);
+            path.CloseFigure();
+            Region = new Region(path);
+        }
+    }
+}
+
+internal sealed class BrandProgressBar : Control
+{    private int value;
+    public int Value
+    {
+        get { return value; }
+        set { this.value = Math.Max(0, Math.Min(100, value)); Invalidate(); }
+    }
+    public BrandProgressBar()
+    {
+        DoubleBuffered = true;
+        Height = 8;
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Rectangle track = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+        using (GraphicsPath trackPath = RoundedRect(track, Height / 2))
+        using (SolidBrush trackBrush = new SolidBrush(Color.FromArgb(231, 231, 236)))
+            e.Graphics.FillPath(trackBrush, trackPath);
+        int fillWidth = (int)Math.Round(track.Width * (Value / 100.0));
+        if (fillWidth < 2) return;
+        Rectangle fill = new Rectangle(0, 0, fillWidth, track.Height);
+        using (GraphicsPath fillPath = RoundedRect(fill, Height / 2))
+        using (LinearGradientBrush brush = new LinearGradientBrush(fill, Color.FromArgb(45,224,216), Color.FromArgb(37,99,235), 0f))
+            e.Graphics.FillPath(brush, fillPath);
+    }
+    private static GraphicsPath RoundedRect(Rectangle r, int radius)
+    {        GraphicsPath path = new GraphicsPath();
+        int d = Math.Max(2, radius * 2);
+        path.AddArc(r.Left, r.Top, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
+
+internal sealed class ModernCheckBox : CheckBox
+{
+    public ModernCheckBox()
+    {
+        AutoSize = false; Height = 28; BackColor = Color.White; ForeColor = Color.FromArgb(39,39,42);
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        Cursor = Cursors.Hand;
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; e.Graphics.Clear(BackColor);
+        Rectangle box = new Rectangle(0, 5, 17, 17);
+        using (GraphicsPath path = new GraphicsPath())
+        {
+            path.AddArc(box.Left,box.Top,6,6,180,90); path.AddArc(box.Right-6,box.Top,6,6,270,90);
+            path.AddArc(box.Right-6,box.Bottom-6,6,6,0,90); path.AddArc(box.Left,box.Bottom-6,6,6,90,90); path.CloseFigure();
+            using (SolidBrush fill = new SolidBrush(Checked ? Color.FromArgb(37,99,235) : Color.FromArgb(245,245,247))) e.Graphics.FillPath(fill,path);
+            using (Pen pen = new Pen(Checked ? Color.FromArgb(37,99,235) : Color.FromArgb(212,212,216))) e.Graphics.DrawPath(pen,path);
+        }
+        if (Checked) using (Pen check = new Pen(Color.White, 2f)) { check.StartCap=LineCap.Round; check.EndCap=LineCap.Round; e.Graphics.DrawLines(check,new Point[]{new Point(4,13),new Point(7,16),new Point(13,9)}); }
+        TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(27,0,Width-27,Height), ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+    }
+    protected override void OnCheckedChanged(EventArgs e) { base.OnCheckedChanged(e); Invalidate(); }
+}
+
 internal sealed class InstallerForm : Form
 {
     private readonly Label status;
-    private readonly ProgressBar progress;
-    private readonly Button installButton;
-    private readonly Button cancelButton;
-    private readonly CheckBox autoStart;
-    private readonly CheckBox launchAfter;
+    private readonly BrandProgressBar progress;
+    private readonly RoundedButton installButton;
+    private readonly RoundedButton cancelButton;
+    private readonly ModernCheckBox autoStart;
+    private readonly ModernCheckBox launchAfter;
     private readonly TextBox installPath;
     public int ExitCode { get; private set; }
 
     public InstallerForm()
     {
         Text = "DeskMCP Setup";
-        Width = 560;
-        Height = 365;
+        ClientSize = new Size(600, 390);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9F);
-        BackColor = Color.FromArgb(248, 251, 255);
+        BackColor = Color.White;
+        AutoScaleMode = AutoScaleMode.Dpi;
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-        Panel accent = new Panel();
-        accent.BackColor = Color.FromArgb(45, 224, 216);
-        accent.Location = new Point(0, 0);
-        accent.Size = new Size(560, 6);
-        Controls.Add(accent);
+        Panel hero = new Panel();
+        hero.BackColor = Color.FromArgb(17, 17, 19);
+        hero.Location = new Point(0, 0);
+        hero.Size = new Size(600, 112);
+        Controls.Add(hero);
+
         PictureBox brand = new PictureBox();
-        brand.Size = new Size(42, 42);
-        brand.Location = new Point(30, 24);
+        brand.Size = new Size(48, 48);
+        brand.Location = new Point(34, 27);
         brand.SizeMode = PictureBoxSizeMode.Zoom;
         if (Icon != null) brand.Image = Icon.ToBitmap();
-        Controls.Add(brand);
+        hero.Controls.Add(brand);
 
         Label title = new Label();
         title.Text = "DeskMCP";
-        title.ForeColor = Color.FromArgb(7, 17, 31);
-        title.Font = new Font("Segoe UI Semibold", 24F, FontStyle.Bold);
+        title.ForeColor = Color.White;
+        title.Font = new Font("Segoe UI Semibold", 23F, FontStyle.Bold);
         title.AutoSize = true;
-        title.Location = new Point(82, 22);
-        Controls.Add(title);
+        title.Location = new Point(96, 22);
+        hero.Controls.Add(title);
+
         Label subtitle = new Label();
-        subtitle.Text = "Open-source local desktop bridge for ChatGPT.";
-        subtitle.ForeColor = Color.FromArgb(68, 91, 112);
+        subtitle.Text = "Your desktop. Connected to AI.";
+        subtitle.ForeColor = Color.FromArgb(161, 161, 170);
         subtitle.AutoSize = true;
-        subtitle.Location = new Point(84, 64);
-        Controls.Add(subtitle);
+        subtitle.Location = new Point(98, 64);
+        hero.Controls.Add(subtitle);
+
+        Label version = new Label();
+        version.Text = "v" + InstallerEngine.Version;
+        version.ForeColor = Color.FromArgb(142, 142, 147);
+        version.AutoSize = true;
+        version.Location = new Point(520, 46);
+        hero.Controls.Add(version);
 
         Label pathLabel = new Label();
-        pathLabel.Text = "Install for this Windows user";
+        pathLabel.Text = "Install location";
+        pathLabel.ForeColor = Color.FromArgb(39, 39, 42);
         pathLabel.Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold);
         pathLabel.AutoSize = true;
-        pathLabel.Location = new Point(33, 111);
+        pathLabel.Location = new Point(35, 137);
         Controls.Add(pathLabel);
 
         installPath = new TextBox();
         installPath.ReadOnly = true;
         installPath.Text = InstallerEngine.DefaultInstallDir();
-        installPath.Location = new Point(36, 136);
-        installPath.Width = 478;
+        installPath.Location = new Point(38, 161);
+        installPath.Width = 524;
+        installPath.Height = 31;
+        installPath.BackColor = Color.FromArgb(245, 245, 247);
+        installPath.ForeColor = Color.FromArgb(39, 39, 42);
+        installPath.BorderStyle = BorderStyle.FixedSingle;
+        installPath.TabStop = false;
         Controls.Add(installPath);
+        Label installHint = new Label();
+        installHint.Text = "Installs for this Windows user only · no administrator access required";
+        installHint.ForeColor = Color.FromArgb(113, 113, 122);
+        installHint.AutoSize = true;
+        installHint.Location = new Point(38, 199);
+        Controls.Add(installHint);
 
-        autoStart = new CheckBox();
+        autoStart = new ModernCheckBox();
         autoStart.Text = "Start DeskMCP with Windows";
         autoStart.Checked = InstallerEngine.DefaultAutoStart();
-        autoStart.AutoSize = true;
-        autoStart.Location = new Point(36, 177);
+        autoStart.AutoSize = false;
+        autoStart.Width = 300;
+        autoStart.ForeColor = Color.FromArgb(39, 39, 42);
+        autoStart.Location = new Point(38, 228);
         Controls.Add(autoStart);
 
-        launchAfter = new CheckBox();
+        launchAfter = new ModernCheckBox();
         launchAfter.Text = "Open DeskMCP after installation";
         launchAfter.Checked = true;
-        launchAfter.AutoSize = true;
-        launchAfter.Location = new Point(36, 202);
+        launchAfter.AutoSize = false;
+        launchAfter.Width = 300;
+        launchAfter.ForeColor = Color.FromArgb(39, 39, 42);
+        launchAfter.Location = new Point(38, 254);
         Controls.Add(launchAfter);
 
-        progress = new ProgressBar();
-        progress.Location = new Point(36, 238);
-        progress.Width = 478;
-        progress.Height = 8;
-        progress.Minimum = 0;
-        progress.Maximum = 100;
+        progress = new BrandProgressBar();
+        progress.Location = new Point(38, 291);
+        progress.Width = 524;
         Controls.Add(progress);
-
         status = new Label();
-        status.Text = "Ready to install · no administrator access required";
-        status.ForeColor = Color.FromArgb(105, 105, 112);
+        status.Text = "Ready to install";
+        status.ForeColor = Color.FromArgb(113, 113, 122);
         status.AutoSize = true;
-        status.Location = new Point(36, 255);
+        status.Location = new Point(38, 310);
         Controls.Add(status);
 
-        installButton = new Button();
-        installButton.Text = "Install";
-        installButton.Width = 112;
-        installButton.Height = 34;
-        installButton.Location = new Point(402, 286);
-        installButton.BackColor = Color.FromArgb(37, 99, 235);
-        installButton.ForeColor = Color.White;
-        installButton.FlatStyle = FlatStyle.Flat;
-        installButton.FlatAppearance.BorderSize = 0;
-        installButton.Click += InstallButtonClick;
-        Controls.Add(installButton);
-        cancelButton = new Button();
+        cancelButton = new RoundedButton();
         cancelButton.Text = "Cancel";
-        cancelButton.Width = 92;
-        cancelButton.Height = 34;
-        cancelButton.Location = new Point(300, 286);
+        cancelButton.Width = 104;
+        cancelButton.Height = 40;
+        cancelButton.Location = new Point(336, 335);
+        cancelButton.BackColor = Color.FromArgb(242, 242, 244);
+        cancelButton.ForeColor = Color.FromArgb(39, 39, 42);
+        cancelButton.Font = new Font("Segoe UI Semibold", 9.5F, FontStyle.Bold);
         cancelButton.Click += delegate { Close(); };
         Controls.Add(cancelButton);
-    }
 
+        installButton = new RoundedButton();
+        installButton.Text = "Install";
+        installButton.Width = 122;
+        installButton.Height = 40;
+        installButton.Location = new Point(448, 335);
+        installButton.BackColor = Color.FromArgb(37, 99, 235);
+        installButton.ForeColor = Color.White;
+        installButton.Font = new Font("Segoe UI Semibold", 9.5F, FontStyle.Bold);
+        installButton.Click += InstallButtonClick;
+        Controls.Add(installButton);
+        AcceptButton = installButton;
+        CancelButton = cancelButton;
+        Shown += delegate { installButton.Select(); };
+    }
     private void InstallButtonClick(object sender, EventArgs e)
     {
         installButton.Enabled = false;
@@ -469,14 +586,13 @@ internal sealed class InstallerForm : Form
         };
         worker.ProgressChanged += delegate(object s, ProgressChangedEventArgs ev)
         {
-            progress.Value = Math.Max(0, Math.Min(100, ev.ProgressPercentage));
+            progress.Value = ev.ProgressPercentage;
             status.Text = ev.UserState as string ?? "Installing…";
         };
         worker.RunWorkerCompleted += delegate(object s, RunWorkerCompletedEventArgs ev)
         {
             if (ev.Error != null)
-            {
-                ExitCode = 2;
+            {                ExitCode = 2;
                 progress.Value = 0;
                 status.Text = "Installation failed";
                 MessageBox.Show("DeskMCP could not be installed.\n\n" + ev.Error.Message, "DeskMCP Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -497,7 +613,21 @@ internal sealed class InstallerForm : Form
         };
         worker.RunWorkerAsync();
     }
+
+    public void CaptureTo(string path)
+    {
+        Show();
+        Refresh();
+        Application.DoEvents();
+        using (Bitmap bitmap = new Bitmap(Width, Height))
+        {
+            DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
+            bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        Close();
+    }
 }
+
 internal static class InstallerProgram
 {
     [STAThread]
@@ -527,6 +657,11 @@ internal static class InstallerProgram
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         InstallerForm form = new InstallerForm();
+        if (args.Length >= 2 && args[0] == "--capture-ui")
+        {
+            form.CaptureTo(Path.GetFullPath(args[1]));
+            return 0;
+        }
         Application.Run(form);
         return form.ExitCode;
     }

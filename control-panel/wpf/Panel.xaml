@@ -14,6 +14,38 @@
     </LinearGradientBrush>
     <SolidColorBrush x:Key="BrandCyan" Color="#FF2DE0D8"/>
     <SolidColorBrush x:Key="BrandBlue" Color="#FF2563EB"/>
+    <SolidColorBrush x:Key="UiTextPrimary" Color="#FF18181B"/>
+    <SolidColorBrush x:Key="UiTextSecondary" Color="#FF71717A"/>
+    <SolidColorBrush x:Key="UiTextMuted" Color="#FF8E8E93"/>
+    <SolidColorBrush x:Key="UiSurface" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="UiSurfaceMuted" Color="#FFF5F5F7"/>
+    <SolidColorBrush x:Key="UiInputSurface" Color="#FFF3F3F5"/>
+    <SolidColorBrush x:Key="UiInputBorder" Color="#12000000"/>
+    <SolidColorBrush x:Key="UiBorder" Color="#18000000"/>
+    <SolidColorBrush x:Key="UiAccentSoft" Color="#FFE9F8FA"/>
+    <SolidColorBrush x:Key="UiAccentText" Color="#FF087E8A"/>
+    <SolidColorBrush x:Key="UiDangerSoft" Color="#FFFFF0F0"/>
+    <SolidColorBrush x:Key="UiDangerText" Color="#FFD92D20"/>
+
+    <Style x:Key="RoundedTextBox" TargetType="TextBox">
+      <Setter Property="Foreground" Value="{DynamicResource UiTextPrimary}"/>
+      <Setter Property="Background" Value="{DynamicResource UiInputSurface}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource UiInputBorder}"/>
+      <Setter Property="CaretBrush" Value="{StaticResource BrandBlue}"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
+        <Border x:Name="FieldBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="12">
+          <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+        </Border>
+        <ControlTemplate.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="FieldBorder" Property="BorderBrush" Value="{StaticResource BrandBlue}"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
+    </Style>
+    <Style x:Key="RoundedPasswordBox" TargetType="PasswordBox">
+      <Setter Property="Foreground" Value="{DynamicResource UiTextPrimary}"/><Setter Property="Background" Value="{DynamicResource UiInputSurface}"/><Setter Property="BorderBrush" Value="{DynamicResource UiInputBorder}"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="PasswordBox">
+        <Border x:Name="FieldBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="12"><ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/></Border>
+        <ControlTemplate.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="FieldBorder" Property="BorderBrush" Value="{StaticResource BrandBlue}"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
+    </Style>
     <Style x:Key="SegmentButton" TargetType="Button">
       <Setter Property="Foreground" Value="#71717A"/>
       <Setter Property="Background" Value="Transparent"/>
@@ -82,7 +114,7 @@
       </Setter>
     </Style>
   </Window.Resources>
-  <Border x:Name="RootCard" Margin="14" CornerRadius="30" BorderBrush="#14000000" BorderThickness="1" Padding="16" Background="#FFFFFFFF">
+  <Border x:Name="RootCard" Margin="14" CornerRadius="30" BorderBrush="#10000000" BorderThickness="1" Padding="16" Background="#FFFFFFFF">
     <Border.Effect>
       <DropShadowEffect Color="#3D000000" BlurRadius="36" ShadowDepth="9" Opacity="0.20"/>
     </Border.Effect>
@@ -127,7 +159,7 @@
             <Image x:Name="BrandMark" Grid.Column="0" Source="pack://application:,,,/brand/deskmcp-mark-64.png" Width="42" Height="42" Stretch="Uniform" VerticalAlignment="Center"/>
             <StackPanel Grid.Column="2" VerticalAlignment="Center">
               <TextBlock Text="DeskMCP" Foreground="White" FontSize="21" FontWeight="SemiBold"/>
-              <TextBlock Text="Your desktop. Connected to AI." Foreground="#9BDFF5" FontSize="11" Margin="0,3,0,0"/>
+              <TextBlock Text="Your desktop. Connected to AI." Foreground="#A1A1AA" FontSize="11" Margin="0,3,0,0"/>
             </StackPanel>
             <Border Grid.Column="3" x:Name="LivePill" Background="#FF214A30" BorderBrush="#FF2B5C3C" BorderThickness="1" CornerRadius="12" Padding="10,5" VerticalAlignment="Top">
               <StackPanel Orientation="Horizontal">
@@ -143,7 +175,7 @@
               <ColumnDefinition Width="14"/>
               <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <Border x:Name="GatewayCard" Grid.Column="0" Background="#FF343943" BorderBrush="#FF414854" BorderThickness="1" CornerRadius="15" Padding="11,9">
+            <Border x:Name="GatewayCard" Grid.Column="0" Background="#FF2A2A2E" BorderBrush="#FF3A3A3F" BorderThickness="1" CornerRadius="15" Padding="11,9">
               <StackPanel>
                 <TextBlock Text="Gateway" Foreground="#A1A1AA" FontSize="10"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
@@ -152,7 +184,7 @@
                 </StackPanel>
               </StackPanel>
             </Border>
-            <Border x:Name="TunnelCard" Grid.Column="2" Background="#FF343943" BorderBrush="#FF414854" BorderThickness="1" CornerRadius="15" Padding="11,9">
+            <Border x:Name="TunnelCard" Grid.Column="2" Background="#FF2A2A2E" BorderBrush="#FF3A3A3F" BorderThickness="1" CornerRadius="15" Padding="11,9">
               <StackPanel>
                 <TextBlock Text="Tunnel" Foreground="#A1A1AA" FontSize="10"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
@@ -183,7 +215,7 @@
             <ColumnDefinition Width="*"/>
           </Grid.ColumnDefinitions>
           <Border x:Name="ProfileIndicator" Grid.ColumnSpan="3" HorizontalAlignment="Left"
-                  Background="#FFFFFFFF" BorderBrush="#14000000" BorderThickness="1" CornerRadius="13" IsHitTestVisible="False">
+                  Background="#FFFFFFFF" BorderBrush="#10000000" BorderThickness="1" CornerRadius="13" IsHitTestVisible="False">
             <Border.Effect><DropShadowEffect Color="#44000000" BlurRadius="14" ShadowDepth="1" Opacity="0.18"/></Border.Effect>
             <Border.RenderTransform><TranslateTransform x:Name="ProfileIndicatorTransform" X="0"/></Border.RenderTransform>
           </Border>
@@ -217,7 +249,7 @@
         <Grid Grid.Row="1" Margin="0,10,0,0">
           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
           <Button Grid.Column="0" x:Name="RefreshButton" Style="{StaticResource MiniButton}" Content="Refresh"/>
-          <Button Grid.Column="2" x:Name="SettingsButton" Style="{StaticResource MiniButton}" Content="&#x2699; Settings"/>
+          <Button Grid.Column="2" x:Name="SettingsButton" Style="{StaticResource MiniButton}" Content="Settings"/>
         </Grid>
       </Grid>
       </Grid>
@@ -242,7 +274,7 @@
               </Style>
             </ScrollViewer.Resources>
             <StackPanel>
-              <Border x:Name="WorkspaceCard" Background="#F3F3F6" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+              <Border x:Name="WorkspaceCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <StackPanel>
@@ -252,7 +284,7 @@
                   <Button Grid.Column="1" x:Name="WorkspaceChangeButton" Style="{StaticResource MiniButton}" Content="Change" Padding="12,7"/>
                 </Grid>
               </Border>
-              <Border x:Name="RecentCard" Visibility="Collapsed" Background="#F3F3F6" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+              <Border x:Name="RecentCard" Visibility="Collapsed" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>
                   <TextBlock x:Name="RecentLabel" Text="Recent Workspaces" Foreground="#8E8E93" FontSize="10" Margin="0,0,0,6"/>
                   <StackPanel>
@@ -262,7 +294,7 @@
                   </StackPanel>
                 </StackPanel>
               </Border>
-              <Border x:Name="AppearanceCard" Background="#F3F3F6" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+              <Border x:Name="AppearanceCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>
                   <TextBlock x:Name="AppearanceLabel" Text="Appearance" Foreground="#18181B" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,7"/>
                   <Border x:Name="ThemeShell" Background="#E7E7EC" CornerRadius="13" Padding="3">
@@ -276,7 +308,7 @@
                   </Border>
                 </StackPanel>
               </Border>
-              <Border x:Name="ShortcutCard" Background="#F3F3F6" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+              <Border x:Name="ShortcutCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <StackPanel>
@@ -286,7 +318,7 @@
                   <Button Grid.Column="1" x:Name="ShortcutButton" Style="{StaticResource MiniButton}" Content="Ctrl + Alt + D" Padding="12,7"/>
                 </Grid>
               </Border>
-              <Border x:Name="StartupCard" Background="#F3F3F6" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+              <Border x:Name="StartupCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <StackPanel>
@@ -296,7 +328,7 @@
                   <Button Grid.Column="1" x:Name="StartupButton" Style="{StaticResource MiniButton}" Content="On" Padding="14,7"/>
                 </Grid>
               </Border>
-              <Border x:Name="TunnelSettingsCard" Background="#F3F3F6" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+              <Border x:Name="TunnelSettingsCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>
                   <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -334,26 +366,26 @@
       <Grid x:Name="FirstRunOverlay" Visibility="Collapsed" Opacity="0" Panel.ZIndex="70" Margin="-16">
         <Border Background="#B3000000" CornerRadius="30"/>
         <Border x:Name="FirstRunModal" Width="350" HorizontalAlignment="Center" VerticalAlignment="Center"
-                Background="#FFFFFFFF" BorderBrush="#18000000" BorderThickness="1" CornerRadius="26" Padding="22">
+                Background="{DynamicResource UiSurface}" BorderBrush="{DynamicResource UiBorder}" BorderThickness="1" CornerRadius="26" Padding="22">
           <Border.Effect><DropShadowEffect Color="#72000000" BlurRadius="34" ShadowDepth="9" Opacity="0.38"/></Border.Effect>
           <StackPanel>
             <Grid Margin="0,0,0,14">
               <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
               <StackPanel>
-                <TextBlock Text="DeskMCP" FontSize="11" FontWeight="Bold" Foreground="#71717A"/>
-                <TextBlock x:Name="FirstRunTitle" Text="Choose your workspace" FontSize="21" FontWeight="SemiBold" Foreground="#18181B" Margin="0,4,0,0"/>
+                <TextBlock Text="DeskMCP" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource UiTextSecondary}"/>
+                <TextBlock x:Name="FirstRunTitle" Text="Choose your workspace" FontSize="21" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,4,0,0"/>
               </StackPanel>
-              <Border Grid.Column="1" Background="#EDF8EF" CornerRadius="12" Padding="9,5" VerticalAlignment="Top">
-                <TextBlock x:Name="FirstRunStepLabel" Text="1 / 3" Foreground="#2E7D32" FontSize="10" FontWeight="Bold"/>
+              <Border Grid.Column="1" x:Name="FirstRunStepPill" Background="{DynamicResource UiAccentSoft}" BorderBrush="{DynamicResource UiInputBorder}" BorderThickness="1" CornerRadius="12" Padding="9,5" VerticalAlignment="Top">
+                <TextBlock x:Name="FirstRunStepLabel" Text="1 / 3" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
               </Border>
             </Grid>
             <Grid x:Name="FirstRunWorkspaceStep">
               <StackPanel>
-                <TextBlock Text="DeskMCP can only access files inside the workspace you choose. You can change it later in Settings." TextWrapping="Wrap" LineHeight="17" FontSize="11" Foreground="#71717A"/>
-                <Border Background="#F3F3F6" CornerRadius="16" Padding="13" Margin="0,14,0,10">
+                <TextBlock Text="DeskMCP can only access files inside the workspace you choose. You can change it later in Settings." TextWrapping="Wrap" LineHeight="17" FontSize="11" Foreground="{DynamicResource UiTextSecondary}"/>
+                <Border Background="{DynamicResource UiSurfaceMuted}" CornerRadius="16" Padding="13" Margin="0,14,0,10">
                   <StackPanel>
-                    <TextBlock Text="WORKSPACE" FontSize="9" FontWeight="Bold" Foreground="#8E8E93"/>
-                    <TextBlock x:Name="FirstRunWorkspacePath" Text="Loading&#x2026;" FontSize="11" FontWeight="SemiBold" Foreground="#18181B" Margin="0,5,0,0" TextWrapping="Wrap" MaxHeight="42"/>
+                    <TextBlock Text="WORKSPACE" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource UiTextMuted}"/>
+                    <TextBlock x:Name="FirstRunWorkspacePath" Text="Loading&#x2026;" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,5,0,0" TextWrapping="Wrap" MaxHeight="42"/>
                   </StackPanel>
                 </Border>
                 <Button x:Name="FirstRunChooseWorkspaceButton" Style="{StaticResource MiniButton}" Content="Choose Workspace&#x2026;"/>
@@ -362,12 +394,12 @@
             </Grid>
             <Grid x:Name="FirstRunTunnelStep" Visibility="Collapsed">
               <StackPanel>
-                <TextBlock Text="Create a Tunnel in OpenAI Platform, then paste its Tunnel ID and Runtime API Key here." TextWrapping="Wrap" LineHeight="17" FontSize="11" Foreground="#71717A"/>
-                <TextBlock Text="Tunnel ID" FontSize="10" FontWeight="SemiBold" Foreground="#18181B" Margin="0,14,0,0"/>
-                <TextBox x:Name="FirstRunTunnelIdInput" FontSize="12" Padding="11,9" Margin="0,6,0,10" Background="#F3F3F6" Foreground="#18181B" BorderThickness="0"/>
-                <TextBlock Text="Runtime API Key" FontSize="10" FontWeight="SemiBold" Foreground="#18181B"/>
-                <PasswordBox x:Name="FirstRunTunnelKeyInput" FontSize="12" Padding="11,9" Margin="0,6,0,0" Background="#F3F3F6" Foreground="#18181B" BorderThickness="0"/>
-                <TextBlock x:Name="FirstRunTunnelHint" Text="The key is stored with Windows DPAPI and is never written to settings.json." FontSize="9" TextWrapping="Wrap" LineHeight="14" Margin="0,7,0,0" Foreground="#8E8E93"/>
+                <TextBlock Text="Create a Tunnel in OpenAI Platform, then paste its Tunnel ID and Runtime API Key here." TextWrapping="Wrap" LineHeight="17" FontSize="11" Foreground="{DynamicResource UiTextSecondary}"/>
+                <TextBlock Text="Tunnel ID" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,14,0,0"/>
+                <TextBox x:Name="FirstRunTunnelIdInput" Style="{StaticResource RoundedTextBox}" FontSize="12" Padding="11,9" Margin="0,6,0,10"/>
+                <TextBlock Text="Runtime API Key" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
+                <PasswordBox x:Name="FirstRunTunnelKeyInput" Style="{StaticResource RoundedPasswordBox}" FontSize="12" Padding="11,9" Margin="0,6,0,0"/>
+                <TextBlock x:Name="FirstRunTunnelHint" Text="The key is stored with Windows DPAPI and is never written to settings.json." FontSize="9" TextWrapping="Wrap" LineHeight="14" Margin="0,7,0,0" Foreground="{DynamicResource UiTextMuted}"/>
                 <Grid Margin="0,16,0,0">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                   <Button Grid.Column="0" x:Name="FirstRunTunnelSkipButton" Style="{StaticResource MiniButton}" Content="Skip for now"/>
@@ -377,18 +409,18 @@
             </Grid>
             <Grid x:Name="FirstRunPluginStep" Visibility="Collapsed">
               <StackPanel>
-                <TextBlock Text="Finish in ChatGPT" FontSize="12" FontWeight="SemiBold" Foreground="#18181B"/>
-                <TextBlock Text="Your local side is ready. Finish the connection in ChatGPT:" FontSize="10" TextWrapping="Wrap" Margin="0,5,0,12" Foreground="#71717A"/>
-                <Border Background="#F3F3F6" CornerRadius="16" Padding="13">
+                <TextBlock Text="Finish in ChatGPT" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
+                <TextBlock Text="Your local side is ready. Finish the connection in ChatGPT:" FontSize="10" TextWrapping="Wrap" Margin="0,5,0,12" Foreground="{DynamicResource UiTextSecondary}"/>
+                <Border Background="{DynamicResource UiSurfaceMuted}" CornerRadius="16" Padding="13">
                   <StackPanel>
-                    <TextBlock Text="1   Plugins &#x2192; New plugin" FontSize="11" FontWeight="SemiBold" Foreground="#18181B"/>
-                    <TextBlock Text="2   Name: DeskMCP" FontSize="11" FontWeight="SemiBold" Foreground="#18181B" Margin="0,8,0,0"/>
-                    <TextBlock Text="3   Connection: Tunnel &#x00B7; Auth: No auth" FontSize="11" FontWeight="SemiBold" Foreground="#18181B" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                    <TextBlock Text="4   Select your Tunnel, check &#x2018;I understand and want to continue&#x2019;, then Scan tools" FontSize="11" FontWeight="SemiBold" Foreground="#18181B" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="1   Plugins &#x2192; New plugin" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
+                    <TextBlock Text="2   Name: DeskMCP" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0"/>
+                    <TextBlock Text="3   Connection: Tunnel &#x00B7; Auth: No auth" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="4   Select your Tunnel, check &#x2018;I understand and want to continue&#x2019;, then Scan tools" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
                   </StackPanel>
                 </Border>
-                <Border Background="#EDF8EF" CornerRadius="13" Padding="11,9" Margin="0,12,0,0">
-                  <TextBlock Text="Expected result: 13 DeskMCP tools" Foreground="#2E7D32" FontSize="10" FontWeight="Bold"/>
+                <Border x:Name="FirstRunExpectedCard" Background="{DynamicResource UiAccentSoft}" CornerRadius="13" Padding="11,9" Margin="0,12,0,0">
+                  <TextBlock Text="Expected result: 13 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
                 </Border>
                 <Button x:Name="FirstRunFinishButton" Style="{StaticResource ActionButton}" Content="Finish Setup" Margin="0,16,0,0"/>
               </StackPanel>
@@ -399,17 +431,17 @@
       <Grid x:Name="TunnelSetupOverlay" Visibility="Collapsed" Opacity="0" Panel.ZIndex="60" Margin="-16">
         <Border Background="#66000000" CornerRadius="30"/>
         <Border x:Name="TunnelSetupModal" Width="330" HorizontalAlignment="Center" VerticalAlignment="Center"
-                Background="#FFFFFFFF" BorderBrush="#18000000" BorderThickness="1" CornerRadius="24" Padding="20">
+                Background="{DynamicResource UiSurface}" BorderBrush="{DynamicResource UiBorder}" BorderThickness="1" CornerRadius="24" Padding="20">
           <Border.Effect><DropShadowEffect Color="#66000000" BlurRadius="30" ShadowDepth="8" Opacity="0.35"/></Border.Effect>
           <Border.RenderTransform><ScaleTransform x:Name="TunnelSetupModalScale" ScaleX="0.94" ScaleY="0.94"/></Border.RenderTransform>
           <StackPanel>
-            <TextBlock x:Name="TunnelSetupTitle" Text="Configure Secure MCP Tunnel" FontSize="18" FontWeight="SemiBold" Foreground="#18181B"/>
-            <TextBlock x:Name="TunnelSetupHint" Text="Paste the Tunnel ID and Runtime API Key from OpenAI Platform." FontSize="10" TextWrapping="Wrap" LineHeight="15" Margin="0,7,0,14" Foreground="#71717A"/>
-            <TextBlock x:Name="TunnelIdFieldLabel" Text="Tunnel ID" FontSize="10" FontWeight="SemiBold" Foreground="#18181B"/>
-            <TextBox x:Name="TunnelIdInput" FontSize="12" Padding="11,9" Margin="0,6,0,12" Background="#F3F3F6" Foreground="#18181B" BorderThickness="0"/>
-            <TextBlock x:Name="TunnelKeyFieldLabel" Text="Runtime API Key" FontSize="10" FontWeight="SemiBold" Foreground="#18181B"/>
-            <PasswordBox x:Name="TunnelRuntimeKeyInput" FontSize="12" Padding="11,9" Margin="0,6,0,0" Background="#F3F3F6" Foreground="#18181B" BorderThickness="0"/>
-            <TextBlock x:Name="TunnelRuntimeKeyHint" Text="Protected with Windows DPAPI. Leave blank to keep the existing key." FontSize="9" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#8E8E93"/>
+            <TextBlock x:Name="TunnelSetupTitle" Text="Connect Tunnel" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
+            <TextBlock x:Name="TunnelSetupHint" Text="Paste the Tunnel ID and Runtime API Key from OpenAI Platform." FontSize="10" TextWrapping="Wrap" LineHeight="15" Margin="0,7,0,14" Foreground="{DynamicResource UiTextSecondary}"/>
+            <TextBlock x:Name="TunnelIdFieldLabel" Text="Tunnel ID" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
+            <TextBox x:Name="TunnelIdInput" Style="{StaticResource RoundedTextBox}" FontSize="12" Padding="11,9" Margin="0,6,0,12"/>
+            <TextBlock x:Name="TunnelKeyFieldLabel" Text="Runtime API Key" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
+            <PasswordBox x:Name="TunnelRuntimeKeyInput" Style="{StaticResource RoundedPasswordBox}" FontSize="12" Padding="11,9" Margin="0,6,0,0"/>
+            <TextBlock x:Name="TunnelRuntimeKeyHint" Text="Protected with Windows DPAPI. Leave blank to keep the existing key." FontSize="9" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="{DynamicResource UiTextMuted}"/>
             <Grid Margin="0,16,0,0">
               <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
               <Button Grid.Column="0" x:Name="TunnelSetupCancelButton" Style="{StaticResource MiniButton}" Content="Cancel"/>
@@ -421,19 +453,19 @@
       <Grid x:Name="FullControlOverlay" Visibility="Collapsed" Opacity="0" Panel.ZIndex="50" Margin="-16">
         <Border Background="#66000000" CornerRadius="30"/>
         <Border x:Name="FullControlModal" Width="330" HorizontalAlignment="Center" VerticalAlignment="Center"
-                Background="#FF232730" BorderBrush="#30FFFFFF" BorderThickness="1" CornerRadius="24" Padding="20">
+                Background="{DynamicResource UiSurface}" BorderBrush="{DynamicResource UiBorder}" BorderThickness="1" CornerRadius="24" Padding="20">
           <Border.Effect><DropShadowEffect Color="#66000000" BlurRadius="30" ShadowDepth="8" Opacity="0.35"/></Border.Effect>
           <Border.RenderTransform><ScaleTransform x:Name="FullControlModalScale" ScaleX="0.94" ScaleY="0.94"/></Border.RenderTransform>
           <StackPanel>
-            <Border Background="#FF4A2525" CornerRadius="10" Padding="9,4" HorizontalAlignment="Left">
-              <TextBlock Text="FULL CONTROL" Foreground="#FFFF453A" FontSize="10" FontWeight="Bold"/>
+            <Border x:Name="FullControlDangerPill" Background="{DynamicResource UiDangerSoft}" CornerRadius="10" Padding="9,4" HorizontalAlignment="Left">
+              <TextBlock Text="FULL CONTROL" Foreground="{DynamicResource UiDangerText}" FontSize="10" FontWeight="Bold"/>
             </Border>
-            <TextBlock Text="Enable Full Control?" Foreground="White" FontSize="20" FontWeight="SemiBold" Margin="0,14,0,0"/>
+            <TextBlock Text="Enable Full Control?" Foreground="{DynamicResource UiTextPrimary}" FontSize="20" FontWeight="SemiBold" Margin="0,14,0,0"/>
             <TextBlock Text="Gateway-owned terminal sessions will run with your current Windows user permissions."
-                       Foreground="#FFB8BCC6" FontSize="11" TextWrapping="Wrap" LineHeight="17" Margin="0,8,0,0"/>
-            <Border Background="#FF303641" CornerRadius="14" Padding="12,10" Margin="0,13,0,0">
+                       Foreground="{DynamicResource UiTextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="17" Margin="0,8,0,0"/>
+            <Border x:Name="FullControlNote" Background="{DynamicResource UiSurfaceMuted}" BorderBrush="{DynamicResource UiInputBorder}" BorderThickness="1" CornerRadius="14" Padding="12,10" Margin="0,13,0,0">
               <TextBlock Text="Filesystem tools stay inside the selected Workspace. Terminal sessions are not filesystem-sandboxed by that Workspace boundary."
-                         Foreground="#FFAEB3BE" FontSize="10" TextWrapping="Wrap" LineHeight="15"/>
+                         Foreground="{DynamicResource UiTextSecondary}" FontSize="10" TextWrapping="Wrap" LineHeight="15"/>
             </Border>
             <Grid Margin="0,18,0,0">
               <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

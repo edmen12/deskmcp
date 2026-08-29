@@ -216,6 +216,22 @@ internal sealed class ControlPanelRuntime
         return (Brush)new BrushConverter().ConvertFromString(value);
     }
 
+    private static void ApplySemanticResources(Window target, bool dark)
+    {
+        target.Resources["UiTextPrimary"] = BrushFrom(dark ? "#FFF5F5F7" : "#FF18181B");
+        target.Resources["UiTextSecondary"] = BrushFrom(dark ? "#FFA8A8AE" : "#FF71717A");
+        target.Resources["UiTextMuted"] = BrushFrom(dark ? "#FF8E8E95" : "#FF8E8E93");
+        target.Resources["UiSurface"] = BrushFrom(dark ? "#FF1C1C1E" : "#FFFFFFFF");
+        target.Resources["UiSurfaceMuted"] = BrushFrom(dark ? "#FF2A2A2D" : "#FFF5F5F7");
+        target.Resources["UiInputSurface"] = BrushFrom(dark ? "#FF2C2C2F" : "#FFF3F3F5");
+        target.Resources["UiInputBorder"] = BrushFrom(dark ? "#26FFFFFF" : "#12000000");
+        target.Resources["UiBorder"] = BrushFrom(dark ? "#24FFFFFF" : "#18000000");
+        target.Resources["UiAccentSoft"] = BrushFrom(dark ? "#FF0E2B31" : "#FFE9F8FA");
+        target.Resources["UiAccentText"] = BrushFrom(dark ? "#FF2DE0D8" : "#FF087E8A");
+        target.Resources["UiDangerSoft"] = BrushFrom(dark ? "#FF341C1C" : "#FFFFF0F0");
+        target.Resources["UiDangerText"] = BrushFrom(dark ? "#FFFF5A52" : "#FFD92D20");
+    }
+
     private static bool IsGatewayRoot(string root)
     {
         return !String.IsNullOrWhiteSpace(root) && File.Exists(Path.Combine(root, "dist", "src", "index.js"));
@@ -446,8 +462,9 @@ internal sealed class ControlPanelRuntime
         themeInitialized = true;
         if (changed || force)
         {
+            ApplySemanticResources(window, dark);
             rootCard.Background = BrushFrom(dark ? "#FF0B0B0D" : "#FFFFFFFF");
-            rootCard.BorderBrush = BrushFrom(dark ? "#26FFFFFF" : "#14000000");
+            rootCard.BorderBrush = BrushFrom(dark ? "#18FFFFFF" : "#10000000");
             Find<Border>("HeroCard").Background = Gradient("#FF111113", "#FF202024");
             Find<TextBlock>("ProfileSectionTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("ProfileHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
@@ -489,7 +506,7 @@ internal sealed class ControlPanelRuntime
             Find<PasswordBox>("TunnelRuntimeKeyInput").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Border>("ThemeShell").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
             themeIndicator.Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
-            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton" })
+            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
             {
                 Button button = Find<Button>(name);
                 button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
@@ -687,7 +704,7 @@ internal sealed class ControlPanelRuntime
         double availableWidth = Math.Max(1.0, workRight - workLeft - gap * 2.0);
         double availableHeight = Math.Max(1.0, workBottom - workTop - gap * 2.0);
         window.Width = Math.Min(420.0, availableWidth);
-        double desiredHeight = 560.0;
+        double desiredHeight = settingsExpanded ? 650.0 : 560.0;
         window.Height = Math.Min(desiredHeight, availableHeight);
 
         double left = workRight - window.Width - gap;
@@ -1725,6 +1742,7 @@ internal sealed class ControlPanelRuntime
         bool showSettings = !settingsExpanded;
         pageTransitioning = true;
         settingsExpanded = showSettings;
+        PositionPanel();
         Grid mainPage = Find<Grid>("MainPage");
         Border settingsPage = Find<Border>("SettingsCard");
         FrameworkElement outgoing = showSettings ? (FrameworkElement)mainPage : settingsPage;
@@ -1952,8 +1970,9 @@ internal sealed class ControlPanelRuntime
 
     private static void ApplyCaptureTheme(Window preview, bool dark)
     {
+        ApplySemanticResources(preview, dark);
         ((Border)preview.FindName("RootCard")).Background = BrushFrom(dark ? "#FF0B0B0D" : "#FFFFFFFF");
-        ((Border)preview.FindName("RootCard")).BorderBrush = BrushFrom(dark ? "#26FFFFFF" : "#14000000");
+        ((Border)preview.FindName("RootCard")).BorderBrush = BrushFrom(dark ? "#18FFFFFF" : "#10000000");
         ((TextBlock)preview.FindName("ProfileSectionTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
         ((TextBlock)preview.FindName("ProfileHint")).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
         ((Border)preview.FindName("ProfileShell")).Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFE7E7EC");
@@ -1974,7 +1993,7 @@ internal sealed class ControlPanelRuntime
         foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard" })
             ((Border)preview.FindName(cardName)).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
 
-        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton" })
+        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
         {
             Button button = (Button)preview.FindName(name);
             button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
@@ -1994,12 +2013,13 @@ internal sealed class ControlPanelRuntime
         themeDark.Foreground = BrushFrom(dark ? "#A8A8AE" : "#71717A");
     }
 
-    public static void CapturePreview(string xamlPath, string outputPath, int firstRunStep = -1, bool darkTheme = false, bool settingsPage = false)
+    public static void CapturePreview(string xamlPath, string outputPath, int firstRunStep = -1, bool darkTheme = false, bool settingsPage = false, string modalCapture = null)
     {
         Window preview;
         using (FileStream stream = File.OpenRead(xamlPath))
             preview = (Window)XamlReader.Load(stream);
         ApplyCaptureTheme(preview, darkTheme);
+        if (settingsPage) preview.Height = 650;
 
         ((Ellipse)preview.FindName("GatewayDot")).Fill = BrushFrom("#34C759");
         ((TextBlock)preview.FindName("GatewayStatus")).Text = "Running";
@@ -2025,6 +2045,18 @@ internal sealed class ControlPanelRuntime
             string[] titles = new string[] { "Choose your workspace", "Connect a secure Tunnel", "Connect ChatGPT" };
             ((TextBlock)preview.FindName("FirstRunTitle")).Text = titles[Math.Max(0, Math.Min(2, firstRunStep))];
             ((TextBlock)preview.FindName("FirstRunWorkspacePath")).Text = @"C:\Users\You\Projects\my-workspace";
+        }
+        if (modalCapture == "tunnel")
+        {
+            Grid overlay = (Grid)preview.FindName("TunnelSetupOverlay");
+            overlay.Visibility = Visibility.Visible; overlay.Opacity = 1;
+            ScaleTransform scale = (ScaleTransform)((Border)preview.FindName("TunnelSetupModal")).RenderTransform; scale.ScaleX = 1; scale.ScaleY = 1;
+        }
+        else if (modalCapture == "full")
+        {
+            Grid overlay = (Grid)preview.FindName("FullControlOverlay");
+            overlay.Visibility = Visibility.Visible; overlay.Opacity = 1;
+            ScaleTransform scale = (ScaleTransform)((Border)preview.FindName("FullControlModal")).RenderTransform; scale.ScaleX = 1; scale.ScaleY = 1;
         }
         Button read = (Button)preview.FindName("ReadButton");
         Button write = (Button)preview.FindName("WriteButton");
@@ -2097,11 +2129,13 @@ internal static class Program
         {
             if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))
             {
-                int step = args[0] == "--capture-first-run-tunnel" ? 1 : args[0] == "--capture-first-run-plugin" ? 2 : args[0] == "--capture-first-run" ? 0 : -1;
-                bool darkCapture = args[0] == "--capture-dark" || args[0] == "--capture-settings-dark";
-                bool settingsCapture = args[0] == "--capture-settings" || args[0] == "--capture-settings-dark";
-                string output = args.Length > 1 ? args[1] : Path.Combine(baseDir, settingsCapture ? "settings-preview.png" : step >= 0 ? "first-run-preview.png" : "panel-preview.png");
-                ControlPanelRuntime.CapturePreview(xamlPath, output, step, darkCapture, settingsCapture);
+                string mode = args[0];
+                int step = (mode == "--capture-first-run-tunnel" || mode == "--capture-first-run-tunnel-dark") ? 1 : (mode == "--capture-first-run-plugin" || mode == "--capture-first-run-plugin-dark") ? 2 : (mode == "--capture-first-run" || mode == "--capture-first-run-dark") ? 0 : -1;
+                bool darkCapture = mode == "--capture-dark" || mode == "--capture-settings-dark" || mode.EndsWith("-dark", StringComparison.Ordinal);
+                bool settingsCapture = mode == "--capture-settings" || mode == "--capture-settings-dark";
+                string modalCapture = (mode == "--capture-tunnel-modal" || mode == "--capture-tunnel-modal-dark") ? "tunnel" : (mode == "--capture-full-modal" || mode == "--capture-full-modal-dark") ? "full" : null;
+                string output = args.Length > 1 ? args[1] : Path.Combine(baseDir, settingsCapture ? "settings-preview.png" : step >= 0 ? "first-run-preview.png" : modalCapture != null ? modalCapture + "-preview.png" : "panel-preview.png");
+                ControlPanelRuntime.CapturePreview(xamlPath, output, step, darkCapture, settingsCapture, modalCapture);
                 return 0;
             }
             bool startup = args.Length > 0 && args[0] == "--startup";
