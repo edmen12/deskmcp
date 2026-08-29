@@ -3,7 +3,7 @@ name: macOS Developer Preview
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, hardening-0.9.1-candidate]
     paths:
       - '.github/workflows/macos-developer-preview.yml'
       - 'control-panel/macos/**'
