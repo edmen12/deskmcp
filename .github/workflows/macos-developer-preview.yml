@@ -52,7 +52,7 @@ jobs:
         run: |
           test "$(find runtime/release -maxdepth 1 -name 'DeskMCP-*-macos-arm64-unsigned.zip' -type f | wc -l | tr -d ' ')" = "1"
           test -f runtime/release/SHA256SUMS-macos-arm64-unsigned.txt
-          node -e "const x=require('./runtime/release-stage/darwin-arm64/release-target.json'); if(x.distributionReady!==false||x.notarized!==false||x.signing!=='ad-hoc-test-only') process.exit(1)"
+          node -e "const x=require('./runtime/release-stage/darwin-arm64/DeskMCP.app/Contents/Resources/release-target.json'); if(x.distributionReady!==false||x.notarized!==false||x.signing!=='ad-hoc-test-only') process.exit(1)"
 
       - name: Upload developer preview
         id: upload-preview
