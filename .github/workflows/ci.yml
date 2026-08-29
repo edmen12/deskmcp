@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/arm64-installer-mutex-handshake]
   pull_request:
     branches: [main]
 
