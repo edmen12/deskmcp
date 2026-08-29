@@ -446,25 +446,25 @@ internal sealed class ControlPanelRuntime
         themeInitialized = true;
         if (changed || force)
         {
-            rootCard.Background = BrushFrom(dark ? "#FF07111F" : "#FFF8FBFF");
-            rootCard.BorderBrush = BrushFrom(dark ? "#3358C7FF" : "#1847D9FF");
-            Find<Border>("HeroCard").Background = Gradient(dark ? "#FF07111F" : "#FF07111F", dark ? "#FF1856A8" : "#FF1856A8");
+            rootCard.Background = BrushFrom(dark ? "#FF0B0B0D" : "#FFFFFFFF");
+            rootCard.BorderBrush = BrushFrom(dark ? "#26FFFFFF" : "#14000000");
+            Find<Border>("HeroCard").Background = Gradient("#FF111113", "#FF202024");
             Find<TextBlock>("ProfileSectionTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("ProfileHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<Border>("ProfileShell").Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFE7E7EC");
             profileIndicator.Background = BrushFrom(dark ? "#FF424248" : "#FFFFFFFF");
-            Find<Border>("ScopeCard").Background = BrushFrom(dark ? "#FF0D1828" : "#FFF7FBFF");
-            Find<Border>("ScopeCard").BorderBrush = BrushFrom(dark ? "#3358C7FF" : "#1847D9FF");
+            Find<Border>("ScopeCard").Background = BrushFrom(dark ? "#FF161618" : "#FFFFFFFF");
+            Find<Border>("ScopeCard").BorderBrush = BrushFrom(dark ? "#24FFFFFF" : "#12000000");
             Find<TextBlock>("ScopeLabel").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("ScopeText").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("VersionText").Foreground = BrushFrom(dark ? "#8E8E95" : "#A1A1AA");
             Find<Border>("SettingsCard").Background = Brushes.Transparent;
             Find<Border>("SettingsCard").BorderBrush = Brushes.Transparent;
             Find<TextBlock>("SettingsTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-            Find<Button>("SettingsBackButton").Background = BrushFrom(dark ? "#FF153047" : "#FFEDF9FD");
-            Find<Button>("SettingsBackButton").Foreground = BrushFrom(dark ? "#FFBDECF8" : "#FF0B4A6F");
+            Find<Button>("SettingsBackButton").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
+            Find<Button>("SettingsBackButton").Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
             foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard" })
-                Find<Border>(cardName).Background = BrushFrom(dark ? "#FF122236" : "#FFF2FAFD");
+                Find<Border>(cardName).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
             Find<TextBlock>("WorkspaceLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("WorkspacePathText").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("RecentLabel").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
@@ -487,13 +487,13 @@ internal sealed class ControlPanelRuntime
             Find<TextBlock>("TunnelSetupHint").Foreground = BrushFrom(dark ? "#98989F" : "#71717A");
             Find<PasswordBox>("TunnelRuntimeKeyInput").Background = BrushFrom(dark ? "#FF343439" : "#FFF3F3F6");
             Find<PasswordBox>("TunnelRuntimeKeyInput").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-            Find<Border>("ThemeShell").Background = BrushFrom(dark ? "#FF0F2033" : "#FFE6F6FC");
-            themeIndicator.Background = BrushFrom(dark ? "#FF1C3B57" : "#FFFFFFFF");
-            foreach (string name in new string[] { "RefreshButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton" })
+            Find<Border>("ThemeShell").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
+            themeIndicator.Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
+            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton" })
             {
                 Button button = Find<Button>(name);
-                button.Background = BrushFrom(dark ? "#FF153047" : "#FFEDF9FD");
-                button.Foreground = BrushFrom(dark ? "#FFBDECF8" : "#FF0B4A6F");
+                button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
+                button.Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
             }
             Button power = Find<Button>("PowerButton");
             power.Background = (Brush)window.FindResource("BrandGradient");
@@ -1950,11 +1950,56 @@ internal sealed class ControlPanelRuntime
         finally { if (activationWaitRegistration != null) { activationWaitRegistration.Unregister(null); activationWaitRegistration = null; } }
     }
 
-    public static void CapturePreview(string xamlPath, string outputPath, int firstRunStep = -1)
+    private static void ApplyCaptureTheme(Window preview, bool dark)
+    {
+        ((Border)preview.FindName("RootCard")).Background = BrushFrom(dark ? "#FF0B0B0D" : "#FFFFFFFF");
+        ((Border)preview.FindName("RootCard")).BorderBrush = BrushFrom(dark ? "#26FFFFFF" : "#14000000");
+        ((TextBlock)preview.FindName("ProfileSectionTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+        ((TextBlock)preview.FindName("ProfileHint")).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+        ((Border)preview.FindName("ProfileShell")).Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFE7E7EC");
+        ((Border)preview.FindName("ProfileIndicator")).Background = BrushFrom(dark ? "#FF424248" : "#FFFFFFFF");
+        ((Border)preview.FindName("ScopeCard")).Background = BrushFrom(dark ? "#FF161618" : "#FFFFFFFF");
+        ((Border)preview.FindName("ScopeCard")).BorderBrush = BrushFrom(dark ? "#24FFFFFF" : "#12000000");
+        ((TextBlock)preview.FindName("ScopeLabel")).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+        ((TextBlock)preview.FindName("ScopeText")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+        ((TextBlock)preview.FindName("VersionText")).Foreground = BrushFrom(dark ? "#8E8E95" : "#A1A1AA");
+        ((TextBlock)preview.FindName("SettingsTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "TunnelSettingsLabel", "TunnelIdValue" })
+            ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "TunnelConfigStatus" })
+            ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+        ((Border)preview.FindName("ThemeShell")).Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
+        ((Border)preview.FindName("ThemeIndicator")).Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
+
+        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard" })
+            ((Border)preview.FindName(cardName)).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
+
+        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton" })
+        {
+            Button button = (Button)preview.FindName(name);
+            button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
+            button.Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
+        }
+        Button startup = (Button)preview.FindName("StartupButton");
+        startup.Background = BrushFrom(dark ? "#FF214A30" : "#FFEAF7ED");
+        startup.Foreground = BrushFrom(dark ? "#FFD9FFE3" : "#FF2E7D32");
+        Button tunnelAuto = (Button)preview.FindName("TunnelAutoButton");
+        tunnelAuto.Background = BrushFrom(dark ? "#FF343439" : "#FFEFEFF2");
+        tunnelAuto.Foreground = BrushFrom(dark ? "#FFA8A8AE" : "#FF71717A");
+        Button themeSystem = (Button)preview.FindName("ThemeSystemButton");
+        Button themeLight = (Button)preview.FindName("ThemeLightButton");
+        Button themeDark = (Button)preview.FindName("ThemeDarkButton");
+        themeSystem.Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+        themeLight.Foreground = BrushFrom(dark ? "#A8A8AE" : "#71717A");
+        themeDark.Foreground = BrushFrom(dark ? "#A8A8AE" : "#71717A");
+    }
+
+    public static void CapturePreview(string xamlPath, string outputPath, int firstRunStep = -1, bool darkTheme = false, bool settingsPage = false)
     {
         Window preview;
         using (FileStream stream = File.OpenRead(xamlPath))
             preview = (Window)XamlReader.Load(stream);
+        ApplyCaptureTheme(preview, darkTheme);
 
         ((Ellipse)preview.FindName("GatewayDot")).Fill = BrushFrom("#34C759");
         ((TextBlock)preview.FindName("GatewayStatus")).Text = "Running";
@@ -1984,9 +2029,16 @@ internal sealed class ControlPanelRuntime
         Button read = (Button)preview.FindName("ReadButton");
         Button write = (Button)preview.FindName("WriteButton");
         Button full = (Button)preview.FindName("FullButton");
-        read.Foreground = BrushFrom("#71717A");
-        write.Foreground = BrushFrom("#18181B");
-        full.Foreground = BrushFrom("#71717A");
+        read.Foreground = BrushFrom(darkTheme ? "#A8A8AE" : "#71717A");
+        write.Foreground = BrushFrom(darkTheme ? "#F5F5F7" : "#18181B");
+        full.Foreground = BrushFrom(darkTheme ? "#A8A8AE" : "#71717A");
+        if (settingsPage)
+        {
+            ((Grid)preview.FindName("MainPage")).Visibility = Visibility.Collapsed;
+            Border settings = (Border)preview.FindName("SettingsCard");
+            settings.Visibility = Visibility.Visible;
+            settings.Opacity = 1;
+        }
 
         Size size = new Size(preview.Width, preview.Height);
         preview.Measure(size);
@@ -2004,6 +2056,16 @@ Border captureRoot = (Border)preview.FindName("RootCard");
         indicator.Width = segmentWidth;
         transform.X = segmentWidth;
         indicator.UpdateLayout();
+        if (settingsPage)
+        {
+            Grid themeSegments = (Grid)preview.FindName("ThemeSegmentsGrid");
+            Border themeSelection = (Border)preview.FindName("ThemeIndicator");
+            TranslateTransform themeTransform = (TranslateTransform)themeSelection.RenderTransform;
+            double themeWidth = themeSegments.ActualWidth / 3.0;
+            themeSelection.Width = themeWidth;
+            themeTransform.X = 0;
+            themeSelection.UpdateLayout();
+        }
         const double dpi = 144.0;
         int pixelWidth = Math.Max(1, (int)(captureSize.Width * dpi / 96.0));
         int pixelHeight = Math.Max(1, (int)(captureSize.Height * dpi / 96.0));
@@ -2033,11 +2095,13 @@ internal static class Program
         string logPath = Path.Combine(logDir, "control-panel-error.log");
         try
         {
-            if (args.Length > 0 && (args[0] == "--capture" || args[0].StartsWith("--capture-first-run", StringComparison.Ordinal)))
+            if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))
             {
                 int step = args[0] == "--capture-first-run-tunnel" ? 1 : args[0] == "--capture-first-run-plugin" ? 2 : args[0] == "--capture-first-run" ? 0 : -1;
-                string output = args.Length > 1 ? args[1] : Path.Combine(baseDir, step >= 0 ? "first-run-preview.png" : "panel-preview.png");
-                ControlPanelRuntime.CapturePreview(xamlPath, output, step);
+                bool darkCapture = args[0] == "--capture-dark" || args[0] == "--capture-settings-dark";
+                bool settingsCapture = args[0] == "--capture-settings" || args[0] == "--capture-settings-dark";
+                string output = args.Length > 1 ? args[1] : Path.Combine(baseDir, settingsCapture ? "settings-preview.png" : step >= 0 ? "first-run-preview.png" : "panel-preview.png");
+                ControlPanelRuntime.CapturePreview(xamlPath, output, step, darkCapture, settingsCapture);
                 return 0;
             }
             bool startup = args.Length > 0 && args[0] == "--startup";

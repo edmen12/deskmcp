@@ -57,8 +57,8 @@
       </Setter>
     </Style>
     <Style x:Key="MiniButton" TargetType="Button">
-      <Setter Property="Foreground" Value="#0B4A6F"/>
-      <Setter Property="Background" Value="#EDF9FD"/>
+      <Setter Property="Foreground" Value="#27272A"/>
+      <Setter Property="Background" Value="#F2F2F4"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
@@ -82,7 +82,7 @@
       </Setter>
     </Style>
   </Window.Resources>
-  <Border x:Name="RootCard" Margin="14" CornerRadius="30" BorderBrush="#1847D9FF" BorderThickness="1" Padding="16" Background="#FFF8FBFF">
+  <Border x:Name="RootCard" Margin="14" CornerRadius="30" BorderBrush="#14000000" BorderThickness="1" Padding="16" Background="#FFFFFFFF">
     <Border.Effect>
       <DropShadowEffect Color="#3D000000" BlurRadius="36" ShadowDepth="9" Opacity="0.20"/>
     </Border.Effect>
@@ -103,12 +103,12 @@
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="*"/>
       </Grid.RowDefinitions>
-      <Border x:Name="HeroCard" Grid.Row="0" CornerRadius="24" BorderBrush="#3347D9FF" BorderThickness="1" Padding="18">
+      <Border x:Name="HeroCard" Grid.Row="0" CornerRadius="24" BorderBrush="#24FFFFFF" BorderThickness="1" Padding="18">
         <Border.Background>
           <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#FF07111F" Offset="0"/>
-            <GradientStop Color="#FF123A63" Offset="0.58"/>
-            <GradientStop Color="#FF1856A8" Offset="1"/>
+            <GradientStop Color="#FF111113" Offset="0"/>
+            <GradientStop Color="#FF18181B" Offset="0.62"/>
+            <GradientStop Color="#FF202024" Offset="1"/>
           </LinearGradientBrush>
         </Border.Background>
         <Grid>

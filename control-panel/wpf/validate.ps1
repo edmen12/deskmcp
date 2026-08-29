@@ -9,6 +9,9 @@ $exe = Join-Path $PSScriptRoot 'bin\Release\net10.0-windows\DeskMCP.exe'
 $runtime = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\runtime'))
 $captures = @(
     @{ Arg='--capture'; File=(Join-Path $runtime 'validation-panel.png'); Label='XAML_CAPTURE_OK' },
+    @{ Arg='--capture-dark'; File=(Join-Path $runtime 'validation-panel-dark.png'); Label='DARK_CAPTURE_OK' },
+    @{ Arg='--capture-settings'; File=(Join-Path $runtime 'validation-settings.png'); Label='SETTINGS_CAPTURE_OK' },
+    @{ Arg='--capture-settings-dark'; File=(Join-Path $runtime 'validation-settings-dark.png'); Label='SETTINGS_DARK_CAPTURE_OK' },
     @{ Arg='--capture-first-run'; File=(Join-Path $runtime 'validation-first-run-workspace.png'); Label='FIRST_RUN_WORKSPACE_OK' },
     @{ Arg='--capture-first-run-tunnel'; File=(Join-Path $runtime 'validation-first-run-tunnel.png'); Label='FIRST_RUN_TUNNEL_OK' },
     @{ Arg='--capture-first-run-plugin'; File=(Join-Path $runtime 'validation-first-run-plugin.png'); Label='FIRST_RUN_PLUGIN_OK' }
