@@ -122,12 +122,31 @@ Invoke-Native $csc @(
 )
 Require (Test-Path -LiteralPath $SetupExe) 'Setup build output is missing.'
 Write-Output 'STEP=installer-smoke-single-instance'
-$mutexHolder = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -PassThru
-Start-Sleep -Milliseconds 500
-$mutexBlocked = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -Wait -PassThru
-Require ($mutexBlocked.ExitCode -eq 11) ('Second Setup instance was not rejected: ' + $mutexBlocked.ExitCode)
-[void]$mutexHolder.WaitForExit(5000)
-Require ($mutexHolder.HasExited -and $mutexHolder.ExitCode -eq 0) 'Setup mutex holder did not finish cleanly.'
+$mutexProbeRoot = Join-Path $RuntimeRoot ('installer-mutex-probe\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
+$mutexReady = Join-Path $mutexProbeRoot 'ready.txt'
+$mutexRelease = Join-Path $mutexProbeRoot 'release.txt'
+New-Item -ItemType Directory -Force -Path $mutexProbeRoot | Out-Null
+$mutexHolder = Start-Process -FilePath $SetupExe -ArgumentList @('--mutex-test-hold', ('"' + $mutexReady + '"'), ('"' + $mutexRelease + '"')) -PassThru
+$mutexHolderClean = $false
+try {
+    $mutexDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    while (-not (Test-Path -LiteralPath $mutexReady)) {
+        if ($mutexHolder.HasExited) { throw ('Setup mutex holder exited before readiness: ' + $mutexHolder.ExitCode) }
+        if ([DateTime]::UtcNow -ge $mutexDeadline) { throw 'Setup mutex holder did not signal readiness within 15 seconds.' }
+        Start-Sleep -Milliseconds 100
+    }
+    $readyPid = (Get-Content -LiteralPath $mutexReady -Raw).Trim()
+    Require ($readyPid -eq [string]$mutexHolder.Id) ('Setup mutex readiness PID mismatch: ' + $readyPid)
+    $mutexBlocked = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -Wait -PassThru
+    Require ($mutexBlocked.ExitCode -eq 11) ('Second Setup instance was not rejected: ' + $mutexBlocked.ExitCode)
+    [IO.File]::WriteAllText($mutexRelease, 'release', [Text.Encoding]::ASCII)
+    [void]$mutexHolder.WaitForExit(5000)
+    $mutexHolderClean = $mutexHolder.HasExited -and $mutexHolder.ExitCode -eq 0
+} finally {
+    if (-not $mutexHolder.HasExited) { Stop-Process -Id $mutexHolder.Id -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $mutexProbeRoot) { Remove-Item -LiteralPath $mutexProbeRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Require $mutexHolderClean 'Setup mutex holder did not finish cleanly.'
 Write-Output 'INSTALLER_SINGLE_INSTANCE=OK'
 Write-Output 'STEP=installer-smoke-clean'
 if (Test-Path -LiteralPath $SmokeRoot) {

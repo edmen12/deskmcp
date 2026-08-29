@@ -711,7 +711,18 @@ internal static class InstallerProgram
             }
             try
             {
-                if (args.Length > 0 && args[0] == "--mutex-test-hold") { Thread.Sleep(3000); return 0; }
+                if (args.Length > 0 && args[0] == "--mutex-test-hold")
+                {
+                    if (args.Length < 3) return 13;
+                    string readyPath = Path.GetFullPath(args[1]);
+                    string releasePath = Path.GetFullPath(args[2]);
+                    string readyDir = Path.GetDirectoryName(readyPath);
+                    if (!String.IsNullOrEmpty(readyDir)) Directory.CreateDirectory(readyDir);
+                    File.WriteAllText(readyPath, Process.GetCurrentProcess().Id.ToString(), Encoding.ASCII);
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (!File.Exists(releasePath) && DateTime.UtcNow < deadline) Thread.Sleep(50);
+                    return File.Exists(releasePath) ? 0 : 13;
+                }
                 if (args.Length >= 2 && args[0] == "--recover-test")
                 {
                     try { InstallerEngine.RecoverInterruptedInstall(Path.GetFullPath(args[1])); return 0; }
