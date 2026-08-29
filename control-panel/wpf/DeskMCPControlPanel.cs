@@ -260,7 +260,7 @@ internal sealed partial class ControlPanelRuntime
         throw new DirectoryNotFoundException("DeskMCP Gateway runtime was not found. Set DESKTOP_MCP_GATEWAY_ROOT or install the bundled gateway next to the Control Panel.");
     }
 
-    private static string ResolveStateDirectory(string environmentName, string defaultPath)
+    internal static string ResolveStateDirectory(string environmentName, string defaultPath)
     {
         string configured = Environment.GetEnvironmentVariable(environmentName);
         return String.IsNullOrWhiteSpace(configured) ? Path.GetFullPath(defaultPath) : Path.GetFullPath(configured);
@@ -2326,7 +2326,8 @@ internal static class Program
     {
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         string xamlPath = Path.Combine(baseDir, "Panel.xaml");
-        string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP", "logs");
+        string programDataRoot = ControlPanelRuntime.ResolveStateDirectory("DESKTOP_MCP_DATA_ROOT", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP"));
+        string logDir = Path.Combine(programDataRoot, "logs");
         Directory.CreateDirectory(logDir);
         string logPath = Path.Combine(logDir, "control-panel-error.log");
         try

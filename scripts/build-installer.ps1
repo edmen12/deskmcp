@@ -202,23 +202,37 @@ Require (-not (Test-Path -LiteralPath $simBackup)) 'Interrupted recovery left ba
 Require (-not (Test-Path -LiteralPath $simTemp)) 'Interrupted recovery left temp state behind.'
 
 $installerSmokeStateRoot = Join-Path $RuntimeRoot ('installer-smoke-state\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
+$installerSmokeDataRoot = Join-Path $installerSmokeStateRoot 'local'
 $settingsDir = Join-Path $installerSmokeStateRoot 'roaming'
 $settingsPath = Join-Path $settingsDir 'settings.json'
+$previousDataRoot = $env:DESKTOP_MCP_DATA_ROOT
+$previousSettingsDir = $env:DESKTOP_MCP_SETTINGS_DIR
 $panel = $null
 $health = $null
-$env:DESKMCP_TEST_STATE_ROOT = $installerSmokeStateRoot
 try {
-    New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $settingsDir, $installerSmokeDataRoot | Out-Null
     $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
+    $env:DESKTOP_MCP_DATA_ROOT = $installerSmokeDataRoot
+    $env:DESKTOP_MCP_SETTINGS_DIR = $settingsDir
     Write-Output 'INSTALLER_SMOKE_SETTINGS=ISOLATED_TEMPORARY'
 
     Write-Output 'STEP=installer-smoke-runtime'
     $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
     $panel = Start-Process -FilePath $installedPanel -ArgumentList '--startup' -WorkingDirectory $SmokeRoot -PassThru
-    for ($i = 0; $i -lt 90; $i++) {
-        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break }
-        catch { Start-Sleep -Milliseconds 500 }
+    $healthDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    while ([DateTime]::UtcNow -lt $healthDeadline -and $null -eq $health) {
+        if ($panel.HasExited) { Write-Output ('INSTALLER_PANEL_EXIT=' + $panel.ExitCode); break }
+        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 }
+        catch { if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 } }
+    }
+    if ($null -eq $health) {
+        $ownedNodes = @(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {
+            try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($SmokeRoot).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+        })
+        Write-Output ('INSTALLER_SMOKE_NODE_COUNT=' + $ownedNodes.Count)
+        $panelErrorLog = Join-Path $installerSmokeDataRoot 'logs\control-panel-error.log'
+        if (Test-Path -LiteralPath $panelErrorLog) { Write-Output 'INSTALLER_PANEL_ERROR_LOG_BEGIN'; Get-Content -LiteralPath $panelErrorLog -Tail 30; Write-Output 'INSTALLER_PANEL_ERROR_LOG_END' }
     }
     Require ($null -ne $health) 'Installed Gateway did not become healthy within 45 seconds.'
     Require ($health.policy.profile -eq 'read-only') "Unexpected installed profile: $($health.policy.profile)"
@@ -233,7 +247,8 @@ try {
     catch { if ($_.Exception.Message -like 'Gateway remained*') { throw } }
 } finally {
     if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
-    $env:DESKMCP_TEST_STATE_ROOT = $null
+    $env:DESKTOP_MCP_DATA_ROOT = $previousDataRoot
+    $env:DESKTOP_MCP_SETTINGS_DIR = $previousSettingsDir
     if (Test-Path -LiteralPath $installerSmokeStateRoot) { try { [IO.Directory]::Delete($installerSmokeStateRoot, $true) } catch { } }
 }
 

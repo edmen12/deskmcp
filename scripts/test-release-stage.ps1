@@ -28,6 +28,43 @@ try {
 }
 $panel = $null
 $health = $null
+function Get-StageOwnedProcesses([string]$Root) {
+    $prefix = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    return @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+    })
+}
+function Wait-StageOwnedProcessesGone([string]$Root, [int]$Seconds = 15) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        $running = @(Get-StageOwnedProcesses $Root)
+        if ($running.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $details = ($running | ForEach-Object { $_.ProcessName + ':' + $_.Id + ':' + $_.Path }) -join '; '
+    throw ('Stage process cleanup timed out: ' + $details)
+}
+function Invoke-StageRenameLockCheck([string]$Root, [int]$Seconds = 10) {
+    $parent = Split-Path $Root -Parent
+    $lockCheck = Join-Path $parent 'DesktopMCP.lockcheck'
+    if (Test-Path -LiteralPath $lockCheck) { Remove-Item -LiteralPath $lockCheck -Recurse -Force }
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $lastError = $null
+    do {
+        try {
+            Rename-Item -LiteralPath $Root -NewName 'DesktopMCP.lockcheck' -ErrorAction Stop
+            Rename-Item -LiteralPath $lockCheck -NewName 'DesktopMCP' -ErrorAction Stop
+            return
+        } catch {
+            $lastError = $_
+            if ((Test-Path -LiteralPath $lockCheck) -and -not (Test-Path -LiteralPath $Root)) {
+                try { Rename-Item -LiteralPath $lockCheck -NewName 'DesktopMCP' -ErrorAction Stop } catch { }
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw ('Stage rename lockcheck failed after process cleanup: ' + $lastError.Exception.Message)
+}
 try {
     New-Item -ItemType Directory -Force -Path $SettingsDir | Out-Null
     New-Item -ItemType Directory -Force -Path $SmokeDataRoot | Out-Null
@@ -37,10 +74,21 @@ try {
     $env:DESKTOP_MCP_SETTINGS_DIR = $SettingsDir
     Write-Output 'SMOKE_SETTINGS=ISOLATED_TEMPORARY'
     $panel = Start-Process -FilePath $PanelExe -ArgumentList '--startup' -WorkingDirectory $StageRoot -PassThru
-    for ($i = 0; $i -lt 90; $i++) {
-        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break } catch { Start-Sleep -Milliseconds 500 }
+    $healthDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    while ([DateTime]::UtcNow -lt $healthDeadline -and $null -eq $health) {
+        if ($panel.HasExited) { Write-Output ('RELEASE_PANEL_EXIT=' + $panel.ExitCode); break }
+        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 }
+        catch { if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 } }
     }
-    if ($null -eq $health) { throw 'Release-stage Gateway did not become healthy within 45 seconds.' }
+    if ($null -eq $health) {
+        $stageNodeCount = @(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {
+            try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($StageRoot).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+        }).Count
+        Write-Output ('RELEASE_SMOKE_NODE_COUNT_ON_FAILURE=' + $stageNodeCount)
+        $panelErrorLog = Join-Path $SmokeDataRoot 'logs\control-panel-error.log'
+        if (Test-Path -LiteralPath $panelErrorLog) { Write-Output 'RELEASE_PANEL_ERROR_LOG_BEGIN'; Get-Content -LiteralPath $panelErrorLog -Tail 30; Write-Output 'RELEASE_PANEL_ERROR_LOG_END' }
+        throw 'Release-stage Gateway did not become healthy within 45 seconds.'
+    }
     if ($health.policy.profile -ne 'read-only') { throw "Unexpected profile: $($health.policy.profile)" }
     if ($health.version -ne $Version) { throw "Unexpected Gateway version: $($health.version); expected $Version" }
     $targetNode = [IO.Path]::GetFullPath($NodeExe)
@@ -77,26 +125,28 @@ try {
     Write-Output 'TOOLS=13'
     Write-Output 'SINGLE_INSTANCE=OK'
 } finally {
-    if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
-    if ($null -ne $health) {
-        Push-Location $GatewayRoot
-        try { & $NodeExe 'dist\src\stop.js' 2>$null | Out-Null } catch { } finally { Pop-Location }
+    try {
+        if ($panel -and -not $panel.HasExited) {
+            Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue
+            [void]$panel.WaitForExit(10000)
+        }
+        if ((Test-Path -LiteralPath $NodeExe) -and (Test-Path -LiteralPath (Join-Path $GatewayRoot 'dist\src\stop.js'))) {
+            Push-Location $GatewayRoot
+            try { & $NodeExe 'dist\src\stop.js' 2>$null | Out-Null } catch { } finally { Pop-Location }
+        }
+        Wait-StageOwnedProcessesGone $StageRoot 15
+        if (Test-Path -LiteralPath $SmokeFile) { Remove-Item -LiteralPath $SmokeFile -Force }
+    } finally {
+        $env:DESKTOP_MCP_DATA_ROOT = $PreviousDataRoot
+        $env:DESKTOP_MCP_SETTINGS_DIR = $PreviousSettingsDir
+        if (Test-Path -LiteralPath $SmokeStateRoot) { Remove-Item -LiteralPath $SmokeStateRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    Start-Sleep -Seconds 2
-    if (Test-Path -LiteralPath $SmokeFile) { Remove-Item -LiteralPath $SmokeFile -Force }
-    $env:DESKTOP_MCP_DATA_ROOT = $PreviousDataRoot
-    $env:DESKTOP_MCP_SETTINGS_DIR = $PreviousSettingsDir
-    if (Test-Path -LiteralPath $SmokeStateRoot) { Remove-Item -LiteralPath $SmokeStateRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 $left = @()
 foreach ($p in Get-Process -Name node -ErrorAction SilentlyContinue) {
     try { if ($p.Path -and [IO.Path]::GetFullPath($p.Path) -eq [IO.Path]::GetFullPath($NodeExe)) { $left += $p } } catch { }
 }
 if ($left.Count -ne 0) { throw "Stage Node cleanup failed; remaining=$($left.Count)." }
-$stageParent = Split-Path $StageRoot -Parent
-$lockCheck = Join-Path $stageParent 'DesktopMCP.lockcheck'
-if (Test-Path -LiteralPath $lockCheck) { Remove-Item -LiteralPath $lockCheck -Recurse -Force }
-Rename-Item -LiteralPath $StageRoot -NewName 'DesktopMCP.lockcheck'
-Rename-Item -LiteralPath $lockCheck -NewName 'DesktopMCP'
 Write-Output 'STAGE_NODE_CLEANUP=OK'
+Invoke-StageRenameLockCheck $StageRoot 10
 Write-Output 'STAGE_RENAME_LOCKCHECK=OK'
