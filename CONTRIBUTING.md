@@ -13,6 +13,13 @@ Keep the security boundary intact:
 - Do not weaken sensitive-path denial or search pre-exclusion without an explicit security review.
 - Do not persist Full Control.
 
+## Development prerequisites
+
+- Windows x64 for the WPF Control Panel and release pipeline.
+- Node.js 24.x for Gateway development.
+- .NET 10 SDK for the Control Panel. The repository `global.json` defines the expected SDK line.
+- Install dependencies with `npm.cmd ci --ignore-scripts`; do not enable lifecycle scripts casually.
+
 ## Local validation
 
 Run:
@@ -21,6 +28,8 @@ Run:
 npm.cmd test
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\control-panel\wpf\validate.ps1
 ```
+
+`validate.ps1` includes WPF UI capture checks and should be run from an interactive Windows desktop. GitHub Actions intentionally uses a headless-safe `dotnet build` instead.
 
 A release-affecting change should also pass:
 

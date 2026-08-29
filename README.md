@@ -166,8 +166,13 @@ Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 - The open-source Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until Authenticode signing is added.
 - Some transitive npm dependencies emit deprecation warnings even though the current production `npm audit` reports zero vulnerabilities.
 
+## Support
+
+Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducible bugs, feature requests, and private security reporting, see [`SUPPORT.md`](SUPPORT.md). Never post Tunnel runtime keys, API keys, or private file contents in a public issue.
+
 ## Project files
 
+- [`SUPPORT.md`](SUPPORT.md) — support channels and reporting guidance
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting and security boundaries
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow
 - [`CHANGELOG.md`](CHANGELOG.md) — project changes

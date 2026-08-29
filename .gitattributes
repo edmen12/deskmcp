@@ -6,6 +6,8 @@
 *.mjs text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+.editorconfig text eol=lf
+.github/CODEOWNERS text eol=lf
 
 *.cmd text eol=crlf
 *.bat text eol=crlf
