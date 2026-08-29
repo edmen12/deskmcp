@@ -12,7 +12,7 @@
 
 # DeskMCP
 
-**DeskMCP is an open-source local desktop bridge for ChatGPT.** It runs a policy gateway on your Windows machine, exposes a stable MCP tool surface, and connects through an OpenAI Tunnel while keeping the local MCP endpoint bound to `127.0.0.1`.
+**DeskMCP is an open-source Windows MCP policy gateway that gives ChatGPT controlled access to local files and terminal sessions.** It runs a policy gateway on your Windows machine, exposes a stable MCP tool surface, and connects through an OpenAI Tunnel while keeping the local MCP endpoint bound to `127.0.0.1`.
 
 The default profile is **Read-only**. Filesystem access is scoped to a workspace you choose locally, sensitive paths are excluded before search, and elevated process capabilities are session-owned rather than arbitrary PID control.
 
