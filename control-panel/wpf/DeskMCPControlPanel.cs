@@ -475,6 +475,9 @@ internal sealed class ControlPanelRuntime
             Find<TextBlock>("ScopeLabel").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("ScopeText").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("VersionText").Foreground = BrushFrom(dark ? "#8E8E95" : "#A1A1AA");
+            Find<Border>("LocalOnlyPill").Background = BrushFrom(dark ? "#FF15351F" : "#FFEDF8EF");
+            Find<Border>("LocalOnlyPill").BorderBrush = BrushFrom(dark ? "#FF24532F" : "#142E7D32");
+            Find<TextBlock>("LocalOnlyText").Foreground = BrushFrom(dark ? "#FF8FE6A8" : "#FF2E7D32");
             Find<Border>("SettingsCard").Background = Brushes.Transparent;
             Find<Border>("SettingsCard").BorderBrush = Brushes.Transparent;
             Find<TextBlock>("SettingsTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
@@ -969,28 +972,36 @@ internal sealed class ControlPanelRuntime
         {
             liveDot.Fill = BrushFrom("#34C759");
             liveText.Text = "Live";
+            liveText.Foreground = BrushFrom("#FFD9FFE3");
             livePill.Background = BrushFrom("#FF214A30");
+            livePill.BorderBrush = BrushFrom("#FF2B5C3C");
             SetLivePulse(window.IsVisible);
         }
         else if (health != null)
         {
             liveDot.Fill = BrushFrom("#FF9F0A");
             liveText.Text = "Local";
+            liveText.Foreground = BrushFrom("#FFFFD9A1");
             livePill.Background = BrushFrom("#FF4A3518");
+            livePill.BorderBrush = BrushFrom("#FF6A4B20");
             SetLivePulse(false);
         }
         else if (gatewayStarting)
         {
             liveDot.Fill = BrushFrom("#FF9F0A");
             liveText.Text = "Starting";
+            liveText.Foreground = BrushFrom("#FFFFD9A1");
             livePill.Background = BrushFrom("#FF4A3518");
+            livePill.BorderBrush = BrushFrom("#FF6A4B20");
             SetLivePulse(false);
         }
         else
         {
             liveDot.Fill = BrushFrom("#8E8E93");
             liveText.Text = "Offline";
+            liveText.Foreground = BrushFrom("#FFD1D1D6");
             livePill.Background = BrushFrom("#FF3A3A3C");
+            livePill.BorderBrush = BrushFrom("#FF4A4A4F");
             SetLivePulse(false);
         }
 
@@ -1982,6 +1993,9 @@ internal sealed class ControlPanelRuntime
         ((TextBlock)preview.FindName("ScopeLabel")).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
         ((TextBlock)preview.FindName("ScopeText")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
         ((TextBlock)preview.FindName("VersionText")).Foreground = BrushFrom(dark ? "#8E8E95" : "#A1A1AA");
+        ((Border)preview.FindName("LocalOnlyPill")).Background = BrushFrom(dark ? "#FF15351F" : "#FFEDF8EF");
+        ((Border)preview.FindName("LocalOnlyPill")).BorderBrush = BrushFrom(dark ? "#FF24532F" : "#142E7D32");
+        ((TextBlock)preview.FindName("LocalOnlyText")).Foreground = BrushFrom(dark ? "#FF8FE6A8" : "#FF2E7D32");
         ((TextBlock)preview.FindName("SettingsTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
         foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "TunnelSettingsLabel", "TunnelIdValue" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
