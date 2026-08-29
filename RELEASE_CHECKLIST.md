@@ -52,7 +52,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 ## Documented limitations — not blockers for a 0.9.0 win-x64 release
 
 - [ ] ARM64 build is not provided. Label the release **Windows x64**.
-- [ ] Automatic updater is not implemented. Publish upgrades as a new signed installer.
+- [ ] Automatic updater is not implemented. Publish upgrades as a new installer; add Authenticode signing when a production certificate is available.
 - [ ] Upstream deprecated npm dependencies remain in Desktop Commander / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
 
 ## Current validated artifact
@@ -61,6 +61,6 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 SHA-256 at the latest completed installer smoke:
 
-`1a4b604f564e71fd8951b184508feb3986e8ac0ddbb1bd84996f14ec39a99d04`
+`1c8601e9a96a2ac8de94b4479622716c72bdaeedd02a04812dda4b9f840090ab`
 
-Rebuilds intentionally change the hash; publish only the hash produced by the final signed build.
+Rebuilds intentionally change the hash; publish only the hash produced by the final release build (or the final signed build when signing is used).
