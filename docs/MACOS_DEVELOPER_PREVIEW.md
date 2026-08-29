@@ -13,6 +13,12 @@ This build is for developers and early testers using Apple Silicon Macs.
 
 This is **not** represented as a production-notarized macOS release.
 
+## Download from GitHub
+
+Open the [macOS Developer Preview workflow](https://github.com/edmen12/deskmcp/actions/workflows/macos-developer-preview.yml), choose the latest successful run, and download the `DeskMCP-macOS-ARM64-Developer-Preview-<commit>` artifact from the **Artifacts** section.
+
+The workflow artifact has a limited retention period, so use the latest successful run rather than bookmarking an individual artifact ID.
+
 ## Verify the download
 
 The artifact includes `SHA256SUMS-macos-arm64-unsigned.txt` beside the DeskMCP ZIP. Verify it before opening:
