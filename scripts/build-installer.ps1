@@ -164,26 +164,45 @@ Require (Test-Path -LiteralPath $recoveryMarker) 'Interrupted recovery did not r
 Require (-not (Test-Path -LiteralPath $simBackup)) 'Interrupted recovery left backup state behind.'
 Require (-not (Test-Path -LiteralPath $simTemp)) 'Interrupted recovery left temp state behind.'
 
-Write-Output 'STEP=installer-smoke-runtime'
-$installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
-$panel = Start-Process -FilePath $installedPanel -ArgumentList '--startup' -WorkingDirectory $SmokeRoot -PassThru
+$settingsDir = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP'
+$settingsPath = Join-Path $settingsDir 'settings.json'
+$createdInstallerSmokeSettings = $false
+$panel = $null
 $health = $null
-for ($i = 0; $i -lt 90; $i++) {
-    try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break }
-    catch { Start-Sleep -Milliseconds 500 }
-}
-Require ($null -ne $health) 'Installed Gateway did not become healthy within 45 seconds.'
-Require ($health.policy.profile -eq 'read-only') "Unexpected installed profile: $($health.policy.profile)"
-Require ($health.version -eq $version) "Unexpected installed Gateway version: $($health.version); expected $version"
+try {
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
+        $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
+        $createdInstallerSmokeSettings = $true
+        Write-Output 'INSTALLER_SMOKE_SETTINGS=TEMPORARY_FRESH_USER'
+    } else {
+        Write-Output 'INSTALLER_SMOKE_SETTINGS=EXISTING_PRESERVED'
+    }
 
-Write-Output 'STEP=installer-smoke-uninstall'
-$installedUninstaller = Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
-$uninstall = Start-Process -FilePath $installedUninstaller -ArgumentList @('--test-root', ('"' + $SmokeRoot + '"')) -Wait -PassThru
-Require ($uninstall.ExitCode -eq 0) "Smoke uninstall failed: $($uninstall.ExitCode)"
-Wait-PathGone $SmokeRoot 20
-try { Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null; throw 'Gateway remained online after uninstall.' }
-catch { if ($_.Exception.Message -like 'Gateway remained*') { throw }
- }
+    Write-Output 'STEP=installer-smoke-runtime'
+    $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
+    $panel = Start-Process -FilePath $installedPanel -ArgumentList '--startup' -WorkingDirectory $SmokeRoot -PassThru
+    for ($i = 0; $i -lt 90; $i++) {
+        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    Require ($null -ne $health) 'Installed Gateway did not become healthy within 45 seconds.'
+    Require ($health.policy.profile -eq 'read-only') "Unexpected installed profile: $($health.policy.profile)"
+    Require ($health.version -eq $version) "Unexpected installed Gateway version: $($health.version); expected $version"
+
+    Write-Output 'STEP=installer-smoke-uninstall'
+    $installedUninstaller = Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
+    $uninstall = Start-Process -FilePath $installedUninstaller -ArgumentList @('--test-root', ('"' + $SmokeRoot + '"')) -Wait -PassThru
+    Require ($uninstall.ExitCode -eq 0) "Smoke uninstall failed: $($uninstall.ExitCode)"
+    Wait-PathGone $SmokeRoot 20
+    try { Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null; throw 'Gateway remained online after uninstall.' }
+    catch { if ($_.Exception.Message -like 'Gateway remained*') { throw } }
+} finally {
+    if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
+    if ($createdInstallerSmokeSettings -and (Test-Path -LiteralPath $settingsPath)) { Remove-Item -LiteralPath $settingsPath -Force }
+}
+
 $setupItem = Get-Item -LiteralPath $SetupExe
 $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupExe).Hash.ToLowerInvariant()
 $payloadItem = Get-Item -LiteralPath $PayloadZip

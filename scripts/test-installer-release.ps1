@@ -54,25 +54,44 @@ Require ($recover.ExitCode -eq 0) "Recovery exit=$($recover.ExitCode)"
 Require (Test-Path -LiteralPath $recoveryMarker) 'Interrupted upgrade backup was not restored.'
 Require (-not(Test-Path -LiteralPath $simBackup)) 'Recovery backup directory remained.'
 Require (-not(Test-Path -LiteralPath $simTemp)) 'Recovery temp directory remained.'
-Write-Output 'TEST=runtime'
-$panelPath=Join-Path $SmokeRoot 'DeskMCP.exe'
-$panel=Start-Process -FilePath $panelPath -ArgumentList '--startup' -WorkingDirectory $SmokeRoot -PassThru
-$health=$null
-for($i=0;$i -lt 90;$i++){ try{$health=Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break}catch{Start-Sleep -Milliseconds 500} }
-Require ($null -ne $health) 'Installed Gateway did not become healthy.'
-Require ($health.version -eq $Version) "Version=$($health.version); expected=$Version"
-Require ($health.policy.profile -eq 'read-only') "Profile=$($health.policy.profile)"
-$nodePath=[IO.Path]::GetFullPath((Join-Path $SmokeRoot 'node\node.exe'))
-$nodes=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
-Require ($nodes.Count -eq 2) "Installed node count=$($nodes.Count)"
-Write-Output 'TEST=uninstall'
-$uninstaller=Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
-$x=Start-Process -FilePath $uninstaller -ArgumentList @('--test-root',('"'+$SmokeRoot+'"')) -Wait -PassThru
-Require ($x.ExitCode -eq 0) "Uninstall exit=$($x.ExitCode)"
-Wait-Gone $SmokeRoot
-$left=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
-Require ($left.Count -eq 0) "Installed node cleanup left=$($left.Count)"
-try{ Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null; throw 'Gateway remained online.' }catch{ if($_.Exception.Message -like 'Gateway remained*'){ throw } }
+$settingsDir = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP'
+$settingsPath = Join-Path $settingsDir 'settings.json'
+$createdInstallerSmokeSettings = $false
+$panel = $null
+$health = $null
+try {
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
+        $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
+        $createdInstallerSmokeSettings = $true
+        Write-Output 'INSTALLER_SMOKE_SETTINGS=TEMPORARY_FRESH_USER'
+    } else {
+        Write-Output 'INSTALLER_SMOKE_SETTINGS=EXISTING_PRESERVED'
+    }
+
+    Write-Output 'TEST=runtime'
+    $panelPath=Join-Path $SmokeRoot 'DeskMCP.exe'
+    $panel=Start-Process -FilePath $panelPath -ArgumentList '--startup' -WorkingDirectory $SmokeRoot -PassThru
+    for($i=0;$i -lt 90;$i++){ try{$health=Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1; break}catch{Start-Sleep -Milliseconds 500} }
+    Require ($null -ne $health) 'Installed Gateway did not become healthy.'
+    Require ($health.version -eq $Version) "Version=$($health.version); expected=$Version"
+    Require ($health.policy.profile -eq 'read-only') "Profile=$($health.policy.profile)"
+    $nodePath=[IO.Path]::GetFullPath((Join-Path $SmokeRoot 'node\node.exe'))
+    $nodes=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
+    Require ($nodes.Count -eq 2) "Installed node count=$($nodes.Count)"
+    Write-Output 'TEST=uninstall'
+    $uninstaller=Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
+    $x=Start-Process -FilePath $uninstaller -ArgumentList @('--test-root',('"'+$SmokeRoot+'"')) -Wait -PassThru
+    Require ($x.ExitCode -eq 0) "Uninstall exit=$($x.ExitCode)"
+    Wait-Gone $SmokeRoot
+    $left=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
+    Require ($left.Count -eq 0) "Installed node cleanup left=$($left.Count)"
+    try{ Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null; throw 'Gateway remained online.' }catch{ if($_.Exception.Message -like 'Gateway remained*'){ throw } }
+} finally {
+    if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
+    if ($createdInstallerSmokeSettings -and (Test-Path -LiteralPath $settingsPath)) { Remove-Item -LiteralPath $settingsPath -Force }
+}
 $setupHash=(Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash.ToLowerInvariant()
 Write-Output 'INSTALLER_RELEASE_TEST_OK'
 Write-Output ('TARGET='+$Target)
