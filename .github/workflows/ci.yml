@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, hardening-0.9.1-candidate]
+    branches: [main]
   pull_request:
     branches: [main]
 

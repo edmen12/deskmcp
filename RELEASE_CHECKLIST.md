@@ -31,12 +31,13 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] Repository secret hygiene scan: 0 findings.
 - [x] Release manifest and SHA256SUMS match the final Setup binary.
 - [x] Source portability scan: no hard-coded local project path, TODO/FIXME/HACK/XXX, or old 0.8.0 version markers.
-## Candidate hardening pending hosted CI confirmation
+## Candidate hardening hosted CI validation
 
 - [x] GitHub Actions third-party steps are pinned to full 40-character commit SHAs.
 - [x] Ordinary `CI` and `macOS Developer Preview` runs cancel superseded runs for the same ref; the manual unsigned release-candidate workflow is intentionally not auto-cancelled.
-- [ ] The new `main` Windows x64 gate passes the complete installer smoke plus release-readiness check on a GitHub-hosted x64 runner.
-- [ ] The new macOS supervisor policy tests and release stage pass on the GitHub-hosted Apple Silicon runner.
+- [x] The new `main` Windows x64 gate passes the complete installer smoke plus release-readiness check on a GitHub-hosted x64 runner.
+- [x] The new macOS supervisor policy tests and release stage pass on the GitHub-hosted Apple Silicon runner.
+- [x] Native Windows ARM64 complete installer smoke, owned-process teardown/rename lockcheck, self-tests, release readiness and secret hygiene pass on the GitHub-hosted ARM64 runner.
 ## Third-party licensing closed
 
 - [x] Actual win-x64 release inventory generated from installed production tree: 501 packages.
