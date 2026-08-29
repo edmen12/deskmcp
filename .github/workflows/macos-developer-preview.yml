@@ -1,0 +1,71 @@
+name: macOS Developer Preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/macos-developer-preview.yml'
+      - 'control-panel/macos/**'
+      - 'scripts/build-macos-stage.sh'
+      - 'scripts/generate-third-party-notices.mjs'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.npmrc'
+
+permissions:
+  contents: read
+
+jobs:
+  build-preview:
+    name: Build Apple Silicon developer preview
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify native Apple Silicon runner
+        shell: bash
+        run: |
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Gateway and Desktop Commander tests
+        run: npm test
+
+      - name: Build developer preview
+        shell: bash
+        run: bash scripts/build-macos-stage.sh
+      - name: Verify preview contract
+        shell: bash
+        run: |
+          test "$(find runtime/release -maxdepth 1 -name 'DeskMCP-*-macos-arm64-unsigned.zip' -type f | wc -l | tr -d ' ')" = "1"
+          test -f runtime/release/SHA256SUMS-macos-arm64-unsigned.txt
+          node -e "const x=require('./runtime/release-stage/darwin-arm64/release-target.json'); if(x.distributionReady!==false||x.notarized!==false||x.signing!=='ad-hoc-test-only') process.exit(1)"
+
+      - name: Upload developer preview
+        id: upload-preview
+        uses: actions/upload-artifact@v7
+        with:
+          name: DeskMCP-macOS-ARM64-Developer-Preview-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            runtime/release/DeskMCP-*-macos-arm64-unsigned.zip
+            runtime/release/SHA256SUMS-macos-arm64-unsigned.txt
+            docs/MACOS_DEVELOPER_PREVIEW.md
+
+      - name: Report artifact digest
+        shell: bash
+        run: echo "ARTIFACT_DIGEST=${{ steps.upload-preview.outputs.digest }}"
