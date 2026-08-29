@@ -23,4 +23,7 @@ Do not expose port `8765` directly to a LAN or the public Internet.
 
 Do not post exploitable security issues, API keys, tokens, personal files, or proof-of-concept secrets in a public issue.
 
-For a public GitHub release, enable **Private vulnerability reporting / Security Advisories** and use that channel for security reports. A dedicated security contact should be added before the repository is announced publicly.
+Use GitHub **Private vulnerability reporting** for security issues:
+https://github.com/edmen12/deskmcp/security/advisories/new
+
+This keeps the report private while it is triaged and fixed. Public Issues remain appropriate for non-sensitive bugs and feature requests.

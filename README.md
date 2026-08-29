@@ -103,9 +103,12 @@ The schemas stay discoverable across profiles so the remote connection remains s
 - Allowed filesystem access is restricted to the locally selected Workspace.
 - Lexical and canonical path checks block symlink/junction escapes.
 - Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default.
-- Search injects sensitive-path exclusions **before** Desktop Commander/ripgrep reads candidate files.- Writes use read-before-write observations and reject stale changes.
+- Search injects sensitive-path exclusions **before** Desktop Commander/ripgrep reads candidate files.
+- Writes use read-before-write observations and reject stale changes.
 - Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control.
 - Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, or real process PIDs.
+
+Security reports should use [GitHub Private vulnerability reporting](https://github.com/edmen12/deskmcp/security/advisories/new), not a public issue.
 
 User data lives under:
 
