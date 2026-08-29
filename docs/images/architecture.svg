@@ -1,1 +1,15 @@
-²ø1šYì
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="DeskMCP architecture and security boundary">
+  <rect x="1" y="1" width="1198" height="318" rx="24" fill="#07111F" stroke="#1E334B"/>
+  <text x="54" y="58" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700">Architecture</text>
+  <text x="54" y="88" fill="#7F95AA" font-family="Segoe UI, Arial, sans-serif" font-size="16">Remote transport outside; policy enforcement stays local.</text>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <rect x="55" y="132" width="215" height="105" rx="18" fill="#0D1828" stroke="#2563EB" stroke-width="2"/><text x="162" y="172" text-anchor="middle" fill="#EDF9FD" font-size="22" font-weight="700">ChatGPT</text><text x="162" y="202" text-anchor="middle" fill="#7F95AA" font-size="15">Remote client</text>
+    <rect x="337" y="132" width="215" height="105" rx="18" fill="#0D1828" stroke="#22B8FF" stroke-width="2"/><text x="444" y="172" text-anchor="middle" fill="#EDF9FD" font-size="22" font-weight="700">OpenAI Tunnel</text><text x="444" y="202" text-anchor="middle" fill="#7F95AA" font-size="15">Encrypted transport</text>
+    <rect x="619" y="120" width="250" height="129" rx="18" fill="#10263A" stroke="#2DE0D8" stroke-width="3"/><text x="744" y="163" text-anchor="middle" fill="#FFFFFF" font-size="22" font-weight="700">DeskMCP Gateway</text><text x="744" y="194" text-anchor="middle" fill="#2DE0D8" font-size="15" font-weight="600">127.0.0.1 Â· local policy</text><text x="744" y="222" text-anchor="middle" fill="#7F95AA" font-size="14">Workspace + permission checks</text>
+    <rect x="936" y="132" width="210" height="105" rx="18" fill="#0D1828" stroke="#44627D" stroke-width="2"/><text x="1041" y="172" text-anchor="middle" fill="#EDF9FD" font-size="20" font-weight="700">Desktop Commander</text><text x="1041" y="202" text-anchor="middle" fill="#7F95AA" font-size="15">Selected workspace</text>
+  </g>
+  <path d="M270 184H327M552 184H609M869 184H926" stroke="#627C94" stroke-width="3" stroke-linecap="round"/>
+  <path d="M320 178l10 6-10 6M602 178l10 6-10 6M919 178l10 6-10 6" fill="none" stroke="#627C94" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="600" y="265" width="289" height="34" rx="17" fill="#0B2232" stroke="#21425C"/>
+  <text x="744" y="287" text-anchor="middle" fill="#34C759" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600">SECURITY BOUNDARY: LOCAL MACHINE</text>
+</svg>

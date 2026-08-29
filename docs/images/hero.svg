@@ -1,1 +1,24 @@
-²ø1šYì
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-label="DeskMCP â€” Your desktop. Connected to AI.">
+  <defs>
+    <linearGradient id="g" x1="150" y1="80" x2="430" y2="290" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DE0D8"/><stop offset="0.52" stop-color="#22B8FF"/><stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111F"/><stop offset="1" stop-color="#0D1828"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="1198" height="358" rx="28" fill="url(#bg)" stroke="#1E334B"/>
+  <circle cx="188" cy="180" r="92" fill="#0B2232" stroke="#173B55" stroke-width="2"/>
+  <path d="M142 224V139a12 12 0 0 1 12-12h24l10 20 10-20h24a12 12 0 0 1 12 12v85" fill="none" stroke="url(#g)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M188 149v66" stroke="#EDF9FD" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="188" cy="229" r="10" fill="#2DE0D8"/>
+  <text x="330" y="142" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif" font-size="58" font-weight="700">DeskMCP</text>
+  <text x="330" y="194" fill="#B9C9D9" font-family="Segoe UI, Arial, sans-serif" font-size="28">Your desktop. Connected to AI.</text>
+  <text x="330" y="244" fill="#7F95AA" font-family="Segoe UI, Arial, sans-serif" font-size="20">Open-source local desktop bridge for ChatGPT on Windows.</text>
+  <rect x="330" y="276" width="160" height="38" rx="19" fill="#10263A" stroke="#21425C"/>
+  <text x="410" y="301" text-anchor="middle" fill="#2DE0D8" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">LOCAL-FIRST</text>
+  <rect x="505" y="276" width="175" height="38" rx="19" fill="#10263A" stroke="#21425C"/>
+  <text x="592" y="301" text-anchor="middle" fill="#22B8FF" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">SECURITY-FIRST</text>
+  <rect x="695" y="276" width="150" height="38" rx="19" fill="#10263A" stroke="#21425C"/>
+  <text x="770" y="301" text-anchor="middle" fill="#8CB8FF" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">13 MCP TOOLS</text>
+</svg>

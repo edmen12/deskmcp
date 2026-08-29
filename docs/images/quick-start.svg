@@ -1,1 +1,16 @@
-²ø1šYì
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="DeskMCP quick start">
+  <rect x="1" y="1" width="1198" height="298" rx="24" fill="#07111F" stroke="#1E334B"/>
+  <text x="54" y="62" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700">Quick start</text>
+  <text x="54" y="92" fill="#7F95AA" font-family="Segoe UI, Arial, sans-serif" font-size="16">Four steps from installer to a connected ChatGPT desktop bridge.</text>
+  <path d="M185 180H1015" stroke="#21425C" stroke-width="4" stroke-linecap="round"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <circle cx="185" cy="180" r="35" fill="#10263A" stroke="#2DE0D8" stroke-width="3"/><text x="185" y="188" text-anchor="middle" fill="#2DE0D8" font-size="23" font-weight="700">1</text>
+    <text x="185" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Install DeskMCP</text><text x="185" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Run the Windows Setup</text>
+    <circle cx="462" cy="180" r="35" fill="#10263A" stroke="#22B8FF" stroke-width="3"/><text x="462" y="188" text-anchor="middle" fill="#22B8FF" font-size="23" font-weight="700">2</text>
+    <text x="462" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Choose Workspace</text><text x="462" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Scope local file access</text>
+    <circle cx="738" cy="180" r="35" fill="#10263A" stroke="#3A8CFF" stroke-width="3"/><text x="738" y="188" text-anchor="middle" fill="#8CB8FF" font-size="23" font-weight="700">3</text>
+    <text x="738" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Connect Tunnel</text><text x="738" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Paste Tunnel ID + API key</text>
+    <circle cx="1015" cy="180" r="35" fill="#10263A" stroke="#34C759" stroke-width="3"/><text x="1015" y="188" text-anchor="middle" fill="#34C759" font-size="23" font-weight="700">4</text>
+    <text x="1015" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Scan tools</text><text x="1015" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Expected: 13 tools</text>
+  </g>
+</svg>
