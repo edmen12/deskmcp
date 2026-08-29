@@ -161,9 +161,9 @@ Get-FileHash .\runtime\release\DeskMCP-Setup-<version>.exe -Algorithm SHA256
 Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 ## Current limitations
 
-- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging is implemented on `main` and is being validated before a public ARM64 release.
-- A native macOS ARM64 menu-bar client and release stage are implemented on `main`, but current macOS artifacts are ad-hoc-signed test bundles only. Public macOS distribution still requires Developer ID signing and notarization.
-- Settings can perform a user-initiated GitHub Release update check. Automatic installer execution remains gated on an immutable release plus valid pinned-publisher Authenticode; manual installer upgrades remain available.
+- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging and full install/upgrade/runtime/uninstall validation now pass on GitHub's Windows ARM64 runner; the first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
+- A native macOS ARM64 menu-bar client and release stage pass on Apple Silicon CI, but current macOS artifacts are ad-hoc-signed test bundles only. Public macOS distribution still requires Developer ID signing and notarization.
+- Settings now implement the user-controlled safe-update flow through download, local SHA-256/size verification, WinVerifyTrust, compiled publisher-pin checking, explicit install, and post-install version/profile verification. Current builds keep automatic execution disabled because no production Authenticode publisher pin is compiled in; manual installer upgrades remain available.
 - The open-source Windows Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until a release signing identity is configured.
 - Some transitive npm dependencies emit deprecation warnings even though the current production `npm audit` reports zero vulnerabilities.
 
@@ -172,9 +172,9 @@ Compare the result with `SHA256SUMS.txt` before running an unsigned build.
 Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 
 - [Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5)
-- 🚧 **#6 — macOS native client and packaging** — SwiftUI menu bar, Keychain, Login Item, Darwin ARM64 runtime stage; Developer ID signing/notarization and native CI closure remain
-- 🚧 [#7 — Windows ARM64 packaging](https://github.com/edmen12/deskmcp/issues/7) — target-aware runtime/installer pipeline and native ARM64 CI validation
-- 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — trust contract, schema-v2 manifest gates, rollback/recovery, architecture-aware checker UI; automatic execution remains Authenticode/publisher-pin gated
+- 🚧 **#6 — macOS native client and packaging** — SwiftUI menu bar, Keychain, Login Item, Darwin ARM64 runtime stage and Apple Silicon CI pass; Developer ID signing/notarization and a public macOS artifact remain
+- ✅ **#7 — Windows ARM64 packaging and validation** — target-aware runtime/installer pipeline and native Windows ARM64 full-chain CI pass; first public ARM64 artifact is deferred to a future release so v0.9.1 stays unchanged
+- 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — download/verify/install/post-install security-hold path is implemented; production Authenticode credential, compiled publisher pin, immutable future release and signed end-to-end execution remain
 - ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
 
 ## Support

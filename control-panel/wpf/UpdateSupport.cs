@@ -40,13 +40,42 @@ internal sealed partial class ControlPanelRuntime
     {
         if (updateCheckInFlight) return;
         Button button = Find<Button>("UpdateButton");
-        if ((string)button.Content == "View Release" && !String.IsNullOrWhiteSpace(lastUpdateReleaseUrl))
+        string action = button.Content as string;
+        if (action == "View Release" && !String.IsNullOrWhiteSpace(lastUpdateReleaseUrl))
         {
             OpenPath(lastUpdateReleaseUrl);
             return;
         }
+        if (action == "Download & Verify" && lastUpdateCandidate != null)
+        {
+            await HandleVerifiedUpdateDownloadAsync(button, Find<TextBlock>("UpdateStatus"));
+            return;
+        }
+        if (action == "Install Update" && lastUpdateCandidate != null && !String.IsNullOrWhiteSpace(verifiedUpdatePath))
+        {
+            try
+            {
+                InstallVerifiedUpdate();
+            }
+            catch (Exception ex)
+            {
+                TextBlock installStatus = Find<TextBlock>("UpdateStatus");
+                installStatus.Text = "Could not start update · " + ex.Message;
+                button.Content = String.IsNullOrWhiteSpace(verifiedUpdatePath) ? "Check Again" : "Install Update";
+                ShowToast("Update was not started: " + ex.Message, true);
+                UpdateStatus();
+            }
+            return;
+        }
+        if (action == "Restore Safe Profile")
+        {
+            RestorePendingSafeProfile();
+            return;
+        }
 
         TextBlock status = Find<TextBlock>("UpdateStatus");
+        lastUpdateCandidate = null;
+        verifiedUpdatePath = null;
         updateCheckInFlight = true;
         button.IsEnabled = false;
         button.Content = "Checking…";
@@ -117,8 +146,15 @@ internal sealed partial class ControlPanelRuntime
         }
         if (result.kind == "verified-download-allowed")
         {
-            status.Text = version + " available · verified metadata; signed auto-install remains gated";
-            button.Content = "View Release";
+            lastUpdateCandidate = result;
+            if (!HasPinnedUpdatePublisher())
+            {
+                status.Text = version + " available · metadata verified; automatic install disabled until a publisher pin is compiled in";
+                button.Content = "View Release";
+                return;
+            }
+            status.Text = version + " available · metadata verified; local signature verification required";
+            button.Content = "Download & Verify";
             return;
         }
         if (result.kind == "manual-only")

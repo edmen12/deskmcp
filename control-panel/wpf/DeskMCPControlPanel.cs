@@ -173,6 +173,7 @@ internal sealed partial class ControlPanelRuntime
         themeIndicator = Find<Border>("ThemeIndicator");
         themeIndicatorTransform = (TranslateTransform)themeIndicator.RenderTransform;
         LoadSettings();
+        InitializePendingUpdateVerification();
         if (!IsValidTunnelId(tunnelId))
         {
             string migratedTunnelId = TryLoadTunnelIdFromProfile();
@@ -1009,6 +1010,7 @@ internal sealed partial class ControlPanelRuntime
 
         EnsureManagedServices(health, tunnelReady);
         UpdateTunnelSettingsUi();
+        ApplyUpdateSecurityHoldUi();
 
         string profileLabel = selectedProfile == "read-only" ? "Read" :
             selectedProfile == "full-control" ? "Full" : "Write";
@@ -1057,6 +1059,7 @@ internal sealed partial class ControlPanelRuntime
 
     private void SelectProfile(string profile)
     {
+        if (updateSecurityHold) { ShowToast("Resolve the update security hold before changing permissions.", true); return; }
         if (profile == "full-control") { ShowFullControlOverlay(); return; }
         ApplyProfile(profile);
     }
@@ -1373,7 +1376,7 @@ internal sealed partial class ControlPanelRuntime
 
     private void EnsureManagedServices(HealthInfo health, bool tunnelReady)
     {
-        if (quitting || !onboardingCompleted) return;
+        if (quitting || !onboardingCompleted || updateSecurityHold) return;
         if (health == null)
         {
             if (OwnedGatewayRunning()) { gatewayStartInFlight = true; return; }
@@ -1974,7 +1977,12 @@ internal sealed partial class ControlPanelRuntime
         else
         {
             UpdateStatus();
-            if (showInitially) AnimateShow();
+            if (updateSecurityHold)
+            {
+                AnimateShow();
+                ShowToast("Update security verification requires attention.", true);
+            }
+            else if (showInitially) AnimateShow();
             else { new WindowInteropHelper(window).EnsureHandle(); window.Hide(); }
         }
         timer.Start();
@@ -2144,6 +2152,8 @@ internal static class Program
         string logPath = Path.Combine(logDir, "control-panel-error.log");
         try
         {
+            if (args.Length > 0 && args[0] == "--update-security-self-test")
+                return ControlPanelRuntime.RunUpdateSecuritySelfTest();
             if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))
             {
                 string mode = args[0];

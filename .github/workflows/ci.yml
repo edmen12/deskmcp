@@ -40,6 +40,12 @@ jobs:
         shell: powershell
         run: dotnet build .\control-panel\wpf\DeskMCP.ControlPanel.csproj -c Release --nologo -p:ContinuousIntegrationBuild=true
 
+      - name: Update security self-test
+        shell: powershell
+        run: |
+          & .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe --update-security-self-test
+          if ($LASTEXITCODE -ne 0) { throw "Update security self-test failed: $LASTEXITCODE" }
+
       - name: Installer UI build
         shell: powershell
         run: .\scripts\test-installer-ui.ps1
@@ -77,6 +83,12 @@ jobs:
       - name: Build and smoke ARM64 installer
         shell: powershell
         run: .\scripts\build-installer.ps1 -Target win-arm64
+
+      - name: ARM64 update security self-test
+        shell: powershell
+        run: |
+          & .\runtime\release-stage\win-arm64\DesktopMCP\DeskMCP.exe --update-security-self-test
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 update security self-test failed: $LASTEXITCODE" }
 
       - name: ARM64 release readiness
         shell: powershell

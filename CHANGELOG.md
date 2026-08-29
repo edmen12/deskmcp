@@ -8,6 +8,7 @@ All notable changes to DeskMCP are documented here.
 
 - Defined the safe-update trust contract: immutable stable GitHub releases, matching asset/manifest/local SHA-256, and valid pinned-publisher Authenticode before user-confirmed automatic execution is eligible.
 - Added manifest schema v2 update invariants and metadata/execution/post-install policy tests.
+- Added the user-controlled updater execution path: `.partial` download, local size/SHA-256 verification, WinVerifyTrust chain validation with revocation checking, compiled certificate SHA-256 publisher pins, explicit install, and fail-closed post-install version/profile verification.
 - Added installer rollback for failures after the prior install is backed up, plus recovery from interrupted `.install-*` / `.backup-*` states.
 - Upgrade Setup now preserves an existing **Start with Windows** choice instead of defaulting it back on.
 
