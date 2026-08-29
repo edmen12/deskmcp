@@ -19,18 +19,20 @@ Open the [macOS Developer Preview workflow](https://github.com/edmen12/deskmcp/a
 
 The workflow artifact has a limited retention period, so use the latest successful run rather than bookmarking an individual artifact ID.
 
+The artifact also includes `MACOS_DEVELOPER_PREVIEW_BUILD.txt`, which records the exact Git commit, package version, signing mode, notarization state, and `distributionReady=false`.
+
 ## Verify the download
 
-The artifact includes `SHA256SUMS-macos-arm64-unsigned.txt` beside the DeskMCP ZIP. Verify it before opening:
+The artifact includes `SHA256SUMS-macos-arm64-developer-preview.txt` beside the DeskMCP ZIP. Verify it before opening:
 
 ```bash
-shasum -a 256 -c SHA256SUMS-macos-arm64-unsigned.txt
+shasum -a 256 -c SHA256SUMS-macos-arm64-developer-preview.txt
 ```
 
 Do not run a file whose checksum does not match.
 ## Open the app
 
-1. Extract `DeskMCP-<version>-macos-arm64-unsigned.zip`.
+1. Extract `DeskMCP-main-<commit>-macos-arm64-developer-preview.zip`.
 2. Move `DeskMCP.app` to Applications if desired.
 3. Try to open DeskMCP normally.
 4. If macOS blocks the app because it is not notarized, open **System Settings → Privacy & Security** and use **Open Anyway** for DeskMCP, then confirm the prompt.

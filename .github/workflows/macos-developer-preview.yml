@@ -47,11 +47,24 @@ jobs:
       - name: Build developer preview
         shell: bash
         run: bash scripts/build-macos-stage.sh
+      - name: Prepare commit-scoped preview artifact
+        shell: bash
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          SOURCE_ZIP="$(find runtime/release -maxdepth 1 -name 'DeskMCP-*-macos-arm64-unsigned.zip' -type f | head -n 1)"
+          test -n "$SOURCE_ZIP"
+          PREVIEW_ZIP="runtime/release/DeskMCP-main-${SHORT_SHA}-macos-arm64-developer-preview.zip"
+          cp "$SOURCE_ZIP" "$PREVIEW_ZIP"
+          PREVIEW_SHA="$(shasum -a 256 "$PREVIEW_ZIP" | awk '{print $1}')"
+          printf '%s  %s\n' "$PREVIEW_SHA" "$(basename "$PREVIEW_ZIP")" > runtime/release/SHA256SUMS-macos-arm64-developer-preview.txt
+          printf 'commit=%s\npackageVersion=%s\nsigning=ad-hoc-test-only\nnotarized=false\ndistributionReady=false\n' "$GITHUB_SHA" "$(node -p "require('./package.json').version")" > runtime/release/MACOS_DEVELOPER_PREVIEW_BUILD.txt
+
       - name: Verify preview contract
         shell: bash
         run: |
-          test "$(find runtime/release -maxdepth 1 -name 'DeskMCP-*-macos-arm64-unsigned.zip' -type f | wc -l | tr -d ' ')" = "1"
-          test -f runtime/release/SHA256SUMS-macos-arm64-unsigned.txt
+          test "$(find runtime/release -maxdepth 1 -name 'DeskMCP-main-*-macos-arm64-developer-preview.zip' -type f | wc -l | tr -d ' ')" = "1"
+          shasum -a 256 -c runtime/release/SHA256SUMS-macos-arm64-developer-preview.txt
+          test -f runtime/release/MACOS_DEVELOPER_PREVIEW_BUILD.txt
           node -e "const x=require('./runtime/release-stage/darwin-arm64/DeskMCP.app/Contents/Resources/release-target.json'); if(x.distributionReady!==false||x.notarized!==false||x.signing!=='ad-hoc-test-only') process.exit(1)"
 
       - name: Upload developer preview
@@ -62,8 +75,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: |
-            runtime/release/DeskMCP-*-macos-arm64-unsigned.zip
-            runtime/release/SHA256SUMS-macos-arm64-unsigned.txt
+            runtime/release/DeskMCP-main-*-macos-arm64-developer-preview.zip
+            runtime/release/SHA256SUMS-macos-arm64-developer-preview.txt
+            runtime/release/MACOS_DEVELOPER_PREVIEW_BUILD.txt
             docs/MACOS_DEVELOPER_PREVIEW.md
 
       - name: Report artifact digest
