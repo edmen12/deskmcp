@@ -174,7 +174,7 @@ Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 - [Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6)
 - [Windows ARM64 packaging](https://github.com/edmen12/deskmcp/issues/7)
 - [Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8)
-- [Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9)
+- ✅ [Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
 
 ## Support
 

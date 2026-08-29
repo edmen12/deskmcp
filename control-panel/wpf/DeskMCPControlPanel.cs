@@ -870,6 +870,7 @@ internal sealed class ControlPanelRuntime
     {
         statusInitialized = true;
         gatewayIsRunning = health != null;
+        bool gatewayStarting = health == null && (gatewayStartInFlight || OwnedGatewayRunning());
         Ellipse gatewayDot = Find<Ellipse>("GatewayDot");
         TextBlock gatewayText = Find<TextBlock>("GatewayStatus");
         Ellipse tunnelDot = Find<Ellipse>("TunnelDot");
@@ -902,6 +903,14 @@ internal sealed class ControlPanelRuntime
             }
             SetProfileVisual(selectedProfile, true);
             Find<TextBlock>("VersionText").Text = "Gateway " + health.version;
+        }
+        else if (gatewayStarting)
+        {
+            gatewayDot.Fill = BrushFrom("#FF9F0A");
+            gatewayText.Text = "Starting…";
+            power.Content = "Starting Gateway…";
+            power.IsEnabled = false;
+            SetProfileVisual(selectedProfile, true);
         }
         else
         {
@@ -950,6 +959,13 @@ internal sealed class ControlPanelRuntime
         {
             liveDot.Fill = BrushFrom("#FF9F0A");
             liveText.Text = "Local";
+            livePill.Background = BrushFrom("#FF4A3518");
+            SetLivePulse(false);
+        }
+        else if (gatewayStarting)
+        {
+            liveDot.Fill = BrushFrom("#FF9F0A");
+            liveText.Text = "Starting";
             livePill.Background = BrushFrom("#FF4A3518");
             SetLivePulse(false);
         }

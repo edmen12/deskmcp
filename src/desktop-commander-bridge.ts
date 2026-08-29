@@ -1,6 +1,7 @@
 import { access } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { Client } from '@modelcontextprotocol/client';
 import {
   getDefaultEnvironment,
@@ -8,12 +9,21 @@ import {
 } from '@modelcontextprotocol/client/stdio';
 import { PROJECT_ROOT } from './paths.js';
 
+export interface DesktopCommanderStartupTiming {
+  readonly accessMs: number;
+  readonly connectMs: number;
+  readonly listToolsMs: number;
+  readonly validationMs: number;
+  readonly totalMs: number;
+}
+
 export interface DesktopCommanderInfo {
   readonly ready: boolean;
   readonly entry: string;
   readonly serverName?: string;
   readonly serverVersion?: string;
   readonly toolCount: number;
+  readonly startupTiming?: DesktopCommanderStartupTiming;
 }
 
 export interface DesktopCommanderToolResult {
@@ -33,6 +43,11 @@ export const DEFAULT_DESKTOP_COMMANDER_ENTRY =
   existsSync(installedDesktopCommanderEntry)
     ? installedDesktopCommanderEntry
     : siblingDesktopCommanderEntry;
+
+function elapsedMs(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 100) / 100;
+}
+
 export class DesktopCommanderBridge {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
@@ -40,6 +55,7 @@ export class DesktopCommanderBridge {
   private toolCount = 0;
   private serverName: string | undefined;
   private serverVersion: string | undefined;
+  private startupTiming: DesktopCommanderStartupTiming | undefined;
 
   constructor(
     readonly entry = process.env.DESKTOP_COMMANDER_ENTRY
@@ -58,7 +74,10 @@ export class DesktopCommanderBridge {
   }
 
   private async startInternal(): Promise<void> {
+    const totalStartedAt = performance.now();
+    let phaseStartedAt = performance.now();
     await access(this.entry);
+    const accessMs = elapsedMs(phaseStartedAt);
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [this.entry, '--no-onboarding'],
@@ -76,19 +95,32 @@ export class DesktopCommanderBridge {
     );
 
     try {
+      phaseStartedAt = performance.now();
       await client.connect(transport);
+      const connectMs = elapsedMs(phaseStartedAt);
+      phaseStartedAt = performance.now();
       const listed = await client.listTools();
+      const listToolsMs = elapsedMs(phaseStartedAt);
+      phaseStartedAt = performance.now();
       const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'force_terminate'];
       for (const name of required) {
         if (!listed.tools.some(tool => tool.name === name)) {
           throw new Error(`Desktop Commander required tool unavailable: ${name}`);
         }
       }
+      const validationMs = elapsedMs(phaseStartedAt);
 
       const version = client.getServerVersion();
       this.toolCount = listed.tools.length;
       this.serverName = version?.name;
       this.serverVersion = version?.version;
+      this.startupTiming = {
+        accessMs,
+        connectMs,
+        listToolsMs,
+        validationMs,
+        totalMs: elapsedMs(totalStartedAt)
+      };
       this.transport = transport;
       this.client = client;
     } catch (error) {
@@ -102,7 +134,8 @@ export class DesktopCommanderBridge {
       entry: this.entry,
       ...(this.serverName ? { serverName: this.serverName } : {}),
       ...(this.serverVersion ? { serverVersion: this.serverVersion } : {}),
-      toolCount: this.toolCount
+      toolCount: this.toolCount,
+      ...(this.startupTiming ? { startupTiming: { ...this.startupTiming } } : {})
     };
   }
 
@@ -246,6 +279,7 @@ export class DesktopCommanderBridge {
     this.toolCount = 0;
     this.serverName = undefined;
     this.serverVersion = undefined;
+    this.startupTiming = undefined;
     if (client) await client.close();
   }
 }

@@ -8,14 +8,19 @@ The open-source installer can be distributed without Authenticode signing. Verif
 
 A missing Authenticode signature is different from a hash mismatch. **Do not run an installer whose SHA-256 differs from the published release hash.**
 
-## Gateway shows Offline
+## Gateway shows Offline or Starting
 
 1. Open the DeskMCP tray Control Panel.
 2. Confirm the selected Workspace still exists.
-3. Click **Start Gateway** or **Restart Gateway**.
-4. If rebuilding from source, quit the running release-stage DeskMCP first; the build scripts intentionally refuse to modify a live stage.
+3. If it shows **Starting…**, the Gateway process is alive and still initializing Desktop Commander. Do not repeatedly restart it just because `/health` is not ready yet.
+4. If it remains **Offline**, click **Start Gateway** or **Restart Gateway**.
+5. If rebuilding from source, quit the running release-stage DeskMCP first; the build scripts intentionally refuse to modify a live stage.
 
-The Gateway health endpoint is local-only at `127.0.0.1:8765`.
+The Gateway health endpoint is local-only at `127.0.0.1:8765`. After startup, `desktopCommander.startupTiming` reports non-sensitive phase timings for entry access, MCP connect, tool listing, required-tool validation, and total bridge startup.
+
+For source-level startup diagnostics, build first and run `node scripts/measure-startup.mjs --samples 10`. Each sample uses a fresh Node/Desktop Commander process, while warm latency is measured on the already-connected bridge. The script does not flush OS caches or kill unrelated processes.
+
+If `startupTiming.connectMs` dominates while the other phases stay small, the delay is inside the upstream Desktop Commander MCP initialization path rather than DeskMCP policy or HTTP startup. DeskMCP intentionally keeps the real MCP handshake and required-tool validation instead of hiding that latency with mocks or bypasses. Desktop Commander 0.2.47 already contains the hard-timeout fix for its earlier Windows feature-flag startup issue ([upstream #465](https://github.com/wonderwhy-er/DesktopCommanderMCP/issues/465), [PR #467](https://github.com/wonderwhy-er/DesktopCommanderMCP/pull/467)); residual host/network variance should be diagnosed with the phase timings before changing DeskMCP orchestration.
 
 ## Tunnel is not Ready
 

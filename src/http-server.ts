@@ -26,7 +26,8 @@ function publicDesktopCommanderInfo(bridge?: DesktopCommanderBridge) {
     ready: info.ready,
     ...(info.serverName ? { serverName: info.serverName } : {}),
     ...(info.serverVersion ? { serverVersion: info.serverVersion } : {}),
-    toolCount: info.toolCount
+    toolCount: info.toolCount,
+    ...(info.startupTiming ? { startupTiming: { ...info.startupTiming } } : {})
   };
 }
 

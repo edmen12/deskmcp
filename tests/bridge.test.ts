@@ -178,6 +178,14 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
     assert.equal(healthBody.auditEnabled, true);
     assert.equal(healthBody.observationStoreEnabled, true);
     assert.equal('entry' in (healthBody.desktopCommander ?? {}), false);
+    const startupTiming = healthBody.desktopCommander?.startupTiming as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(startupTiming);
+    for (const key of ['accessMs', 'connectMs', 'listToolsMs', 'validationMs', 'totalMs']) {
+      assert.equal(typeof startupTiming[key], 'number');
+      assert.ok((startupTiming[key] as number) >= 0);
+    }
     assert.equal('allowedRoots' in (healthBody.policy ?? {}), false);
 
     const existingWriteDenied = await client.callTool({
