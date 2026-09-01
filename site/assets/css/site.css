@@ -223,19 +223,9 @@ main { width: 100%; }
   margin: 0;
   isolation: isolate;
 }
-.control-panel::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  z-index: -1;
-  border-radius: 48px;
-  background: linear-gradient(145deg, rgba(97,171,255,.34), rgba(255,255,255,.02) 26%, rgba(0,0,0,0) 65%, rgba(35,104,255,.24));
-  filter: blur(.2px);
-}
 .control-panel img {
   width: 100%;
   height: auto;
-  clip-path: inset(1px round 48px);
   filter: saturate(1.02) contrast(1.015);
 }
 .hero-panel {
@@ -690,17 +680,6 @@ body::after {
 .status-float-right {
   translate: var(--hero-float-right-x) var(--hero-float-right-y);
   transition: translate .65s cubic-bezier(.22,1,.36,1);
-}
-
-.control-panel::after {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  z-index: 2;
-  pointer-events: none;
-  border-radius: 47px;
-  background: linear-gradient(118deg, rgba(255,255,255,.055), transparent 18%, transparent 72%, rgba(42,128,255,.05));
-  mix-blend-mode: screen;
 }
 
 .permission-row, .download-row, .security-list article, .principles article {
