@@ -71,7 +71,14 @@ code {
   backdrop-filter: blur(18px) saturate(130%);
 }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 760; letter-spacing: -.02em; }
-.brand img { filter: drop-shadow(0 5px 14px rgba(34,184,255,.22)); }
+.brand img { object-fit: contain; filter: drop-shadow(0 6px 16px rgba(34,184,255,.28)); }
+.brand-wordmark { display: inline-flex; align-items: baseline; letter-spacing: -.045em; font-weight: 780; color: #fff; }
+.brand-mcp {
+  background: linear-gradient(105deg, var(--cyan), var(--sky) 58%, #27d7e8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 .nav { display: flex; align-items: center; gap: 28px; color: #a9bbc9; font-size: 14px; }
 .nav a, .footer-links a { transition: color .2s ease; }
 .nav a:hover, .footer-links a:hover { color: white; }

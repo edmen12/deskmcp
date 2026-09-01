@@ -37,7 +37,7 @@ jobs:
           test -f site/404.html
           test -f site/assets/css/site.css
           test -f site/assets/js/site.js
-          test -f site/assets/brand/deskmcp-mark.svg
+          test -f site/assets/brand/deskmcp-approved-logo-64.png
           test -f site/assets/images/control-panel.png
           ! grep -R --line-number -E 'sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' site
 
