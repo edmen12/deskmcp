@@ -104,7 +104,7 @@ internal sealed partial class ControlPanelRuntime
         public IntPtr hCertStore;
     }
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern int WinVerifyTrust(IntPtr hwnd, [MarshalAs(UnmanagedType.LPStruct)] Guid actionId, IntPtr trustData);
 
     [DllImport("wintrust.dll", ExactSpelling = true)]
@@ -120,6 +120,16 @@ internal sealed partial class ControlPanelRuntime
     private const uint WtdStateActionVerify = 1;
     private const uint WtdStateActionClose = 2;
     private const uint WtdRevocationCheckChainExcludeRoot = 0x00000080;
+    private const int TrustEProviderUnknown = unchecked((int)0x800B0001);
+    private const int TrustESubjectFormUnknown = unchecked((int)0x800B0003);
+    private const int TrustENoSignature = unchecked((int)0x800B0100);
+
+    private enum AuthenticodeInspection
+    {
+        Absent,
+        Trusted,
+        Invalid
+    }
 
     private static bool HasPinnedUpdatePublisher()
     {
@@ -188,7 +198,7 @@ internal sealed partial class ControlPanelRuntime
     {
         try { if (!String.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { }
     }
-    private static bool VerifyWinTrust(string path, out string signerFingerprint, out string reason)
+    private static AuthenticodeInspection InspectAuthenticode(string path, out string signerFingerprint, out string reason)
     {
         signerFingerprint = null;
         reason = null;
@@ -219,26 +229,34 @@ internal sealed partial class ControlPanelRuntime
             trustDataPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustData>());
             Marshal.StructureToPtr(data, trustDataPtr, false);
             int result = WinVerifyTrust(IntPtr.Zero, WinTrustActionGenericVerifyV2, trustDataPtr);
+            int lastError = Marshal.GetLastWin32Error();
             data = Marshal.PtrToStructure<WinTrustData>(trustDataPtr);
             stateOpened = data.hWVTStateData != IntPtr.Zero;
+            if (result == TrustENoSignature)
+            {
+                if (lastError == TrustENoSignature || lastError == TrustESubjectFormUnknown || lastError == TrustEProviderUnknown)
+                    return AuthenticodeInspection.Absent;
+                reason = "WinVerifyTrust reported no valid signature but Windows returned verification error 0x" + lastError.ToString("X8");
+                return AuthenticodeInspection.Invalid;
+            }
             if (result != 0)
             {
                 reason = "WinVerifyTrust rejected the Authenticode signature (0x" + result.ToString("X8") + ")";
-                return false;
+                return AuthenticodeInspection.Invalid;
             }
             IntPtr providerData = WTHelperProvDataFromStateData(data.hWVTStateData);
             IntPtr signerPtr = providerData == IntPtr.Zero ? IntPtr.Zero : WTHelperGetProvSignerFromChain(providerData, 0, false, 0);
-            if (signerPtr == IntPtr.Zero) { reason = "WinVerifyTrust did not expose a signer chain"; return false; }
+            if (signerPtr == IntPtr.Zero) { reason = "WinVerifyTrust did not expose a signer chain"; return AuthenticodeInspection.Invalid; }
             CryptProviderSigner signer = Marshal.PtrToStructure<CryptProviderSigner>(signerPtr);
-            if (signer.csCertChain == 0 || signer.pasCertChain == IntPtr.Zero) { reason = "Authenticode signer chain is empty"; return false; }
+            if (signer.csCertChain == 0 || signer.pasCertChain == IntPtr.Zero) { reason = "Authenticode signer chain is empty"; return AuthenticodeInspection.Invalid; }
             CryptProviderCert providerCert = Marshal.PtrToStructure<CryptProviderCert>(signer.pasCertChain);
-            if (providerCert.pCert == IntPtr.Zero) { reason = "Authenticode signer certificate is missing"; return false; }
+            if (providerCert.pCert == IntPtr.Zero) { reason = "Authenticode signer certificate is missing"; return AuthenticodeInspection.Invalid; }
             CertContext cert = Marshal.PtrToStructure<CertContext>(providerCert.pCert);
-            if (cert.pbCertEncoded == IntPtr.Zero || cert.cbCertEncoded == 0) { reason = "Authenticode signer certificate is invalid"; return false; }
+            if (cert.pbCertEncoded == IntPtr.Zero || cert.cbCertEncoded == 0) { reason = "Authenticode signer certificate is invalid"; return AuthenticodeInspection.Invalid; }
             byte[] rawCert = new byte[cert.cbCertEncoded];
             Marshal.Copy(cert.pbCertEncoded, rawCert, 0, rawCert.Length);
             signerFingerprint = Convert.ToHexString(SHA256.HashData(rawCert));
-            return true;
+            return AuthenticodeInspection.Trusted;
         }
         finally
         {
@@ -268,6 +286,25 @@ internal sealed partial class ControlPanelRuntime
         return false;
     }
 
+    private static bool VerifyAuthenticodeExecutionPolicy(
+        AuthenticodeInspection signature,
+        string signerFingerprint,
+        string inspectionReason,
+        out string reason)
+    {
+        if (signature == AuthenticodeInspection.Invalid)
+        {
+            reason = inspectionReason ?? "Authenticode signature validation failed";
+            return false;
+        }
+        if (signature == AuthenticodeInspection.Trusted && HasPinnedUpdatePublisher())
+        {
+            return VerifyPinnedPublisher(signerFingerprint, out reason);
+        }
+        reason = null;
+        return true;
+    }
+
     private static bool VerifyDownloadedUpdate(string path, UpdateCheckInfo candidate, out string signerFingerprint, out string reason)
     {
         signerFingerprint = null;
@@ -278,15 +315,14 @@ internal sealed partial class ControlPanelRuntime
         string expected = NormalizeSha256(candidate.sha256);
         string actual = ComputeSha256(path);
         if (expected == null || !String.Equals(expected, actual, StringComparison.Ordinal)) { reason = "downloaded SHA-256 does not match the manifest"; return false; }
-        if (!VerifyWinTrust(path, out signerFingerprint, out reason)) return false;
-        if (!VerifyPinnedPublisher(signerFingerprint, out reason)) return false;
-        return true;
+
+        AuthenticodeInspection signature = InspectAuthenticode(path, out signerFingerprint, out string inspectionReason);
+        return VerifyAuthenticodeExecutionPolicy(signature, signerFingerprint, inspectionReason, out reason);
     }
     private async Task<string> DownloadAndVerifyUpdateFileAsync(UpdateCheckInfo candidate)
     {
         string validationReason;
         if (!IsCandidateForInstalledClient(candidate, CurrentProductVersion(), InstalledUpdateTarget(), out validationReason)) throw new InvalidDataException(validationReason);
-        if (!HasPinnedUpdatePublisher()) throw new InvalidOperationException("Automatic install is disabled because this build has no pinned Authenticode publisher.");
 
         string versionPart = String.IsNullOrWhiteSpace(candidate.version) ? "unknown" : "v" + candidate.version;
         string updateDir = Path.Combine(dataRoot, "updates", versionPart, candidate.target ?? InstalledUpdateTarget());
@@ -348,21 +384,24 @@ internal sealed partial class ControlPanelRuntime
         if (lastUpdateCandidate == null) return;
         updateCheckInFlight = true;
         button.IsEnabled = false;
-        button.Content = "Downloading…";
-        status.Text = "Downloading verified release asset…";
+        button.Content = "Updating…";
+        status.Text = "Downloading update…";
         verifiedUpdatePath = null;
         try
         {
             string path = await DownloadAndVerifyUpdateFileAsync(lastUpdateCandidate);
             verifiedUpdatePath = path;
-            status.Text = "Verified update ready · Authenticode publisher matched";
-            button.Content = "Install Update";
+            status.Text = "Update verified · starting installer…";
+            button.Content = "Starting…";
+            InstallVerifiedUpdate();
         }
         catch (Exception ex)
         {
-            verifiedUpdatePath = null;
-            status.Text = "Update was not trusted · " + ex.Message;
-            button.Content = HasPinnedUpdatePublisher() ? "Download & Verify" : "View Release";
+            bool installerReady = !String.IsNullOrWhiteSpace(verifiedUpdatePath) && File.Exists(verifiedUpdatePath);
+            status.Text = ex is InvalidDataException
+                ? "Update verification failed · " + ex.Message
+                : "Could not update · " + ex.Message;
+            button.Content = installerReady ? "Install Update" : "Retry Update";
         }
         finally
         {
@@ -411,8 +450,7 @@ internal sealed partial class ControlPanelRuntime
         {
             DeleteQuietly(verifiedUpdatePath);
             verifiedUpdatePath = null;
-            ShowToast("Update verification failed: " + reason, true);
-            return;
+            throw new InvalidDataException("Update verification failed: " + reason);
         }
 
         WritePendingUpdateVerification(lastUpdateCandidate);
@@ -590,9 +628,26 @@ internal sealed partial class ControlPanelRuntime
             };
             if (IsCandidateForInstalledClient(badPath, "9.9.8", "win-x64", out reason)) throw new InvalidOperationException("version-mismatched download path was accepted");
 
-            string signer;
-            if (VerifyDownloadedUpdate(file, candidate, out signer, out reason))
-                throw new InvalidOperationException("unsigned file entered trusted execution state");
+            string selfPath = typeof(ControlPanelRuntime).Assembly.Location;
+            string selfSigner;
+            string selfInspectionReason;
+            AuthenticodeInspection selfInspection = InspectAuthenticode(selfPath, out selfSigner, out selfInspectionReason);
+            if (selfInspection == AuthenticodeInspection.Invalid)
+                throw new InvalidOperationException("local Authenticode inspection misclassified the build artifact: " + selfInspectionReason);
+            UpdateCheckInfo selfCandidate = new UpdateCheckInfo
+            {
+                sizeBytes = new FileInfo(selfPath).Length,
+                sha256 = ComputeSha256(selfPath)
+            };
+            if (!VerifyDownloadedUpdate(selfPath, selfCandidate, out selfSigner, out reason))
+                throw new InvalidOperationException("real unsigned PE did not pass the verified download path: " + reason);
+            selfCandidate.sha256 = new string('0', 64);
+            if (VerifyDownloadedUpdate(selfPath, selfCandidate, out selfSigner, out reason))
+                throw new InvalidOperationException("tampered expected SHA-256 was accepted for the unsigned PE");
+            if (!VerifyAuthenticodeExecutionPolicy(AuthenticodeInspection.Absent, null, null, out reason))
+                throw new InvalidOperationException("unsigned artifact was rejected after integrity verification: " + reason);
+            if (VerifyAuthenticodeExecutionPolicy(AuthenticodeInspection.Invalid, null, "invalid signature", out reason))
+                throw new InvalidOperationException("invalid Authenticode was downgraded to unsigned");
 
             PendingUpdateVerification pending = new PendingUpdateVerification
             {
@@ -620,7 +675,9 @@ internal sealed partial class ControlPanelRuntime
                 throw new InvalidOperationException("matching post-install profile did not verify");
 
             Console.WriteLine("UPDATE_SECURITY_SELF_TEST_OK");
-            Console.WriteLine("UNSIGNED_EXECUTION_BLOCKED=OK");
+            Console.WriteLine("LOCAL_AUTHENTICODE_INSPECTION=" + selfInspection);
+            Console.WriteLine("UNSIGNED_VERIFIED_EXECUTION_ALLOWED=OK");
+            Console.WriteLine("INVALID_SIGNATURE_BLOCKED=OK");
             Console.WriteLine("PROFILE_MISMATCH_HOLD=OK");
             return 0;
         }

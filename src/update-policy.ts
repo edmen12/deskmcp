@@ -49,7 +49,9 @@ export interface UpdateMetadataDecision {
 export interface LocalArtifactTrust {
   readonly sha256: string;
   readonly sizeBytes: number;
+  readonly authenticodePresent: boolean;
   readonly authenticodeValid: boolean;
+  readonly publisherPinConfigured: boolean;
   readonly signerMatchesPinnedPublisher: boolean;
 }
 
@@ -91,7 +93,7 @@ function requiredPolicyIsPresent(policy: UpdateManifestPolicy): boolean {
     policy.fullControlSessionOnly === true &&
     policy.manualInstallerFallback === true &&
     policy.automaticExecutionRequiresImmutableRelease === true &&
-    policy.automaticExecutionRequiresAuthenticode === true;
+    typeof policy.automaticExecutionRequiresAuthenticode === 'boolean';
 }
 export function evaluateUpdateMetadata(
   currentVersion: string,
@@ -139,12 +141,17 @@ export function evaluateUpdateExecution(
   const localSha = normalizedSha256(artifact.sha256);
   if (!manifestSha || localSha !== manifestSha) reasons.push('local-sha256-mismatch');
   if (artifact.sizeBytes !== manifest.sizeBytes) reasons.push('local-size-mismatch');
-  if (!artifact.authenticodeValid) reasons.push('authenticode-invalid');
-  if (!artifact.signerMatchesPinnedPublisher) reasons.push('publisher-mismatch');
+  if (artifact.authenticodePresent && !artifact.authenticodeValid) reasons.push('authenticode-invalid');
+  if (
+    artifact.authenticodePresent &&
+    artifact.authenticodeValid &&
+    artifact.publisherPinConfigured &&
+    !artifact.signerMatchesPinnedPublisher
+  ) reasons.push('publisher-mismatch');
 
   return reasons.length === 0
     ? { kind: 'auto-install-eligible', reasons: [] }
-    : { kind: 'manual-only', reasons };
+    : { kind: 'reject', reasons };
 }
 
 export function evaluatePostInstallState(

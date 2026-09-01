@@ -46,7 +46,7 @@ internal sealed partial class ControlPanelRuntime
             OpenPath(lastUpdateReleaseUrl);
             return;
         }
-        if (action == "Download & Verify" && lastUpdateCandidate != null)
+        if ((action == "Update Now" || action == "Retry Update") && lastUpdateCandidate != null)
         {
             await HandleVerifiedUpdateDownloadAsync(button, Find<TextBlock>("UpdateStatus"));
             return;
@@ -147,14 +147,8 @@ internal sealed partial class ControlPanelRuntime
         if (result.kind == "verified-download-allowed")
         {
             lastUpdateCandidate = result;
-            if (!HasPinnedUpdatePublisher())
-            {
-                status.Text = version + " available · metadata verified; automatic install disabled until a publisher pin is compiled in";
-                button.Content = "View Release";
-                return;
-            }
-            status.Text = version + " available · metadata verified; local signature verification required";
-            button.Content = "Download & Verify";
+            status.Text = version + " available";
+            button.Content = "Update Now";
             return;
         }
         if (result.kind == "manual-only")

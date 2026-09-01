@@ -36,9 +36,9 @@ The signing private key must remain under the signing service's protected key in
 
 ## Release verification
 
-Signed Windows releases remain subject to DeskMCP's independent update trust gates: target-specific immutable release metadata, matching GitHub asset digest, manifest SHA-256, locally computed SHA-256, Windows Authenticode validation, and a compiled publisher certificate pin.
+All Windows releases remain subject to DeskMCP's independent source and integrity gates: target-specific immutable release metadata, matching GitHub asset digest, manifest SHA-256, locally computed SHA-256, size, target, and artifact identity checks. Signed releases add a separate publisher-identity layer through Windows Authenticode validation and, when configured, a compiled publisher certificate pin.
 
-Certificate rotation must use an overlap release that trusts both the old and new certificate pins before the old identity is retired. There is no unsigned fallback for automatic installer execution.
+Certificate rotation must use an overlap release that trusts both the old and new certificate pins before the old identity is retired. Unsigned artifacts are not treated as publisher-verified, but they may still use the user-initiated verified update path after the source and integrity gates pass. A present but invalid Authenticode signature, or a mismatch against a configured publisher pin, is blocked rather than downgraded to unsigned.
 
 ## Privacy
 

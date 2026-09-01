@@ -16,7 +16,7 @@ DeskMCP is designed around a local trust boundary:
 - Sensitive credential paths are denied by default and pre-excluded from search.
 - Runtime Tunnel keys are protected with Windows DPAPI.
 - Audit logs are metadata-only.
-- Updater execution is fail-closed: immutable release metadata, matching SHA-256, and valid pinned-publisher Authenticode are required before a downloaded installer can become eligible for user-confirmed execution. Current builds keep automatic execution disabled while the SignPath Foundation OSS signing application is pending and the compiled publisher-pin set is empty.
+- Updater execution is fail-closed on source and integrity: the fixed GitHub repository, immutable release metadata, manifest/asset/local size and SHA-256 checks must all match before an installer can run. Authenticode is an additional publisher-identity layer when present: an invalid signature or a mismatch against a configured publisher pin is blocked, while an unsigned artifact that passes the integrity gates remains eligible for a user-initiated update.
 
 The updater threat model and rollback/recovery contract are documented in [`docs/UPDATE_SECURITY.md`](docs/UPDATE_SECURITY.md).
 

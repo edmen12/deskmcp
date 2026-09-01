@@ -4,7 +4,11 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
-No changes yet.
+### Changed
+
+- Simplified the Windows updater to a one-click **Update Now** flow: DeskMCP downloads the fixed-repository immutable release asset, verifies size and SHA-256, then launches Setup without a second install confirmation inside DeskMCP.
+- Decoupled updater availability from Authenticode. Unsigned artifacts that pass the source/integrity gates are eligible for user-initiated execution; valid signatures add publisher verification, while invalid signatures or configured publisher-pin mismatches are blocked.
+- Removed unsigned/publisher-signature status from the normal update UI; signing state remains an internal security/logging concern and Windows may still show its own SmartScreen or publisher UI.
 
 ## 0.9.2 — 2026-09-01
 
