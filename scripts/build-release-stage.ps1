@@ -112,6 +112,28 @@ foreach ($file in @('package.json','package-lock.json','.npmrc')) { Copy-Item -L
 Push-Location $gatewayDest
 try {
     Invoke-Native 'npm.cmd' @('ci','--omit=dev','--ignore-scripts',('--os=' + $TargetConfig.NpmOs),('--cpu=' + $TargetConfig.NpmCpu))
+
+    # npm can materialize optional binaries for multiple platforms even with --os/--cpu.
+    # Physically prune non-target native packages so the release closure matches its target.
+    $imgScope = Join-Path $gatewayDest 'node_modules\@img'
+    $vscodeScope = Join-Path $gatewayDest 'node_modules\@vscode'
+    $foreignSharp = @(
+        Get-ChildItem -LiteralPath $imgScope -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'sharp-*' -and $_.Name -ne $TargetConfig.SharpPackage }
+    )
+    foreach ($packageDir in $foreignSharp) { Remove-Item -LiteralPath $packageDir.FullName -Recurse -Force }
+    $foreignRipgrep = @(
+        Get-ChildItem -LiteralPath $vscodeScope -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'ripgrep-*' -and $_.Name -ne $TargetConfig.RipgrepPackage }
+    )
+    foreach ($packageDir in $foreignRipgrep) { Remove-Item -LiteralPath $packageDir.FullName -Recurse -Force }
+    foreach ($windowsUnusedOptional in @('node_modules\fsevents','node_modules\@emnapi\runtime')) {
+        $unusedPath = Join-Path $gatewayDest $windowsUnusedOptional
+        if (Test-Path -LiteralPath $unusedPath) { Remove-Item -LiteralPath $unusedPath -Recurse -Force }
+    }
+    Write-Output ('PRUNED_FOREIGN_SHARP=' + $foreignSharp.Count)
+    Write-Output ('PRUNED_FOREIGN_RIPGREP=' + $foreignRipgrep.Count)
+
     $auditText = (& npm.cmd audit --omit=dev --json 2>$null | Out-String)
     $auditExit = $LASTEXITCODE
     $audit = $auditText | ConvertFrom-Json
@@ -121,9 +143,18 @@ $sharpPath = Join-Path $gatewayDest ('node_modules\@img\' + $TargetConfig.SharpP
 $ripgrepPath = Join-Path $gatewayDest ('node_modules\@vscode\' + $TargetConfig.RipgrepPackage + '\package.json')
 Require (Test-Path -LiteralPath $sharpPath) ('Target sharp package missing: ' + $TargetConfig.SharpPackage)
 Require (Test-Path -LiteralPath $ripgrepPath) ('Target ripgrep package missing: ' + $TargetConfig.RipgrepPackage)
-$wrongCpu = if ($TargetConfig.NpmCpu -eq 'x64') { 'arm64' } else { 'x64' }
-Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest ('node_modules\@img\sharp-win32-' + $wrongCpu)))) 'Wrong-architecture sharp package was bundled.'
-Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest ('node_modules\@vscode\ripgrep-win32-' + $wrongCpu)))) 'Wrong-architecture ripgrep package was bundled.'
+$remainingForeignSharp = @(
+    Get-ChildItem -LiteralPath (Join-Path $gatewayDest 'node_modules\@img') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'sharp-*' -and $_.Name -ne $TargetConfig.SharpPackage }
+)
+$remainingForeignRipgrep = @(
+    Get-ChildItem -LiteralPath (Join-Path $gatewayDest 'node_modules\@vscode') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'ripgrep-*' -and $_.Name -ne $TargetConfig.RipgrepPackage }
+)
+Require ($remainingForeignSharp.Count -eq 0) 'Foreign-platform sharp packages remained in the release stage.'
+Require ($remainingForeignRipgrep.Count -eq 0) 'Foreign-platform ripgrep packages remained in the release stage.'
+Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\fsevents'))) 'Windows release stage retained macOS-only fsevents.'
+Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\@emnapi\runtime'))) 'Windows release stage retained wasm-only @emnapi/runtime.'
 
 $noticeGenerator = Join-Path $ProjectRoot 'scripts\generate-third-party-notices.mjs'
 Require (Test-Path -LiteralPath $noticeGenerator) 'Third-party notice generator is missing.'

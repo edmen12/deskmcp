@@ -75,7 +75,7 @@ final class DeskMCPModel: ObservableObject {
 
     func setProfile(_ value: DeskMCPProfile) {
         profile = value
-        if value != .fullControl {
+        if value != .fullControl && value != .fullyUnlocked {
             defaults.set(value.rawValue, forKey: "profile")
         }
         restartGateway()

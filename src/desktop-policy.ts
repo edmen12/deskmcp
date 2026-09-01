@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { PROJECT_ROOT } from './paths.js';
 
-export type PermissionProfile = 'read-only' | 'workspace-write' | 'full-control';
+export type PermissionProfile = 'read-only' | 'workspace-write' | 'full-control' | 'fully-unlocked';
 
 export class PolicyDeniedError extends Error {
   constructor(message: string) {
@@ -17,6 +17,8 @@ export interface DesktopPolicyInfo {
   readonly processToolsEnabled: boolean;
   readonly writeEnabled: boolean;
   readonly allowSensitivePaths: boolean;
+  readonly workspaceBoundaryEnforced: boolean;
+  readonly observationGuardsEnabled: boolean;
 }
 
 export interface DesktopPolicyOptions {
@@ -30,7 +32,12 @@ export interface DesktopPolicyOptions {
 
 function parseProfile(raw: string | undefined): PermissionProfile {
   const value = raw ?? 'read-only';
-  if (value === 'read-only' || value === 'workspace-write' || value === 'full-control') {
+  if (
+    value === 'read-only' ||
+    value === 'workspace-write' ||
+    value === 'full-control' ||
+    value === 'fully-unlocked'
+  ) {
     return value;
   }
   throw new Error(`Invalid DESKTOP_MCP_PROFILE: ${value}`);
@@ -117,10 +124,20 @@ function isSensitivePath(candidate: string): boolean {
     return {
       profile: this.profile,
       allowedRoots: [...this.allowedRoots],
-      processToolsEnabled: this.profile === 'full-control',
+      processToolsEnabled: this.profile === 'full-control' || this.profile === 'fully-unlocked',
       writeEnabled: this.profile !== 'read-only',
-      allowSensitivePaths: this.allowSensitivePaths
+      allowSensitivePaths: this.allowsSensitivePaths(),
+      workspaceBoundaryEnforced: !this.isFullyUnlocked(),
+      observationGuardsEnabled: !this.isFullyUnlocked()
     };
+  }
+
+  isFullyUnlocked(): boolean {
+    return this.profile === 'fully-unlocked';
+  }
+
+  allowsSensitivePaths(): boolean {
+    return this.isFullyUnlocked() || this.allowSensitivePaths;
   }
 
   canWrite(): boolean {
@@ -134,12 +151,13 @@ function isSensitivePath(candidate: string): boolean {
   }
 
   private assertSensitiveAllowed(candidate: string): void {
-    if (!this.allowSensitivePaths && isSensitivePath(candidate)) {
+    if (!this.allowsSensitivePaths() && isSensitivePath(candidate)) {
       throw new PolicyDeniedError(
         'Sensitive path denied. Set DESKTOP_MCP_ALLOW_SENSITIVE_PATHS=true locally to allow it.'
       );
     }
   }  private assertLexicallyAllowed(candidate: string): void {
+    if (this.isFullyUnlocked()) return;
     if (!this.roots.some(root => isWithin(root.declared, candidate))) {
       throw new PolicyDeniedError(
         `Path is outside DESKTOP_MCP_ALLOWED_ROOTS: ${candidate}`
@@ -149,6 +167,7 @@ function isSensitivePath(candidate: string): boolean {
   }
 
   private assertCanonicallyAllowed(candidate: string): void {
+    if (this.isFullyUnlocked()) return;
     if (!this.roots.some(root => isWithin(root.canonical, candidate))) {
       throw new PolicyDeniedError(
         `Canonical path escapes DESKTOP_MCP_ALLOWED_ROOTS: ${candidate}`

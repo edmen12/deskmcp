@@ -18,14 +18,22 @@ $SettingsDir = Join-Path $SmokeStateRoot 'roaming'
 $SettingsPath = Join-Path $SettingsDir 'settings.json'
 $PreviousDataRoot = $env:DESKTOP_MCP_DATA_ROOT
 $PreviousSettingsDir = $env:DESKTOP_MCP_SETTINGS_DIR
+$PreviousPort = $env:DESKTOP_MCP_PORT
+$PreviousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
+$SmokeInstanceNamespace = 'release-smoke-' + $Target + '-' + [Guid]::NewGuid().ToString('N')
 if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
 if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missing.' }
-try {
-    Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null
-    throw 'Port 8765 is already in use; release smoke test requires it to be free.'
-} catch {
-    if ($_.Exception.Message -like 'Port 8765*') { throw }
+function Get-FreeLoopbackPort {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+    } finally {
+        $listener.Stop()
+    }
 }
+$SmokePort = Get-FreeLoopbackPort
+$SmokeBaseUrl = 'http://127.0.0.1:' + $SmokePort
 $panel = $null
 $health = $null
 function Get-StageOwnedProcesses([string]$Root) {
@@ -72,12 +80,16 @@ try {
     [IO.File]::WriteAllText($SettingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
     $env:DESKTOP_MCP_DATA_ROOT = $SmokeDataRoot
     $env:DESKTOP_MCP_SETTINGS_DIR = $SettingsDir
+    $env:DESKTOP_MCP_PORT = [string]$SmokePort
+    $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $SmokeInstanceNamespace
     Write-Output 'SMOKE_SETTINGS=ISOLATED_TEMPORARY'
+    Write-Output ('SMOKE_PORT=' + $SmokePort)
+    Write-Output 'SMOKE_INSTANCE_NAMESPACE=ISOLATED'
     $panel = Start-Process -FilePath $PanelExe -ArgumentList '--startup' -WorkingDirectory $StageRoot -PassThru
     $healthDeadline = [DateTime]::UtcNow.AddSeconds(45)
     while ([DateTime]::UtcNow -lt $healthDeadline -and $null -eq $health) {
         if ($panel.HasExited) { Write-Output ('RELEASE_PANEL_EXIT=' + $panel.ExitCode); break }
-        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 }
+        try { $health = Invoke-RestMethod ($SmokeBaseUrl + '/health') -TimeoutSec 1 }
         catch { if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 } }
     }
     if ($null -eq $health) {
@@ -97,17 +109,18 @@ try {
         try { if ($p.Path -and [IO.Path]::GetFullPath($p.Path) -eq $targetNode) { $stageNodes += $p } } catch { }
     }
     if ($stageNodes.Count -ne 2) { throw "Expected 2 stage Node processes, found $($stageNodes.Count)." }
-    @'
+    $smokeSource = @'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const client = new Client({ name: 'deskmcp-release-smoke', version: '1.0.0' });
 try {
-  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8765/mcp')));
+  await client.connect(new StreamableHTTPClientTransport(new URL('__SMOKE_BASE_URL__/mcp')));
   const listed = await client.listTools();
   console.log('TOOLS=' + listed.tools.length);
   const status = await client.callTool({ name: 'desktop_policy_status', arguments: {} });
   console.log('POLICY_OK=' + (status.isError !== true));
 } finally { await client.close().catch(() => {}); }
-'@ | Set-Content -LiteralPath $SmokeFile -Encoding UTF8
+'@
+    $smokeSource.Replace('__SMOKE_BASE_URL__', $SmokeBaseUrl) | Set-Content -LiteralPath $SmokeFile -Encoding UTF8
     Push-Location $GatewayRoot
     try { $smoke = (& $NodeExe $SmokeFile 2>&1 | Out-String); $smokeExit = $LASTEXITCODE } finally { Pop-Location }
     if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=13' -or $smoke -notmatch 'POLICY_OK=true') { throw "MCP smoke failed:`n$smoke" }
@@ -132,13 +145,15 @@ try {
         }
         if ((Test-Path -LiteralPath $NodeExe) -and (Test-Path -LiteralPath (Join-Path $GatewayRoot 'dist\src\stop.js'))) {
             Push-Location $GatewayRoot
-            try { & $NodeExe 'dist\src\stop.js' 2>$null | Out-Null } catch { } finally { Pop-Location }
+            try { & $NodeExe 'dist\src\stop.js' ([string]$SmokePort) 2>$null | Out-Null } catch { } finally { Pop-Location }
         }
         Wait-StageOwnedProcessesGone $StageRoot 15
         if (Test-Path -LiteralPath $SmokeFile) { Remove-Item -LiteralPath $SmokeFile -Force }
     } finally {
         $env:DESKTOP_MCP_DATA_ROOT = $PreviousDataRoot
         $env:DESKTOP_MCP_SETTINGS_DIR = $PreviousSettingsDir
+        $env:DESKTOP_MCP_PORT = $PreviousPort
+        $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $PreviousInstanceNamespace
         if (Test-Path -LiteralPath $SmokeStateRoot) { Remove-Item -LiteralPath $SmokeStateRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }

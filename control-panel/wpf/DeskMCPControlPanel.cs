@@ -136,6 +136,7 @@ internal sealed partial class ControlPanelRuntime
     private string persistentProfile = "read-only";
     private bool profileChangeInFlight;
     private string requestedProfile;
+    private string pendingElevatedProfile = "full-control";
     private RegisteredWaitHandle activationWaitRegistration;
     private bool allowClose;
     private bool isHiding;
@@ -417,7 +418,7 @@ internal sealed partial class ControlPanelRuntime
         if (!String.IsNullOrWhiteSpace(settings.workspace) && Directory.Exists(settings.workspace)) currentWorkspace = settings.workspace;
         if (settings.recentWorkspaces != null) recentWorkspaces = settings.recentWorkspaces;
         autoStartTunnel = settings.autoStartTunnel;
-        bool downgradePersistedFull = settings.profile == "full-control";
+        bool downgradePersistedFull = settings.profile == "full-control" || settings.profile == "fully-unlocked";
         persistentProfile = settings.profile == "workspace-write" ? "workspace-write" : "read-only";
         selectedProfile = persistentProfile;
         if (IsValidTunnelId(settings.tunnelId)) tunnelId = settings.tunnelId;
@@ -875,14 +876,16 @@ internal sealed partial class ControlPanelRuntime
     private int ProfileIndex(string profile)
     {
         if (profile == "read-only") return 0;
+        if (profile == "workspace-write") return 1;
         if (profile == "full-control") return 2;
-        return 1;
+        if (profile == "fully-unlocked") return 3;
+        return 0;
     }
 
     private void AnimateProfileIndicator(string profile, bool animate)
     {
         if (profileSegmentsGrid.ActualWidth <= 0) return;
-        double segmentWidth = profileSegmentsGrid.ActualWidth / 3.0;
+        double segmentWidth = profileSegmentsGrid.ActualWidth / 4.0;
         profileIndicator.Width = segmentWidth;
         double target = ProfileIndex(profile) * segmentWidth;
         if (!animate)
@@ -905,13 +908,15 @@ internal sealed partial class ControlPanelRuntime
         Button read = Find<Button>("ReadButton");
         Button write = Find<Button>("WriteButton");
         Button full = Find<Button>("FullButton");
-        foreach (Button button in new Button[] { read, write, full })
+        Button unlock = Find<Button>("UnlockButton");
+        foreach (Button button in new Button[] { read, write, full, unlock })
         {
             button.Background = Brushes.Transparent;
             button.Foreground = BrushFrom(isDarkTheme ? "#A8A8AE" : "#71717A");
         }
         Button selected = profile == "read-only" ? read :
-            profile == "full-control" ? full : write;
+            profile == "workspace-write" ? write :
+            profile == "full-control" ? full : unlock;
         selected.Foreground = BrushFrom(isDarkTheme ? "#F5F5F7" : "#18181B");
         AnimateProfileIndicator(profile, animate);
 
@@ -921,15 +926,20 @@ internal sealed partial class ControlPanelRuntime
             badge.Text = "READ";
             badge.Foreground = BrushFrom("#71717A");
         }
-        else if (profile == "full-control")
-        {
-            badge.Text = "FULL";
-            badge.Foreground = BrushFrom("#FF3B30");
-        }
-        else
+        else if (profile == "workspace-write")
         {
             badge.Text = "WRITE";
             badge.Foreground = BrushFrom("#22B8FF");
+        }
+        else if (profile == "full-control")
+        {
+            badge.Text = "FULL";
+            badge.Foreground = BrushFrom("#FF9F0A");
+        }
+        else
+        {
+            badge.Text = "UNLOCKED";
+            badge.Foreground = BrushFrom("#FF453A");
         }
     }
 
@@ -999,7 +1009,7 @@ internal sealed partial class ControlPanelRuntime
                 {
                     if (String.Equals(runningProfile, requestedProfile, StringComparison.Ordinal)) { profileChangeInFlight = false; requestedProfile = null; }
                 }
-                else if (runningProfile == "full-control" && selectedProfile != "full-control")
+                else if ((runningProfile == "full-control" || runningProfile == "fully-unlocked") && selectedProfile != runningProfile)
                 {
                     profileChangeInFlight = true; requestedProfile = persistentProfile; RestartGatewayAsync(persistentProfile);
                 }
@@ -1047,11 +1057,12 @@ internal sealed partial class ControlPanelRuntime
         }
         TextBlock scope = Find<TextBlock>("ScopeText");
         TextBlock hint = Find<TextBlock>("ProfileHint");
-        Find<TextBlock>("ScopeLabel").Text = "Workspace";
+        Find<TextBlock>("ScopeLabel").Text = selectedProfile == "fully-unlocked" ? "Workspace (not enforced)" : "Workspace";
         scope.Text = currentWorkspace;
         if (selectedProfile == "read-only") hint.Text = "Read-only in selected workspace";
-        else if (selectedProfile == "full-control") hint.Text = "Workspace files + owned terminal sessions";
-        else hint.Text = "Guarded filesystem writes in workspace";
+        else if (selectedProfile == "workspace-write") hint.Text = "Guarded filesystem writes in workspace";
+        else if (selectedProfile == "full-control") hint.Text = "Workspace files + terminal with Windows user permissions";
+        else hint.Text = "No DeskMCP filesystem sandbox · Windows account permissions";
         UpdateWorkspaceUi();
 
         Ellipse liveDot = Find<Ellipse>("LiveDot");
@@ -1099,14 +1110,26 @@ internal sealed partial class ControlPanelRuntime
         ApplyUpdateSecurityHoldUi();
 
         string profileLabel = selectedProfile == "read-only" ? "Read" :
-            selectedProfile == "full-control" ? "Full" : "Write";
+            selectedProfile == "workspace-write" ? "Write" :
+            selectedProfile == "full-control" ? "Full" : "Unlocked";
         notify.Text = "DeskMCP · " + liveText.Text + " · " + profileLabel;
     }
 
 
-    private void ShowFullControlOverlay()
+    private void ShowElevatedProfileOverlay(string profile)
     {
-        if (selectedProfile == "full-control") return;
+        if (selectedProfile == profile) return;
+        pendingElevatedProfile = profile;
+        bool fullyUnlocked = profile == "fully-unlocked";
+        Find<TextBlock>("FullControlDangerText").Text = fullyUnlocked ? "FULLY UNLOCKED" : "FULL CONTROL";
+        Find<TextBlock>("FullControlTitle").Text = fullyUnlocked ? "Fully unlock DeskMCP?" : "Enable Full Control?";
+        Find<TextBlock>("FullControlBody").Text = fullyUnlocked
+            ? "DeskMCP will stop enforcing Workspace and sensitive-path boundaries. Terminal commands run with your current Windows user permissions."
+            : "Gateway-owned terminal sessions will run with your current Windows user permissions.";
+        Find<TextBlock>("FullControlNoteText").Text = fullyUnlocked
+            ? "Filesystem tools may access any path your Windows account can access, including sensitive files. Fresh-observation write guards are disabled. This mode is session-only."
+            : "Filesystem tools stay inside the selected Workspace. Terminal sessions are not filesystem-sandboxed by that Workspace boundary. This mode is session-only.";
+        Find<Button>("FullControlEnableButton").Content = fullyUnlocked ? "Unlock session" : "Enable session";
         suppressAutoHide = true;
         Grid overlay = Find<Grid>("FullControlOverlay");
         ScaleTransform scale = (ScaleTransform)Find<Border>("FullControlModal").RenderTransform;
@@ -1137,7 +1160,7 @@ internal sealed partial class ControlPanelRuntime
     private void ApplyProfile(string profile)
     {
         selectedProfile = profile;
-        if (profile != "full-control") persistentProfile = profile;
+        if (profile != "full-control" && profile != "fully-unlocked") persistentProfile = profile;
         SaveSettings(); SetProfileVisual(profile, true);
         profileChangeInFlight = true; requestedProfile = profile;
         Find<TextBlock>("GatewayStatus").Text = "Restarting…"; Find<Ellipse>("GatewayDot").Fill = BrushFrom("#FF9F0A"); RestartGatewayAsync(profile);
@@ -1146,7 +1169,7 @@ internal sealed partial class ControlPanelRuntime
     private void SelectProfile(string profile)
     {
         if (updateSecurityHold) { ShowToast("Resolve the update security hold before changing permissions.", true); return; }
-        if (profile == "full-control") { ShowFullControlOverlay(); return; }
+        if (profile == "full-control" || profile == "fully-unlocked") { ShowElevatedProfileOverlay(profile); return; }
         ApplyProfile(profile);
     }
     private void ShowToast(string message, bool isError)
@@ -1612,6 +1635,7 @@ internal sealed partial class ControlPanelRuntime
         WireButtonMotion(Find<Button>("ReadButton"), 1.008);
         WireButtonMotion(Find<Button>("WriteButton"), 1.008);
         WireButtonMotion(Find<Button>("FullButton"), 1.008);
+        WireButtonMotion(Find<Button>("UnlockButton"), 1.008);
         WireButtonMotion(Find<Button>("FullControlCancelButton"), 1.012);
         WireButtonMotion(Find<Button>("FullControlEnableButton"), 1.008);
         WireButtonMotion(Find<Button>("SettingsButton"), 1.018);
@@ -2002,8 +2026,9 @@ internal sealed partial class ControlPanelRuntime
         Find<Button>("ReadButton").Click += delegate { SelectProfile("read-only"); };
         Find<Button>("WriteButton").Click += delegate { SelectProfile("workspace-write"); };
         Find<Button>("FullButton").Click += delegate { SelectProfile("full-control"); };
+        Find<Button>("UnlockButton").Click += delegate { SelectProfile("fully-unlocked"); };
         Find<Button>("FullControlCancelButton").Click += delegate { HideFullControlOverlay(null); };
-        Find<Button>("FullControlEnableButton").Click += delegate { HideFullControlOverlay(delegate { ApplyProfile("full-control"); }); };
+        Find<Button>("FullControlEnableButton").Click += delegate { HideFullControlOverlay(delegate { ApplyProfile(pendingElevatedProfile); }); };
         Find<Button>("ThemeSystemButton").Click += delegate { SetThemeMode("system"); };
         Find<Button>("ThemeLightButton").Click += delegate { SetThemeMode("light"); };
         Find<Button>("ThemeDarkButton").Click += delegate { SetThemeMode("dark"); };
@@ -2256,8 +2281,16 @@ internal sealed partial class ControlPanelRuntime
             overlay.Visibility = Visibility.Visible; overlay.Opacity = 1;
             ScaleTransform scale = (ScaleTransform)((Border)preview.FindName("TunnelSetupModal")).RenderTransform; scale.ScaleX = 1; scale.ScaleY = 1;
         }
-        else if (modalCapture == "full")
+        else if (modalCapture == "full" || modalCapture == "unlock")
         {
+            if (modalCapture == "unlock")
+            {
+                ((TextBlock)preview.FindName("FullControlDangerText")).Text = "FULLY UNLOCKED";
+                ((TextBlock)preview.FindName("FullControlTitle")).Text = "Fully unlock DeskMCP?";
+                ((TextBlock)preview.FindName("FullControlBody")).Text = "DeskMCP will stop enforcing Workspace and sensitive-path boundaries. Terminal commands run with your current Windows user permissions.";
+                ((TextBlock)preview.FindName("FullControlNoteText")).Text = "Filesystem tools may access any path your Windows account can access, including sensitive files. Fresh-observation write guards are disabled. This mode is session-only.";
+                ((Button)preview.FindName("FullControlEnableButton")).Content = "Unlock session";
+            }
             Grid overlay = (Grid)preview.FindName("FullControlOverlay");
             overlay.Visibility = Visibility.Visible; overlay.Opacity = 1;
             ScaleTransform scale = (ScaleTransform)((Border)preview.FindName("FullControlModal")).RenderTransform; scale.ScaleX = 1; scale.ScaleY = 1;
@@ -2265,9 +2298,11 @@ internal sealed partial class ControlPanelRuntime
         Button read = (Button)preview.FindName("ReadButton");
         Button write = (Button)preview.FindName("WriteButton");
         Button full = (Button)preview.FindName("FullButton");
+        Button unlock = (Button)preview.FindName("UnlockButton");
         read.Foreground = BrushFrom(darkTheme ? "#A8A8AE" : "#71717A");
         write.Foreground = BrushFrom(darkTheme ? "#F5F5F7" : "#18181B");
         full.Foreground = BrushFrom(darkTheme ? "#A8A8AE" : "#71717A");
+        unlock.Foreground = BrushFrom(darkTheme ? "#A8A8AE" : "#71717A");
         if (settingsPage)
         {
             ((Grid)preview.FindName("MainPage")).Visibility = Visibility.Collapsed;
@@ -2288,7 +2323,7 @@ Border captureRoot = (Border)preview.FindName("RootCard");
         Grid segments = (Grid)preview.FindName("ProfileSegmentsGrid");
         Border indicator = (Border)preview.FindName("ProfileIndicator");
         TranslateTransform transform = (TranslateTransform)indicator.RenderTransform;
-        double segmentWidth = segments.ActualWidth / 3.0;
+        double segmentWidth = segments.ActualWidth / 4.0;
         indicator.Width = segmentWidth;
         transform.X = segmentWidth;
         indicator.UpdateLayout();
@@ -2321,6 +2356,14 @@ internal static class Program
     private const string MutexName = @"Local\DesktopMCP.ControlPanel.Singleton";
     private const string ActivationName = @"Local\DesktopMCP.ControlPanel.Activate";
 
+    private static string ResolveInstanceObjectName(string baseName)
+    {
+        string instanceNamespace = Environment.GetEnvironmentVariable("DESKTOP_MCP_INSTANCE_NAMESPACE");
+        if (String.IsNullOrWhiteSpace(instanceNamespace)) return baseName;
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(instanceNamespace.Trim()));
+        return baseName + "." + Convert.ToHexString(digest, 0, 8);
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -2342,14 +2385,16 @@ internal static class Program
                 int step = (mode == "--capture-first-run-tunnel" || mode == "--capture-first-run-tunnel-dark") ? 1 : (mode == "--capture-first-run-plugin" || mode == "--capture-first-run-plugin-dark") ? 2 : (mode == "--capture-first-run" || mode == "--capture-first-run-dark") ? 0 : -1;
                 bool darkCapture = mode == "--capture-dark" || mode == "--capture-settings-dark" || mode.EndsWith("-dark", StringComparison.Ordinal);
                 bool settingsCapture = mode == "--capture-settings" || mode == "--capture-settings-dark";
-                string modalCapture = (mode == "--capture-tunnel-modal" || mode == "--capture-tunnel-modal-dark") ? "tunnel" : (mode == "--capture-full-modal" || mode == "--capture-full-modal-dark") ? "full" : null;
+                string modalCapture = (mode == "--capture-tunnel-modal" || mode == "--capture-tunnel-modal-dark") ? "tunnel" : (mode == "--capture-full-modal" || mode == "--capture-full-modal-dark") ? "full" : (mode == "--capture-unlock-modal" || mode == "--capture-unlock-modal-dark") ? "unlock" : null;
                 string output = args.Length > 1 ? args[1] : Path.Combine(baseDir, settingsCapture ? "settings-preview.png" : step >= 0 ? "first-run-preview.png" : modalCapture != null ? modalCapture + "-preview.png" : "panel-preview.png");
                 ControlPanelRuntime.CapturePreview(xamlPath, output, step, darkCapture, settingsCapture, modalCapture);
                 return 0;
             }
             bool startup = args.Length > 0 && args[0] == "--startup";
-            using (EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationName))
-            using (Mutex singleInstance = new Mutex(false, MutexName))
+            string activationName = ResolveInstanceObjectName(ActivationName);
+            string mutexName = ResolveInstanceObjectName(MutexName);
+            using (EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, activationName))
+            using (Mutex singleInstance = new Mutex(false, mutexName))
             {
                 bool acquired;
                 try { acquired = singleInstance.WaitOne(0, false); } catch (AbandonedMutexException) { acquired = true; }

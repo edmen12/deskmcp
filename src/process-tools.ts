@@ -56,8 +56,10 @@ async function auditedProcessCall(
 }
 
 function requireFullControl(policy: DesktopPolicy): void {
-  if (policy.profile !== 'full-control') {
-    throw new PolicyDeniedError('Process tools require DESKTOP_MCP_PROFILE=full-control.');
+  if (policy.profile !== 'full-control' && policy.profile !== 'fully-unlocked') {
+    throw new PolicyDeniedError(
+      'Process tools require DESKTOP_MCP_PROFILE=full-control or fully-unlocked.'
+    );
   }
 }
 
@@ -84,7 +86,7 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in full-control mode and return an opaque Gateway-owned session ID instead of a Windows PID.',
+      description: 'Start a terminal process in full-control or fully-unlocked mode and return an opaque Gateway-owned session ID instead of a Windows PID.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -105,11 +107,17 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        sessions.assertCapacity();
         const result = await bridge.startProcess(command, timeout_ms, shell);
         if (result.isError) return result;
         const pid = extractStartedPid(result.text);
-        const sessionId = sessions.register(pid);
-        return sanitizeProcessResult(result, pid, sessionId);
+        try {
+          const sessionId = sessions.register(pid);
+          return sanitizeProcessResult(result, pid, sessionId);
+        } catch (error) {
+          await bridge.forceTerminateProcess(pid).catch(() => undefined);
+          throw error;
+        }
       }
     )
   );

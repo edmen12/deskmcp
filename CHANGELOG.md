@@ -4,6 +4,11 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added a session-only **Unlock** (`fully-unlocked`) permission profile for explicit advanced use. It disables DeskMCP Workspace, sensitive-path, search-exclusion, and fresh-observation write guards while retaining audit logging and the host OS account permission boundary.
+- Added matching Windows and macOS permission UI, explicit risk confirmation, and health/policy fields that report whether Workspace and observation guards are actually enforced.
+
 ### Security
 
 - Defined the safe-update trust contract: immutable stable GitHub releases, matching asset/manifest/local SHA-256, and valid pinned-publisher Authenticode before user-confirmed automatic execution is eligible.
@@ -12,6 +17,12 @@ All notable changes to DeskMCP are documented here.
 - Added installer rollback for failures after the prior install is backed up, plus recovery from interrupted `.install-*` / `.backup-*` states.
 - Upgrade Setup now preserves an existing **Start with Windows** choice instead of defaulting it back on.
 - Prepared SignPath Foundation OSS signing: public code-signing/privacy policies, GitHub-hosted unsigned release-candidate provenance workflow, and signed-artifact finalization with Authenticode/timestamp verification and post-sign readiness.
+
+### Fixed
+
+- Reap exited Gateway-owned process sessions before enforcing the 32-session cap, and fail safely before spawning when capacity is exhausted so a rejected start cannot orphan a process.
+- Isolated release-stage and installed-runtime smoke tests onto temporary loopback ports and singleton namespaces, allowing release validation to run while the development Control Panel is active.
+- Hardened installer mutex smoke synchronization so native ARM64 validation checks the actual single-instance contract instead of depending on fragile process-ID timing.
 
 ### Changed
 

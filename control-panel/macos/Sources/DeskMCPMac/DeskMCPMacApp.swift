@@ -20,6 +20,7 @@ enum DeskMCPProfile: String, CaseIterable, Identifiable {
     case readOnly = "read-only"
     case workspaceWrite = "workspace-write"
     case fullControl = "full-control"
+    case fullyUnlocked = "fully-unlocked"
 
     var id: String { rawValue }
     var title: String {
@@ -27,6 +28,7 @@ enum DeskMCPProfile: String, CaseIterable, Identifiable {
         case .readOnly: return "Read"
         case .workspaceWrite: return "Write"
         case .fullControl: return "Full"
+        case .fullyUnlocked: return "Unlock"
         }
     }
 }

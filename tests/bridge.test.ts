@@ -422,6 +422,50 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       await readOnlyServer.close();
     }
 
+    const unlockedPolicy = await DesktopPolicy.create({
+      profile: 'fully-unlocked',
+      allowedRoots: [createdDirPath]
+    });
+    const unlockedServer = await startHttpServer(
+      '127.0.0.1', 0, bridge, unlockedPolicy, audit, observations, processSessions
+    );
+    const unlockedClient = makeClient('0.9.0-fully-unlocked');
+    try {
+      await unlockedClient.connect(new StreamableHTTPClientTransport(
+        new URL(`${unlockedServer.url}/mcp`)
+      ));
+
+      const unlockedStatus = await unlockedClient.callTool({
+        name: 'desktop_policy_status',
+        arguments: {}
+      });
+      const unlockedStatusText = JSON.stringify(unlockedStatus.content);
+      assert.match(unlockedStatusText, /fully-unlocked/);
+      assert.match(unlockedStatusText, /allowSensitivePaths[^}]*true/);
+
+      const sensitiveOutsideRead = await unlockedClient.callTool({
+        name: 'desktop_read_file',
+        arguments: { path: searchSensitivePath }
+      });
+      assert.equal(sensitiveOutsideRead.isError, undefined);
+      assert.match(JSON.stringify(sensitiveOutsideRead.content), /SEARCH_E2E_COMMON secret/);
+
+      await writeFile(existingWritePath, 'UNLOCKED_EXTERNAL', 'utf8');
+      const unlockedStaleWrite = await unlockedClient.callTool({
+        name: 'desktop_write_file',
+        arguments: {
+          path: existingWritePath,
+          content: 'UNLOCKED_AFTER',
+          mode: 'rewrite'
+        }
+      });
+      assert.equal(unlockedStaleWrite.isError, undefined);
+      assert.equal(await readFile(existingWritePath, 'utf8'), 'UNLOCKED_AFTER');
+    } finally {
+      await unlockedClient.close();
+      await unlockedServer.close();
+    }
+
     const fullControlPolicy = await DesktopPolicy.create({
       profile: 'full-control',
       allowedRoots: [TEST_AREA]

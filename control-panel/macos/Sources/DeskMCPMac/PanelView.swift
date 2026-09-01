@@ -5,6 +5,7 @@ struct PanelView: View {
     @EnvironmentObject private var model: DeskMCPModel
     @State private var showTunnel = false
     @State private var showFullWarning = false
+    @State private var showUnlockWarning = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -23,7 +24,13 @@ struct PanelView: View {
             Button("Cancel", role: .cancel) { }
             Button("Enable", role: .destructive) { model.setProfile(.fullControl) }
         } message: {
-            Text("Gateway-owned terminal sessions use your current macOS user permissions. Workspace file tools remain scoped, but terminal sessions are not filesystem-sandboxed by that workspace boundary.")
+            Text("Gateway-owned terminal sessions use your current macOS user permissions. Workspace file tools remain scoped, but terminal sessions are not filesystem-sandboxed by that workspace boundary. This mode is session-only.")
+        }
+        .alert("Fully unlock DeskMCP?", isPresented: $showUnlockWarning) {
+            Button("Cancel", role: .cancel) { }
+            Button("Unlock", role: .destructive) { model.setProfile(.fullyUnlocked) }
+        } message: {
+            Text("DeskMCP will stop enforcing Workspace, sensitive-path, and fresh-observation write guards for this session. File and terminal access is then limited only by your macOS account permissions and remote-client policy.")
         }
 
     }
@@ -72,12 +79,13 @@ struct PanelView: View {
                 Spacer()
                 Text(model.profile.title.uppercased())
                     .font(.caption.bold())
-                    .foregroundStyle(model.profile == .fullControl ? .red : model.profile == .workspaceWrite ? .blue : .secondary)
+                    .foregroundStyle(model.profile == .fullyUnlocked ? .red : model.profile == .fullControl ? .orange : model.profile == .workspaceWrite ? .blue : .secondary)
             }
             HStack(spacing: 6) {
                 profileButton(.readOnly)
                 profileButton(.workspaceWrite)
                 profileButton(.fullControl)
+                profileButton(.fullyUnlocked)
             }
             .padding(4)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -88,6 +96,7 @@ struct PanelView: View {
     private func profileButton(_ value: DeskMCPProfile) -> some View {
         Button(value.title) {
             if value == .fullControl { showFullWarning = true }
+            else if value == .fullyUnlocked { showUnlockWarning = true }
             else { model.setProfile(value) }
         }
         .buttonStyle(.plain)

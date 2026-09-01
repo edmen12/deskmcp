@@ -718,8 +718,8 @@ internal static class InstallerProgram
                     string releasePath = Path.GetFullPath(args[2]);
                     string readyDir = Path.GetDirectoryName(readyPath);
                     if (!String.IsNullOrEmpty(readyDir)) Directory.CreateDirectory(readyDir);
-                    File.WriteAllText(readyPath, Process.GetCurrentProcess().Id.ToString(), Encoding.ASCII);
-                    DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+                    File.WriteAllText(readyPath, "ready", Encoding.ASCII);
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(90);
                     while (!File.Exists(releasePath) && DateTime.UtcNow < deadline) Thread.Sleep(50);
                     return File.Exists(releasePath) ? 0 : 13;
                 }

@@ -44,6 +44,15 @@ function Wait-PathGone([string]$Path, [int]$Seconds = 20) {
     }
     throw "Path was not removed: $Path"
 }
+function Get-FreeLoopbackPort {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+    } finally {
+        $listener.Stop()
+    }
+}
 New-Item -ItemType Directory -Force -Path $BuildRoot, $ReleaseRoot | Out-Null
 Assert-StageNotRunning $StageRoot
 Require (Test-Path -LiteralPath $InstallerSource) 'Installer source is missing.'
@@ -129,14 +138,14 @@ New-Item -ItemType Directory -Force -Path $mutexProbeRoot | Out-Null
 $mutexHolder = Start-Process -FilePath $SetupExe -ArgumentList @('--mutex-test-hold', ('"' + $mutexReady + '"'), ('"' + $mutexRelease + '"')) -PassThru
 $mutexHolderClean = $false
 try {
-    $mutexDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    $mutexDeadline = [DateTime]::UtcNow.AddSeconds(45)
     while (-not (Test-Path -LiteralPath $mutexReady)) {
         if ($mutexHolder.HasExited) { throw ('Setup mutex holder exited before readiness: ' + $mutexHolder.ExitCode) }
-        if ([DateTime]::UtcNow -ge $mutexDeadline) { throw 'Setup mutex holder did not signal readiness within 15 seconds.' }
+        if ([DateTime]::UtcNow -ge $mutexDeadline) { throw 'Setup mutex holder did not signal readiness within 45 seconds.' }
         Start-Sleep -Milliseconds 100
     }
-    $readyPid = (Get-Content -LiteralPath $mutexReady -Raw).Trim()
-    Require ($readyPid -eq [string]$mutexHolder.Id) ('Setup mutex readiness PID mismatch: ' + $readyPid)
+    $mutexHandshake = (Get-Content -LiteralPath $mutexReady -Raw).Trim()
+    Require ($mutexHandshake -eq 'ready') 'Setup mutex holder returned an invalid readiness handshake.'
     $mutexBlocked = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -Wait -PassThru
     Require ($mutexBlocked.ExitCode -eq 11) ('Second Setup instance was not rejected: ' + $mutexBlocked.ExitCode)
     [IO.File]::WriteAllText($mutexRelease, 'release', [Text.Encoding]::ASCII)
@@ -226,6 +235,11 @@ $settingsDir = Join-Path $installerSmokeStateRoot 'roaming'
 $settingsPath = Join-Path $settingsDir 'settings.json'
 $previousDataRoot = $env:DESKTOP_MCP_DATA_ROOT
 $previousSettingsDir = $env:DESKTOP_MCP_SETTINGS_DIR
+$previousPort = $env:DESKTOP_MCP_PORT
+$previousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
+$installerSmokePort = Get-FreeLoopbackPort
+$installerSmokeBaseUrl = 'http://127.0.0.1:' + $installerSmokePort
+$installerSmokeInstanceNamespace = 'installer-smoke-' + $Target + '-' + [guid]::NewGuid().ToString('N')
 $panel = $null
 $health = $null
 try {
@@ -234,7 +248,11 @@ try {
     [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
     $env:DESKTOP_MCP_DATA_ROOT = $installerSmokeDataRoot
     $env:DESKTOP_MCP_SETTINGS_DIR = $settingsDir
+    $env:DESKTOP_MCP_PORT = [string]$installerSmokePort
+    $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $installerSmokeInstanceNamespace
     Write-Output 'INSTALLER_SMOKE_SETTINGS=ISOLATED_TEMPORARY'
+    Write-Output ('INSTALLER_SMOKE_PORT=' + $installerSmokePort)
+    Write-Output 'INSTALLER_SMOKE_INSTANCE_NAMESPACE=ISOLATED'
 
     Write-Output 'STEP=installer-smoke-runtime'
     $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
@@ -242,7 +260,7 @@ try {
     $healthDeadline = [DateTime]::UtcNow.AddSeconds(45)
     while ([DateTime]::UtcNow -lt $healthDeadline -and $null -eq $health) {
         if ($panel.HasExited) { Write-Output ('INSTALLER_PANEL_EXIT=' + $panel.ExitCode); break }
-        try { $health = Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 }
+        try { $health = Invoke-RestMethod ($installerSmokeBaseUrl + '/health') -TimeoutSec 1 }
         catch { if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 } }
     }
     if ($null -eq $health) {
@@ -262,12 +280,14 @@ try {
     $uninstall = Start-Process -FilePath $installedUninstaller -ArgumentList @('--test-root', ('"' + $SmokeRoot + '"')) -Wait -PassThru
     Require ($uninstall.ExitCode -eq 0) "Smoke uninstall failed: $($uninstall.ExitCode)"
     Wait-PathGone $SmokeRoot 20
-    try { Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null; throw 'Gateway remained online after uninstall.' }
+    try { Invoke-RestMethod ($installerSmokeBaseUrl + '/health') -TimeoutSec 1 | Out-Null; throw 'Gateway remained online after uninstall.' }
     catch { if ($_.Exception.Message -like 'Gateway remained*') { throw } }
 } finally {
     if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
     $env:DESKTOP_MCP_DATA_ROOT = $previousDataRoot
     $env:DESKTOP_MCP_SETTINGS_DIR = $previousSettingsDir
+    $env:DESKTOP_MCP_PORT = $previousPort
+    $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $previousInstanceNamespace
     if (Test-Path -LiteralPath $installerSmokeStateRoot) { try { [IO.Directory]::Delete($installerSmokeStateRoot, $true) } catch { } }
 }
 

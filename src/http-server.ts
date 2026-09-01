@@ -38,7 +38,9 @@ function publicPolicyInfo(policy?: DesktopPolicy) {
     profile: info.profile,
     processToolsEnabled: info.processToolsEnabled,
     writeEnabled: info.writeEnabled,
-    allowSensitivePaths: info.allowSensitivePaths
+    allowSensitivePaths: info.allowSensitivePaths,
+    workspaceBoundaryEnforced: info.workspaceBoundaryEnforced,
+    observationGuardsEnabled: info.observationGuardsEnabled
   };
 }
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {

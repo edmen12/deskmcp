@@ -299,7 +299,7 @@ export function registerDesktopCommanderBridgeTools(
       async () => {
         policy.assertCanWrite();
         const safeSource = await policy.resolveReadPath(source);
-        await observations.requireFresh(safeSource);
+        if (!policy.isFullyUnlocked()) await observations.requireFresh(safeSource);
         const safeDestination = await policy.resolveNewWritePath(destination);
         const result = await bridge.moveFile(safeSource, safeDestination);
         if (!result.isError) {
@@ -338,7 +338,7 @@ export function registerDesktopCommanderBridgeTools(
       async () => {
         policy.assertCanWrite();
         const safePath = await policy.resolveReadPath(rawPath);
-        await observations.requireFresh(safePath);
+        if (!policy.isFullyUnlocked()) await observations.requireFresh(safePath);
         const result = await bridge.editTextFile(
           safePath,
           old_string,
@@ -376,7 +376,7 @@ export function registerDesktopCommanderBridgeTools(
       'Desktop write denied or failed',
       async () => {
         const safePath = await policy.resolveWritePath(rawPath);
-        await observations.requireFreshIfExists(safePath);
+        if (!policy.isFullyUnlocked()) await observations.requireFreshIfExists(safePath);
         const result = await bridge.writeFile(safePath, content, mode);
         if (!result.isError) await observations.observe(safePath);
         return result;

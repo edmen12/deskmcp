@@ -23,8 +23,8 @@ The default profile is **Read-only**. Filesystem access is scoped to a workspace
 | | |
 | --- | --- |
 | **Local-first** | The Gateway and policy enforcement run on your computer. |
-| **Workspace scoped** | File tools stay inside the folder you explicitly select. |
-| **Secure by default** | First run starts in Read-only mode; Full Control is never persisted. |
+| **Workspace scoped** | Safe profiles keep file tools inside the folder you explicitly select. |
+| **Secure by default** | First run starts in Read-only mode; Full Control and Fully Unlocked are never persisted. |
 | **Easy to install** | The self-contained Setup does not require Node.js, npm, .NET, Git, or a source checkout. |
 ## Product preview
 
@@ -70,11 +70,12 @@ The Tunnel provides the remote transport. The policy decision still happens loca
 
 ## Permission profiles
 
-- **Read** — default; read, list, metadata and bounded search only.
+- **Read** — default; read, list, metadata and bounded search only inside the selected Workspace.
 - **Write** — adds guarded create/edit/write/move operations inside the selected Workspace.
-- **Full** — session-only; adds Gateway-owned terminal/process sessions.
+- **Full** — session-only; keeps the Workspace filesystem boundary and adds terminal/process sessions that run with the current Windows user permissions.
+- **Unlock** (`fully-unlocked`) — session-only; disables DeskMCP Workspace, sensitive-path and fresh-observation write guards. Filesystem tools and terminal commands can reach anything the current Windows account is permitted to access.
 
-`Full` is never persisted. Restarting DeskMCP returns to the last safe persisted profile: **Read** or **Write**.
+`Full` and `Unlock` are never persisted. Restarting DeskMCP returns to the last safe persisted profile: **Read** or **Write**. Unlock does not bypass Windows ACL/UAC or any remote-client safety policy; it only removes DeskMCP's own local sandbox boundaries.
 ## Tool surface
 
 DeskMCP currently exposes a stable **13-tool** MCP surface:
@@ -100,12 +101,11 @@ The schemas stay discoverable across profiles so the remote connection remains s
 ## Security model
 
 - Gateway HTTP binds only to `127.0.0.1:8765`.
-- Allowed filesystem access is restricted to the locally selected Workspace.
-- Lexical and canonical path checks block symlink/junction escapes.
-- Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default.
-- Search injects sensitive-path exclusions **before** Desktop Commander/ripgrep reads candidate files.
-- Writes use read-before-write observations and reject stale changes; the observation cache is bounded to 1024 entries and eviction never widens write permission.
-- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control; at most 32 owned sessions are retained and new sessions are refused at the cap rather than orphaned.
+- In Read, Write and Full, allowed filesystem access is restricted to the locally selected Workspace and lexical/canonical path checks block symlink/junction escapes.
+- Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default, and search excludes them before Desktop Commander/ripgrep reads candidates.
+- In Read/Write/Full, writes use read-before-write observations and reject stale changes; the observation cache is bounded to 1024 entries and eviction never widens write permission.
+- Unlock intentionally disables those three DeskMCP filesystem protections for the current session. Audit remains enabled and Windows account permissions remain the final local boundary.
+- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control. The registry keeps at most 32 live owned sessions and automatically reaps exited sessions before enforcing the cap; arbitrary system process operations, when needed in Unlock, are performed through the terminal under Windows permissions.
 - Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, or real process PIDs. Writes are serialized and rotate at 10 MB with four bounded backups.
 
 Security reports should use [GitHub Private vulnerability reporting](https://github.com/edmen12/deskmcp/security/advisories/new), not a public issue.
@@ -169,7 +169,7 @@ Privacy and network behavior are documented in [PRIVACY.md](PRIVACY.md).
 
 ## Current limitations
 
-- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging and full install/upgrade/runtime/uninstall validation now pass on GitHub's Windows ARM64 runner; the first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
+- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging is implemented, but the current installer-mutex hardening branch still requires a fresh native Windows ARM64 CI pass before ARM64 validation can be called closed. The first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
 - A native macOS ARM64 menu-bar client, release stage, and downloadable **Developer Preview** artifact pass on Apple Silicon CI. The preview is ad-hoc signed and not notarized; a general-user macOS release still requires Developer ID signing and notarization. See [macOS Developer Preview](docs/MACOS_DEVELOPER_PREVIEW.md).
 - Settings now implement the user-controlled safe-update flow through download, local SHA-256/size verification, WinVerifyTrust, compiled publisher-pin checking, explicit install, and post-install version/profile verification. Current builds keep automatic execution disabled because no production Authenticode publisher pin is compiled in; manual installer upgrades remain available.
 - The open-source Windows Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until a release signing identity is configured.
@@ -179,11 +179,12 @@ Privacy and network behavior are documented in [PRIVACY.md](PRIVACY.md).
 
 Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 
-- [Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5)
-- 🚧 **#6 — macOS native client and packaging** — SwiftUI menu bar, Keychain, Login Item, Darwin ARM64 runtime stage, Apple Silicon CI, and downloadable Developer Preview artifact pass; Developer ID signing/notarization and a stable GitHub Release asset remain
-- ✅ **#7 — Windows ARM64 packaging and validation** — target-aware runtime/installer pipeline and native Windows ARM64 full-chain CI pass; first public ARM64 artifact is deferred to a future release so v0.9.1 stays unchanged
-- 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — download/verify/install/post-install security-hold path is implemented; production Authenticode credential, compiled publisher pin, immutable future release and signed end-to-end execution remain
-- ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed, and surfaced with startup diagnostics
+- 🚧 [#5 — Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5) — still requires a clean-user install/startup/First Run/uninstall pass outside the development account.
+- 🚧 [#6 — Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6) — SignPath Foundation approval, first signed artifact verification, and production publisher pin remain pending.
+- 🚧 [#7 — Windows ARM64 packaging and validation](https://github.com/edmen12/deskmcp/issues/7) — target-aware runtime/installer pipeline is implemented; the current installer-mutex hardening still needs a fresh native Windows ARM64 full-chain CI pass before closure.
+- 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — trust validation, verified download and post-install checks are implemented; signed immutable production execution remains gated by #6 and a future immutable release.
+- ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed to upstream initialization variance, and surfaced with startup diagnostics; issue state should be reconciled to closed.
+- 🚧 [#10 — User-controlled signed updater UI](https://github.com/edmen12/deskmcp/issues/10) — explicit update UX exists, while automatic signed execution remains intentionally blocked until the Authenticode/publisher-pin trust chain is live.
 
 ## Support DeskMCP
 

@@ -117,3 +117,30 @@ test('DesktopPolicy blocks sensitive paths unless locally opted in', async () =>
     await rm(sandbox, { recursive: true, force: true });
   }
 });
+
+test('DesktopPolicy fully-unlocked bypasses workspace and sensitive-path sandboxing', async () => {
+  await prepare();
+  try {
+    const sensitiveOutside = path.join(outside, '.env');
+    await writeFile(sensitiveOutside, 'FULLY_UNLOCKED_TEST_VALUE', 'utf8');
+
+    const unlocked = await DesktopPolicy.create({
+      profile: 'fully-unlocked',
+      allowedRoots: [allowed]
+    });
+
+    assert.equal(unlocked.info().profile, 'fully-unlocked');
+    assert.equal(unlocked.info().processToolsEnabled, true);
+    assert.equal(unlocked.info().writeEnabled, true);
+    assert.equal(unlocked.info().allowSensitivePaths, true);
+    assert.equal(unlocked.isFullyUnlocked(), true);
+    assert.equal(await unlocked.resolveReadPath(outsideFile), await realpath(outsideFile));
+    assert.equal(await unlocked.resolveReadPath(sensitiveOutside), await realpath(sensitiveOutside));
+    assert.equal(
+      await unlocked.resolveWritePath(path.join(outside, 'new-unlocked.txt')),
+      path.join(await realpath(outside), 'new-unlocked.txt')
+    );
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});

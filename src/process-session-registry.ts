@@ -7,12 +7,42 @@ interface ProcessSession {
   readonly createdAt: number;
 }
 
+function defaultProcessAliveCheck(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ESRCH';
+  }
+}
+
 export class ProcessSessionRegistry {
   private readonly sessions = new Map<string, ProcessSession>();
 
-  constructor(readonly maxSessions = 32) {
+  constructor(
+    readonly maxSessions = 32,
+    private readonly isProcessAlive: (pid: number) => boolean = defaultProcessAliveCheck
+  ) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 1024) {
       throw new Error(`Invalid process session limit: ${maxSessions}`);
+    }
+  }
+
+  pruneDeadSessions(): number {
+    let removed = 0;
+    for (const [id, session] of this.sessions) {
+      if (this.isProcessAlive(session.pid)) continue;
+      this.sessions.delete(id);
+      removed += 1;
+    }
+    return removed;
+  }
+
+  assertCapacity(): void {
+    this.pruneDeadSessions();
+    if (this.sessions.size >= this.maxSessions) {
+      throw new PolicyDeniedError(`Process session limit reached (${this.maxSessions}). Terminate an owned session before starting another.`);
     }
   }
 
@@ -20,9 +50,7 @@ export class ProcessSessionRegistry {
     if (!Number.isInteger(pid) || pid <= 0) {
       throw new Error(`Invalid process PID: ${pid}`);
     }
-    if (this.sessions.size >= this.maxSessions) {
-      throw new PolicyDeniedError(`Process session limit reached (${this.maxSessions}). Terminate an owned session before starting another.`);
-    }
+    this.assertCapacity();
     const id = randomUUID();
     this.sessions.set(id, { id, pid, createdAt: Date.now() });
     return id;
@@ -32,6 +60,10 @@ export class ProcessSessionRegistry {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new PolicyDeniedError('Unknown or unowned process session.');
+    }
+    if (!this.isProcessAlive(session.pid)) {
+      this.sessions.delete(sessionId);
+      throw new PolicyDeniedError('Process session has already exited.');
     }
     return session.pid;
   }

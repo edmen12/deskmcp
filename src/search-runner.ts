@@ -117,7 +117,7 @@ export class SafeSearchRunner {
   async run(options: SafeSearchOptions): Promise<DesktopCommanderToolResult> {
     const prefilteredFilePattern = safeSearchFilePattern(
       options.filePattern,
-      this.policy.allowSensitivePaths
+      this.policy.allowsSensitivePaths()
     );
     const started = await this.bridge.startSearch({
       path: options.rootPath,

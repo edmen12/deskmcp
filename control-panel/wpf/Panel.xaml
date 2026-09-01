@@ -213,8 +213,9 @@
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
           </Grid.ColumnDefinitions>
-          <Border x:Name="ProfileIndicator" Grid.ColumnSpan="3" HorizontalAlignment="Left"
+          <Border x:Name="ProfileIndicator" Grid.ColumnSpan="4" HorizontalAlignment="Left"
                   Background="#FFFFFFFF" BorderBrush="#10000000" BorderThickness="1" CornerRadius="13" IsHitTestVisible="False">
             <Border.Effect><DropShadowEffect Color="#44000000" BlurRadius="14" ShadowDepth="1" Opacity="0.18"/></Border.Effect>
             <Border.RenderTransform><TranslateTransform x:Name="ProfileIndicatorTransform" X="0"/></Border.RenderTransform>
@@ -222,6 +223,7 @@
           <Button Grid.Column="0" x:Name="ReadButton" Style="{StaticResource SegmentButton}" Content="Read"/>
           <Button Grid.Column="1" x:Name="WriteButton" Style="{StaticResource SegmentButton}" Content="Write"/>
           <Button Grid.Column="2" x:Name="FullButton" Style="{StaticResource SegmentButton}" Content="Full"/>
+          <Button Grid.Column="3" x:Name="UnlockButton" Style="{StaticResource SegmentButton}" Content="Unlock"/>
         </Grid>
       </Border>
       <Border x:Name="ScopeCard" Grid.Row="3" Margin="0,14,0,0" Background="#FFFEFEFF" BorderBrush="#0B000000" BorderThickness="1" CornerRadius="20" Padding="15">
@@ -468,13 +470,13 @@
           <Border.RenderTransform><ScaleTransform x:Name="FullControlModalScale" ScaleX="0.94" ScaleY="0.94"/></Border.RenderTransform>
           <StackPanel>
             <Border x:Name="FullControlDangerPill" Background="{DynamicResource UiDangerSoft}" CornerRadius="10" Padding="9,4" HorizontalAlignment="Left">
-              <TextBlock Text="FULL CONTROL" Foreground="{DynamicResource UiDangerText}" FontSize="10" FontWeight="Bold"/>
+              <TextBlock x:Name="FullControlDangerText" Text="FULL CONTROL" Foreground="{DynamicResource UiDangerText}" FontSize="10" FontWeight="Bold"/>
             </Border>
-            <TextBlock Text="Enable Full Control?" Foreground="{DynamicResource UiTextPrimary}" FontSize="20" FontWeight="SemiBold" Margin="0,14,0,0"/>
-            <TextBlock Text="Gateway-owned terminal sessions will run with your current Windows user permissions."
+            <TextBlock x:Name="FullControlTitle" Text="Enable Full Control?" Foreground="{DynamicResource UiTextPrimary}" FontSize="20" FontWeight="SemiBold" Margin="0,14,0,0"/>
+            <TextBlock x:Name="FullControlBody" Text="Gateway-owned terminal sessions will run with your current Windows user permissions."
                        Foreground="{DynamicResource UiTextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="17" Margin="0,8,0,0"/>
             <Border x:Name="FullControlNote" Background="{DynamicResource UiSurfaceMuted}" BorderBrush="{DynamicResource UiInputBorder}" BorderThickness="1" CornerRadius="14" Padding="12,10" Margin="0,13,0,0">
-              <TextBlock Text="Filesystem tools stay inside the selected Workspace. Terminal sessions are not filesystem-sandboxed by that Workspace boundary."
+              <TextBlock x:Name="FullControlNoteText" Text="Filesystem tools stay inside the selected Workspace. Terminal sessions are not filesystem-sandboxed by that Workspace boundary. This mode is session-only."
                          Foreground="{DynamicResource UiTextSecondary}" FontSize="10" TextWrapping="Wrap" LineHeight="15"/>
             </Border>
             <Grid Margin="0,18,0,0">

@@ -59,3 +59,23 @@ test('explicit sensitive-path opt-in does not inject implicit search excludes', 
   assert.equal(result.isError, false);
   assert.equal(captured.filePattern, undefined);
 });
+
+test('fully-unlocked search does not inject sensitive-path excludes', async () => {
+  const policy = await DesktopPolicy.create({
+    profile: 'fully-unlocked', allowedRoots: [TEST_AREA]
+  });
+  let captured: Record<string, unknown> = {};
+  const runner = new SafeSearchRunner(fakeBridge(args => { captured = args; }), policy);
+  const result = await runner.run({
+    rootPath: TEST_AREA,
+    pattern: 'needle',
+    searchType: 'content',
+    ignoreCase: true,
+    maxResults: 10,
+    includeHidden: true,
+    literalSearch: true,
+    timeoutMs: 1000
+  });
+  assert.equal(result.isError, false);
+  assert.equal(captured.filePattern, undefined);
+});

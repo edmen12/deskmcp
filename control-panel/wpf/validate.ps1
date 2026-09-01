@@ -21,7 +21,9 @@ $captures = @(
     @{ Arg='--capture-tunnel-modal'; File=(Join-Path $runtime 'validation-tunnel-modal.png'); Label='TUNNEL_MODAL_OK' },
     @{ Arg='--capture-tunnel-modal-dark'; File=(Join-Path $runtime 'validation-tunnel-modal-dark.png'); Label='TUNNEL_MODAL_DARK_OK' },
     @{ Arg='--capture-full-modal'; File=(Join-Path $runtime 'validation-full-modal.png'); Label='FULL_MODAL_OK' },
-    @{ Arg='--capture-full-modal-dark'; File=(Join-Path $runtime 'validation-full-modal-dark.png'); Label='FULL_MODAL_DARK_OK' }
+    @{ Arg='--capture-full-modal-dark'; File=(Join-Path $runtime 'validation-full-modal-dark.png'); Label='FULL_MODAL_DARK_OK' },
+    @{ Arg='--capture-unlock-modal'; File=(Join-Path $runtime 'validation-unlock-modal.png'); Label='UNLOCK_MODAL_OK' },
+    @{ Arg='--capture-unlock-modal-dark'; File=(Join-Path $runtime 'validation-unlock-modal-dark.png'); Label='UNLOCK_MODAL_DARK_OK' }
 )
 foreach ($capture in $captures) {
     Remove-Item -LiteralPath $capture.File -Force -ErrorAction SilentlyContinue
