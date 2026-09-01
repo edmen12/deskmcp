@@ -2260,7 +2260,9 @@ internal sealed partial class ControlPanelRuntime
         ((TextBlock)preview.FindName("ProfileBadge")).Foreground = BrushFrom("#007AFF");
         ((TextBlock)preview.FindName("ProfileHint")).Text = "Guarded filesystem writes in workspace";
         ((TextBlock)preview.FindName("ScopeText")).Text = "C:\\Users\\User\\Desktop\\workspace";
-        ((TextBlock)preview.FindName("VersionText")).Text = "Gateway 0.9.1";
+        var captureVersion = typeof(ControlPanelRuntime).Assembly.GetName().Version;
+        string captureVersionText = captureVersion == null ? "unknown" : captureVersion.Major + "." + captureVersion.Minor + "." + captureVersion.Build;
+        ((TextBlock)preview.FindName("VersionText")).Text = "Gateway " + captureVersionText;
         ((Button)preview.FindName("PowerButton")).Content = "Restart Gateway";
         if (firstRunStep >= 0)
         {
