@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#07111F" />
+  <meta name="theme-color" content="#05070b" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src https://api.github.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
   <meta name="description" content="DeskMCP is an open-source local-first MCP gateway that gives ChatGPT controlled access to your Windows desktop, files and terminal sessions." />
   <meta property="og:title" content="DeskMCP — Your desktop. Connected to AI." />
-  <meta property="og:description" content="Open-source local-first desktop access for ChatGPT. Controlled by you." />
+  <meta property="og:description" content="A local-first bridge between ChatGPT and your Windows desktop. Powerful access, explicit control." />
   <meta property="og:type" content="website" />
   <title>DeskMCP — Your desktop. Connected to AI.</title>
   <link rel="icon" href="assets/brand/deskmcp-approved-logo-64.png" type="image/png" />
@@ -16,257 +16,243 @@
   <link rel="stylesheet" href="assets/css/site.css" />
 </head>
 <body>
-  <div class="site-shell">
-    <header class="topbar" id="top">
-      <a class="brand" href="#top" aria-label="DeskMCP home">
-        <img src="assets/brand/deskmcp-approved-logo-64.png" width="40" height="40" alt="" />
-        <span class="brand-wordmark"><span>Desk</span><span class="brand-mcp">MCP</span></span>
-      </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="#features">Features</a>
-        <a href="#security">Security</a>
-        <a href="#start">Get started</a>
-        <a href="https://github.com/edmen12/deskmcp" rel="noreferrer">GitHub</a>
-      </nav>
-      <a class="nav-cta" href="#download">Download</a>
-    </header>
+  <div class="ambient ambient-a" aria-hidden="true"></div>
+  <div class="ambient ambient-b" aria-hidden="true"></div>
 
-    <main>
-      <section class="hero section-pad">
-        <div class="hero-glow hero-glow-a"></div>
-        <div class="hero-glow hero-glow-b"></div>
-        <div class="hero-copy">
-          <div class="eyebrow"><span class="live-dot"></span> Open source · Local first · 13 MCP tools</div>
-          <h1>Your desktop.<br /><span>Connected to AI.</span></h1>
-          <p class="hero-lead">Give ChatGPT controlled access to local files and terminal sessions through a policy gateway that runs on your computer.</p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#download">Download for Windows</a>
-            <a class="button button-secondary" href="https://github.com/edmen12/deskmcp" rel="noreferrer">View on GitHub</a>
+  <header class="topbar" id="top">
+    <a class="brand" href="#top" aria-label="DeskMCP home">
+      <img src="assets/brand/deskmcp-approved-logo-64.png" width="38" height="38" alt="" />
+      <span class="brand-wordmark"><span>Desk</span><span class="brand-mcp">MCP</span></span>
+    </a>
+    <nav class="nav" aria-label="Primary navigation">
+      <a href="#product">Product</a>
+      <a href="#permissions">Permissions</a>
+      <a href="#security">Security</a>
+      <a href="#start">Docs</a>
+      <a href="https://github.com/edmen12/deskmcp" rel="noreferrer">GitHub ↗</a>
+    </nav>
+    <a class="nav-cta" href="#download">Download</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="hero-label">LOCAL-FIRST · OPEN SOURCE · WINDOWS</div>
+        <h1>Your desktop.<br /><span>Connected to AI.</span></h1>
+        <p>DeskMCP gives ChatGPT a controlled path to your Windows files and terminal sessions — while permission decisions stay on your machine.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#download">Download for Windows <span>↗</span></a>
+          <a class="button button-ghost" href="#start">Read the quick start</a>
+        </div>
+        <div class="hero-proof">
+          <span><b>13</b> MCP tools</span>
+          <span><b>2</b> native Windows architectures</span>
+          <span><b>0</b> cloud-side filesystem policy</span>
+        </div>
+      </div>
+
+      <div class="hero-product" id="product">
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="product-glow" aria-hidden="true"></div>
+        <div class="product-platform" aria-hidden="true"></div>
+        <figure class="control-panel hero-panel">
+          <img src="assets/images/control-panel.png" alt="Current DeskMCP Control Panel showing Gateway, Tunnel and permission profile status" />
+        </figure>
+        <div class="status-float status-float-left">
+          <span class="status-dot"></span>
+          <div><small>Gateway</small><strong>Running locally</strong></div>
+        </div>
+        <div class="status-float status-float-right">
+          <small>Permission boundary</small>
+          <strong>Explicit. Visible. Yours.</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="signal-strip" aria-label="DeskMCP key product facts">
+      <div><span>01</span><strong>Local-first</strong><small>Policy enforcement on your PC</small></div>
+      <div><span>02</span><strong>Stable surface</strong><small>13 discoverable MCP tools</small></div>
+      <div><span>03</span><strong>Native Windows</strong><small>x64 + ARM64 installers</small></div>
+      <div><span>04</span><strong>Open source</strong><small>Apache-2.0 · public releases</small></div>
+    </section>
+
+    <section class="manifesto section-shell" id="features">
+      <div class="section-index">01 — CONTROL</div>
+      <div class="manifesto-grid">
+        <div class="manifesto-heading">
+          <h2>Power without<br />the mystery.</h2>
+        </div>
+        <div class="manifesto-copy">
+          <p class="manifesto-lead">Most bridges hide the dangerous part: what can actually touch your machine. DeskMCP puts that decision in front of you.</p>
+          <div class="principles">
+            <article>
+              <span>01</span>
+              <h3>See the boundary.</h3>
+              <p>Gateway health, Tunnel status, Workspace and permission profile are visible in one native control surface.</p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>Choose the boundary.</h3>
+              <p>Move deliberately from Read to Write, Full or Unlock. Higher-risk profiles are explicit and session-owned.</p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>Keep the boundary local.</h3>
+              <p>The Tunnel transports requests. DeskMCP still decides locally whether filesystem or process work is allowed.</p>
+            </article>
           </div>
-          <div class="trust-row" aria-label="Product highlights">
-            <span>Apache-2.0</span>
-            <span>Windows x64 + ARM64</span>
-            <span>Read-only by default</span>
-          </div>
         </div>
+      </div>
+    </section>
 
-        <div class="hero-visual" aria-label="DeskMCP permission profiles and connection flow">
-          <div class="connection-card glass-card">
-            <div class="connection-head">
-              <div>
-                <span class="micro-label">LOCAL POLICY GATEWAY</span>
-                <strong>DeskMCP</strong>
-              </div>
-              <span class="health"><span></span> Ready</span>
-            </div>
-            <div class="flow-stack">
-              <div class="flow-node flow-ai">
-                <div class="node-icon">AI</div>
-                <div><strong>ChatGPT</strong><span>OpenAI Tunnel</span></div>
-              </div>
-              <div class="flow-line"><i></i></div>
-              <div class="flow-node flow-gateway">
-                <img src="assets/brand/deskmcp-approved-logo-64.png" alt="" />
-                <div><strong>DeskMCP Gateway</strong><span>127.0.0.1 · policy enforced locally</span></div>
-              </div>
-              <div class="flow-line"><i></i></div>
-              <div class="flow-node">
-                <div class="node-icon">PC</div>
-                <div><strong>Your Windows desktop</strong><span>Files · Terminal sessions · Local tools</span></div>
-              </div>
-            </div>
-            <div class="profile-strip">
-              <span class="profile active">Read</span>
-              <span class="profile">Write</span>
-              <span class="profile full">Full</span>
-              <span class="profile unlock">Unlock</span>
-            </div>
-          </div>
-        </div>
-      </section>
+    <section class="permissions section-shell" id="permissions">
+      <div class="section-index">02 — PERMISSIONS</div>
+      <div class="permission-intro">
+        <h2>Four modes.<br />No ambiguity.</h2>
+        <p>The product language matches the risk model. Safe defaults are quiet. Elevated access becomes increasingly obvious.</p>
+      </div>
+      <div class="permission-rail" role="list">
+        <article class="permission-row permission-read" role="listitem">
+          <div class="permission-number">01</div>
+          <div class="permission-name"><strong>Read</strong><small>Default</small></div>
+          <p>Inspect files, folders, metadata and bounded search inside the selected Workspace.</p>
+          <span class="risk risk-safe">Safe default</span>
+        </article>
+        <article class="permission-row permission-write" role="listitem">
+          <div class="permission-number">02</div>
+          <div class="permission-name"><strong>Write</strong><small>Guarded</small></div>
+          <p>Add create, edit, write and move operations while preserving Workspace and observation guards.</p>
+          <span class="risk risk-safe">Workspace scoped</span>
+        </article>
+        <article class="permission-row permission-full" role="listitem">
+          <div class="permission-number">03</div>
+          <div class="permission-name"><strong>Full</strong><small>Session only</small></div>
+          <p>Enable Gateway-owned terminal sessions while retaining DeskMCP's Workspace boundary.</p>
+          <span class="risk risk-full">Elevated</span>
+        </article>
+        <article class="permission-row permission-unlock" role="listitem">
+          <div class="permission-number">04</div>
+          <div class="permission-name"><strong>Unlock</strong><small>Session only</small></div>
+          <p>Remove DeskMCP's filesystem sandbox. Windows account permissions and UAC still apply.</p>
+          <span class="risk risk-unlock">Highest access</span>
+        </article>
+      </div>
+    </section>
 
-      <section class="download-panel section-wrap" id="download">
-        <div class="download-copy">
-          <span class="section-kicker">Latest stable release</span>
-          <h2>Install DeskMCP in minutes.</h2>
-          <p>Self-contained Windows Setup. No Node.js, npm, .NET SDK, Git or source checkout required.</p>
-          <div class="release-meta">
-            <span id="release-version">Latest release</span>
-            <span id="release-status">Checking GitHub…</span>
-          </div>
-        </div>
-        <div class="download-grid">
-          <a class="download-card" id="download-x64" href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">
-            <span class="arch-badge">x64</span>
-            <strong>Windows x64</strong>
-            <span class="download-sub" id="size-x64">Standard Windows PCs</span>
-            <span class="download-link">Download Setup <span>→</span></span>
-          </a>
-          <a class="download-card" id="download-arm64" href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">
-            <span class="arch-badge">ARM64</span>
-            <strong>Windows ARM64</strong>
-            <span class="download-sub" id="size-arm64">Native ARM64 build</span>
-            <span class="download-link">Download Setup <span>→</span></span>
-          </a>
-          <a class="download-card download-card-quiet" href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">
-            <span class="arch-badge">SHA</span>
-            <strong>Verify your download</strong>
-            <span class="download-sub">Manifests + SHA-256 checksums</span>
-            <span class="download-link">Open release <span>→</span></span>
-          </a>
-        </div>
-        <p class="unsigned-note">Windows builds are currently unsigned while SignPath Foundation approval is pending, so SmartScreen may show an Unknown Publisher warning.</p>
-      </section>
-
-      <section class="section-wrap feature-section" id="features">
-        <div class="section-heading narrow-heading">
-          <span class="section-kicker">Why DeskMCP</span>
-          <h2>Desktop access without giving up control.</h2>
-          <p>DeskMCP sits between ChatGPT and your machine. Every filesystem or process action is checked against the policy you choose locally.</p>
-        </div>
-        <div class="feature-grid">
-          <article class="feature-card">
-            <div class="feature-icon">01</div>
-            <h3>Local-first</h3>
-            <p>The Gateway and policy enforcement run on your computer. The local MCP endpoint stays bound to <code>127.0.0.1</code>.</p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon">02</div>
-            <h3>Secure by default</h3>
-            <p>First run starts Read-only. Safe profiles stay inside a Workspace you select, with sensitive paths excluded before search.</p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon">03</div>
-            <h3>Stable 13-tool surface</h3>
-            <p>Files, bounded search and Gateway-owned terminal sessions stay discoverable while local policy decides what is actually permitted.</p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon">04</div>
-            <h3>Session-owned power</h3>
-            <p>Full and Unlock are session-only. A restart returns DeskMCP to the last safe persisted Read or Write profile.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-wrap profiles-section">
-        <div class="section-heading">
-          <span class="section-kicker">Permission profiles</span>
-          <h2>Choose exactly how much access AI gets.</h2>
-        </div>
-        <div class="profile-grid">
-          <article class="permission-card permission-read">
-            <div class="permission-top"><span>Read</span><small>Default</small></div>
-            <h3>Inspect safely.</h3>
-            <p>Read, list, metadata and bounded search inside your selected Workspace.</p>
-          </article>
-          <article class="permission-card permission-write">
-            <div class="permission-top"><span>Write</span><small>Guarded</small></div>
-            <h3>Edit with checks.</h3>
-            <p>Adds create, edit, write and move operations with observation guards.</p>
-          </article>
-          <article class="permission-card permission-full">
-            <div class="permission-top"><span>Full</span><small>Session only</small></div>
-            <h3>Use the terminal.</h3>
-            <p>Keeps the Workspace boundary while enabling Gateway-owned process sessions.</p>
-          </article>
-          <article class="permission-card permission-unlock">
-            <div class="permission-top"><span>Unlock</span><small>Session only</small></div>
-            <h3>Remove DeskMCP's sandbox.</h3>
-            <p>Disables DeskMCP Workspace and sensitive-path guards. Windows ACL/UAC still applies.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="product-section section-wrap">
-        <div class="product-copy">
-          <span class="section-kicker">Control Panel</span>
-          <h2>One place to see exactly what is running.</h2>
-          <p>Gateway health, Tunnel state, active profile, Workspace, startup settings and secret-safe Tunnel configuration live in a native Windows tray app.</p>
-          <ul class="check-list">
-            <li><span>✓</span> Full and Unlock visibly separated by risk level</li>
-            <li><span>✓</span> Tunnel runtime key protected with Windows DPAPI</li>
-            <li><span>✓</span> Metadata-only audit logs with bounded rotation</li>
+    <section class="product-story section-shell">
+      <div class="section-index">03 — PRODUCT</div>
+      <div class="product-story-grid">
+        <div class="product-story-copy">
+          <span class="micro">DESIGNED TO STAY OUT OF THE WAY</span>
+          <h2>The control panel<br />is the contract.</h2>
+          <p>One glance tells you whether the bridge is alive, which profile is active, what Workspace is in scope, and whether your Tunnel is ready.</p>
+          <ul>
+            <li><span></span> Live Gateway and Tunnel status</li>
+            <li><span></span> Session-only Full and Unlock modes</li>
+            <li><span></span> Local DPAPI protection for runtime secrets</li>
+            <li><span></span> One-click restart, refresh and settings</li>
           </ul>
         </div>
-        <div class="product-shot">
-          <div class="shot-frame">
-            <div class="shot-dots"><i></i><i></i><i></i></div>
-            <img src="assets/images/control-panel.png" alt="DeskMCP Control Panel" loading="lazy" />
-          </div>
+        <div class="product-story-visual">
+          <div class="story-glow" aria-hidden="true"></div>
+          <figure class="control-panel story-panel">
+            <img src="assets/images/control-panel.png" alt="Current DeskMCP Control Panel" loading="lazy" />
+          </figure>
+          <div class="story-note note-a"><span></span><small>Runtime</small><strong>Gateway + Tunnel healthy</strong></div>
+          <div class="story-note note-b"><small>Active profile</small><strong>Visible before every action</strong></div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="section-wrap start-section" id="start">
-        <div class="section-heading narrow-heading">
-          <span class="section-kicker">Get started</span>
-          <h2>From download to ChatGPT in three steps.</h2>
+    <section class="security section-shell" id="security">
+      <div class="section-index">04 — SECURITY</div>
+      <div class="security-heading">
+        <h2>The connection is remote.<br /><span>The decision stays local.</span></h2>
+      </div>
+      <div class="security-grid">
+        <div class="architecture-wrap">
+          <img src="assets/images/architecture.svg" alt="DeskMCP architecture showing the local Gateway and OpenAI Tunnel" loading="lazy" />
         </div>
-        <div class="steps-grid">
-          <article class="step-card">
-            <span>1</span>
-            <h3>Install DeskMCP</h3>
-            <p>Run the self-contained Setup and choose the Workspace DeskMCP may access.</p>
-          </article>
-          <article class="step-card">
-            <span>2</span>
-            <h3>Create an OpenAI Tunnel</h3>
-            <p>Paste the Tunnel ID and Runtime API Key into First Run. Secrets are protected locally with DPAPI.</p>
-          </article>
-          <article class="step-card">
-            <span>3</span>
-            <h3>Connect ChatGPT</h3>
-            <p>Create a new Plugin using Tunnel + No auth, scan tools, and confirm the 13 DeskMCP tools.</p>
-          </article>
+        <div class="security-list">
+          <article><span>01</span><div><strong>Loopback first</strong><p>The Gateway HTTP service binds to <code>127.0.0.1</code>.</p></div></article>
+          <article><span>02</span><div><strong>Workspace scoped</strong><p>Read, Write and Full enforce canonical path boundaries before forwarding work.</p></div></article>
+          <article><span>03</span><div><strong>Owned process sessions</strong><p>Opaque Gateway-owned sessions instead of arbitrary Windows PID control.</p></div></article>
+          <article><span>04</span><div><strong>Metadata-only audit</strong><p>No file contents, secrets, terminal I/O or real PIDs in audit logs.</p></div></article>
         </div>
-        <div class="quickstart-image">
-          <img src="assets/images/quick-start.svg" alt="DeskMCP quick start flow" loading="lazy" />
-        </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="security-section section-wrap" id="security">
-        <div class="security-visual">
-          <img src="assets/images/architecture.svg" alt="DeskMCP security architecture" loading="lazy" />
+    <section class="start section-shell" id="start">
+      <div class="section-index">05 — START</div>
+      <div class="start-grid">
+        <div class="start-heading">
+          <h2>From zero to connected<br />in three moves.</h2>
+          <p>No Node.js, npm, .NET SDK, Git or source checkout required for the public Windows installer.</p>
         </div>
-        <div class="security-copy">
-          <span class="section-kicker">Security model</span>
-          <h2>The connection is remote. The decision stays local.</h2>
-          <p>The OpenAI Tunnel carries transport. DeskMCP still decides locally whether a filesystem or process operation is allowed before forwarding it to Desktop Commander.</p>
-          <div class="security-points">
-            <div><strong>Loopback only</strong><span>Gateway HTTP binds to 127.0.0.1.</span></div>
-            <div><strong>Workspace scoped</strong><span>Read, Write and Full enforce canonical path boundaries.</span></div>
-            <div><strong>Owned sessions</strong><span>Opaque Gateway-owned process IDs instead of arbitrary PID control.</span></div>
-            <div><strong>Metadata-only audit</strong><span>No file contents, terminal I/O, secrets or real PIDs in audit logs.</span></div>
-          </div>
-        </div>
-      </section>
+        <ol class="steps">
+          <li><span>1</span><div><strong>Install DeskMCP</strong><p>Run Setup and choose the Workspace DeskMCP may access.</p></div></li>
+          <li><span>2</span><div><strong>Create your OpenAI Tunnel</strong><p>Paste the Tunnel ID and Runtime API Key into First Run.</p></div></li>
+          <li><span>3</span><div><strong>Connect ChatGPT</strong><p>Create the Plugin with Tunnel + No auth, then confirm the 13 DeskMCP tools.</p></div></li>
+        </ol>
+      </div>
+    </section>
 
-      <section class="open-source section-wrap">
+    <section class="download section-shell" id="download">
+      <div class="download-topline">
         <div>
-          <span class="section-kicker">Open source</span>
-          <h2>Built in public. Inspect every boundary.</h2>
-          <p>DeskMCP is a personal open-source project by edmen12, licensed under Apache-2.0. Releases, security policy, privacy behavior, checksums and roadmap are all public.</p>
+          <span class="micro">LATEST STABLE</span>
+          <h2>Ready when you are.</h2>
+          <p>Choose the installer that matches your Windows architecture.</p>
         </div>
-        <div class="oss-actions">
-          <a class="button button-primary" href="https://github.com/edmen12/deskmcp" rel="noreferrer">Explore the repository</a>
-          <a class="button button-secondary" href="https://github.com/edmen12/deskmcp/blob/main/docs/USER_GUIDE.md" rel="noreferrer">Read the user guide</a>
-        </div>
-      </section>
-    </main>
+        <div class="release-pill"><strong id="release-version">Latest release</strong><span id="release-status">Checking GitHub…</span></div>
+      </div>
+      <div class="download-list">
+        <a class="download-row" id="download-x64" href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">
+          <span class="download-index">01</span>
+          <div><strong>Windows x64</strong><small id="size-x64">Standard Windows PCs</small></div>
+          <span class="download-action">Download Setup ↗</span>
+        </a>
+        <a class="download-row" id="download-arm64" href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">
+          <span class="download-index">02</span>
+          <div><strong>Windows ARM64</strong><small id="size-arm64">Native ARM64 build</small></div>
+          <span class="download-action">Download Setup ↗</span>
+        </a>
+        <a class="download-row" href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">
+          <span class="download-index">03</span>
+          <div><strong>Verify the release</strong><small>Manifest + SHA-256 checksums</small></div>
+          <span class="download-action">Open release ↗</span>
+        </a>
+      </div>
+      <p class="unsigned-note">Windows builds are currently unsigned while Authenticode signing remains pending, so SmartScreen may show an Unknown Publisher warning.</p>
+    </section>
 
-    <footer class="footer">
-      <div class="footer-brand">
-        <img src="assets/brand/deskmcp-approved-logo-64.png" width="32" height="32" alt="" />
-        <div><strong class="brand-wordmark"><span>Desk</span><span class="brand-mcp">MCP</span></strong><span>Your desktop. Connected to AI.</span></div>
+    <section class="final-cta section-shell">
+      <div>
+        <span class="micro">OPEN SOURCE · LOCAL FIRST</span>
+        <h2>Give AI access.<br />Keep the keys.</h2>
       </div>
-      <div class="footer-links">
-        <a href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">Releases</a>
-        <a href="https://github.com/edmen12/deskmcp/blob/main/SECURITY.md" rel="noreferrer">Security</a>
-        <a href="https://github.com/edmen12/deskmcp/blob/main/PRIVACY.md" rel="noreferrer">Privacy</a>
-        <a href="https://github.com/edmen12/deskmcp/blob/main/LICENSE" rel="noreferrer">Apache-2.0</a>
+      <div class="final-actions">
+        <a class="button button-primary" href="#download">Download DeskMCP <span>↗</span></a>
+        <a class="button button-ghost" href="https://github.com/edmen12/deskmcp" rel="noreferrer">Explore on GitHub</a>
       </div>
-      <p>Personal open-source project by <a href="https://github.com/edmen12" rel="noreferrer">edmen12</a>.</p>
-    </footer>
-  </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-brand">
+      <img src="assets/brand/deskmcp-approved-logo-64.png" width="34" height="34" alt="" />
+      <div><strong class="brand-wordmark"><span>Desk</span><span class="brand-mcp">MCP</span></strong><span>Your desktop. Connected to AI.</span></div>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/edmen12/deskmcp/releases/latest" rel="noreferrer">Releases</a>
+      <a href="https://github.com/edmen12/deskmcp/blob/main/docs/USER_GUIDE.md" rel="noreferrer">Docs</a>
+      <a href="https://github.com/edmen12/deskmcp/blob/main/SECURITY.md" rel="noreferrer">Security</a>
+      <a href="https://github.com/edmen12/deskmcp/blob/main/PRIVACY.md" rel="noreferrer">Privacy</a>
+      <a href="https://github.com/edmen12/deskmcp/blob/main/LICENSE" rel="noreferrer">Apache-2.0</a>
+    </div>
+    <p>Personal open-source project by <a href="https://github.com/edmen12" rel="noreferrer">edmen12</a>.</p>
+  </footer>
+
   <script src="assets/js/site.js" defer></script>
 </body>
 </html>
