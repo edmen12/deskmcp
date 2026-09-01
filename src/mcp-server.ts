@@ -9,7 +9,7 @@ import type { ProcessSessionRegistry } from './process-session-registry.js';
 import { registerTestTools } from './test-tools.js';
 
 export const SERVER_NAME = 'deskmcp-gateway';
-export const SERVER_VERSION = '0.9.1';
+export const SERVER_VERSION = '0.9.2';
 
 export function createDesktopMcpServer(
   bridge?: DesktopCommanderBridge,
