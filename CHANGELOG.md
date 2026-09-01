@@ -4,6 +4,10 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+No changes yet.
+
+## 0.9.2 — 2026-09-01
+
 ### Added
 
 - Added a session-only **Unlock** (`fully-unlocked`) permission profile for explicit advanced use. It disables DeskMCP Workspace, sensitive-path, search-exclusion, and fresh-observation write guards while retaining audit logging and the host OS account permission boundary.
