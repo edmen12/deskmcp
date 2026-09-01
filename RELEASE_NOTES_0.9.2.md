@@ -12,6 +12,7 @@ DeskMCP 0.9.2 adds an explicit session-only Fully Unlocked mode, hardens process
 - Added policy/health fields that make the effective Workspace and observation-guard state externally visible.
 - Isolated release and installer smoke tests onto temporary loopback ports and Control Panel singleton namespaces so validation can run while a development instance is active.
 - Hardened the installer single-instance mutex smoke contract for native Windows ARM64 runners.
+- Added a 30-second bounded retry window around installer atomic directory swaps so transient Windows file locks after runtime shutdown do not cause spurious upgrade/recovery failures. Test-mode failures persist the underlying exception type/message for CI diagnostics, and install/rollback/upgrade/recovery smoke subprocesses run on isolated control ports.
 - Pruned non-target optional sharp/ripgrep binaries from Windows release stages and added assertions that reject foreign-platform native packages.
 
 ## Windows architectures
