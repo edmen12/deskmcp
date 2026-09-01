@@ -169,7 +169,7 @@ Privacy and network behavior are documented in [PRIVACY.md](PRIVACY.md).
 
 ## Current limitations
 
-- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging is implemented, but the current installer-mutex hardening branch still requires a fresh native Windows ARM64 CI pass before ARM64 validation can be called closed. The first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
+- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging and the full install/upgrade/runtime/uninstall validation chain now pass on GitHub's native Windows ARM64 runner; the first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
 - A native macOS ARM64 menu-bar client, release stage, and downloadable **Developer Preview** artifact pass on Apple Silicon CI. The preview is ad-hoc signed and not notarized; a general-user macOS release still requires Developer ID signing and notarization. See [macOS Developer Preview](docs/MACOS_DEVELOPER_PREVIEW.md).
 - Settings now implement the user-controlled safe-update flow through download, local SHA-256/size verification, WinVerifyTrust, compiled publisher-pin checking, explicit install, and post-install version/profile verification. Current builds keep automatic execution disabled because no production Authenticode publisher pin is compiled in; manual installer upgrades remain available.
 - The open-source Windows Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until a release signing identity is configured.
@@ -181,9 +181,9 @@ Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
 
 - 🚧 [#5 — Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5) — still requires a clean-user install/startup/First Run/uninstall pass outside the development account.
 - 🚧 [#6 — Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6) — SignPath Foundation approval, first signed artifact verification, and production publisher pin remain pending.
-- 🚧 [#7 — Windows ARM64 packaging and validation](https://github.com/edmen12/deskmcp/issues/7) — target-aware runtime/installer pipeline is implemented; the current installer-mutex hardening still needs a fresh native Windows ARM64 full-chain CI pass before closure.
-- 🚧 [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — trust validation, verified download and post-install checks are implemented; signed immutable production execution remains gated by #6 and a future immutable release.
-- ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed to upstream initialization variance, and surfaced with startup diagnostics; issue state should be reconciled to closed.
+- ✅ [#7 — Windows ARM64 packaging and validation](https://github.com/edmen12/deskmcp/issues/7) — target-aware runtime/installer pipeline and native Windows ARM64 full-chain validation pass on both the feature branch and merged main commit; issue closed.
+- ✅ [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — trust validation, verified download, rollback/recovery, profile preservation, failure handling, and manual fallback are implemented; issue closed. Production signing remains tracked by #6 and #10.
+- ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed to upstream initialization variance, surfaced with startup diagnostics, and closed.
 - 🚧 [#10 — User-controlled signed updater UI](https://github.com/edmen12/deskmcp/issues/10) — explicit update UX exists, while automatic signed execution remains intentionally blocked until the Authenticode/publisher-pin trust chain is live.
 
 ## Support DeskMCP
