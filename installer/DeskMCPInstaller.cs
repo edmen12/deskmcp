@@ -72,12 +72,12 @@ internal static class InstallerEngine
             if (Directory.Exists(finalDir))
             {
                 StopInstalledProcesses(finalDir);
-                Directory.Move(finalDir, backupDir);
+                MoveDirectoryWithRetry(finalDir, backupDir, "back up the existing DeskMCP installation");
                 backedUp = true;
             }
             if (options.SimulateFailureAfterBackup)
                 throw new InvalidOperationException("Simulated install failure after backup.");
-            Directory.Move(tempDir, finalDir);
+            MoveDirectoryWithRetry(tempDir, finalDir, "activate the new DeskMCP installation");
             progress(88, "Creating shortcuts…");
             if (options.CreateShortcuts) ConfigureShortcuts(finalDir, options.AutoStart);
             progress(93, "Registering DeskMCP…");
@@ -96,7 +96,7 @@ internal static class InstallerEngine
         {
             if (backedUp && Directory.Exists(backupDir))
             {
-                try { DeleteDirectoryBestEffort(finalDir); Directory.Move(backupDir, finalDir); } catch { }
+                try { DeleteDirectoryBestEffort(finalDir); MoveDirectoryWithRetry(backupDir, finalDir, "restore the previous DeskMCP installation"); } catch { }
             }
             throw;
         }
@@ -134,7 +134,7 @@ internal static class InstallerEngine
         }
         if (restore == null) return;
         if (Directory.Exists(finalDir)) DeleteDirectoryBestEffort(finalDir);
-        Directory.Move(restore, finalDir);
+        MoveDirectoryWithRetry(restore, finalDir, "recover the previous DeskMCP installation");
         foreach (string backup in backups) if (Directory.Exists(backup)) DeleteDirectoryBestEffort(backup);
     }
 
@@ -281,7 +281,18 @@ internal static class InstallerEngine
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 Process p = Process.Start(psi);
-                if (p != null) { p.WaitForExit(7000); p.Dispose(); }
+                if (p != null)
+                {
+                    try
+                    {
+                        if (!p.WaitForExit(5000))
+                        {
+                            try { p.Kill(); } catch { }
+                            try { p.WaitForExit(2000); } catch { }
+                        }
+                    }
+                    finally { p.Dispose(); }
+                }
             }
             catch { }
         }
@@ -382,6 +393,31 @@ internal static class InstallerEngine
         try { foreach (string file in Directory.GetFiles(root, "*", SearchOption.AllDirectories)) total += new FileInfo(file).Length; } catch { }
         long kb = total / 1024;
         return kb > Int32.MaxValue ? Int32.MaxValue : (int)kb;
+    }
+
+    private static void MoveDirectoryWithRetry(string source, string destination, string action)
+    {
+        Exception last = null;
+        int delayMs = 100;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            try
+            {
+                Directory.Move(source, destination);
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (!(ex is IOException) && !(ex is UnauthorizedAccessException)) throw;
+                last = ex;
+                if (DateTime.UtcNow >= deadline) break;
+                Thread.Sleep(delayMs);
+                delayMs = Math.Min(delayMs * 2, 1000);
+            }
+        }
+        string lastMessage = last == null ? "unknown error" : last.Message;
+        throw new IOException("Could not " + action + " within 30 seconds while waiting for transient Windows file locks to clear. Last error: " + lastMessage, last);
     }
 
     private static void DeleteDirectoryBestEffort(string path)
@@ -686,6 +722,21 @@ internal static class InstallerProgram
 {
     private const string InstallerMutexName = @"Local\DeskMCP.Setup.Singleton";
 
+    private static void WriteTestFailure(string prefix, Exception ex)
+    {
+        string message = prefix + "=" + ex.GetType().Name + ": " + ex.Message;
+        try { Console.Error.WriteLine(message); } catch { }
+        string logPath = Environment.GetEnvironmentVariable("DESKTOP_MCP_INSTALL_TEST_LOG");
+        if (String.IsNullOrWhiteSpace(logPath)) return;
+        try
+        {
+            string directory = Path.GetDirectoryName(Path.GetFullPath(logPath));
+            if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllText(logPath, message, new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -726,7 +777,7 @@ internal static class InstallerProgram
                 if (args.Length >= 2 && args[0] == "--recover-test")
                 {
                     try { InstallerEngine.RecoverInterruptedInstall(Path.GetFullPath(args[1])); return 0; }
-                    catch { return 12; }
+                    catch (Exception ex) { WriteTestFailure("RECOVER_TEST_ERROR", ex); return 12; }
                 }
                 if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup"))
                 {
@@ -742,7 +793,7 @@ internal static class InstallerProgram
                         InstallerEngine.Install(test, delegate { });
                         return 0;
                     }
-                    catch { return 10; }
+                    catch (Exception ex) { WriteTestFailure("INSTALL_TEST_ERROR", ex); return 10; }
                 }
                 InstallerForm form = new InstallerForm();
                 Application.Run(form);

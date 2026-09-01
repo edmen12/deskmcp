@@ -53,6 +53,35 @@ function Get-FreeLoopbackPort {
         $listener.Stop()
     }
 }
+function Invoke-IsolatedInstallerTest([string]$Exe, [string[]]$Arguments, [string]$Label) {
+    $previousPort = $env:DESKTOP_MCP_PORT
+    $previousNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
+    $previousLog = $env:DESKTOP_MCP_INSTALL_TEST_LOG
+    $safeLabel = [regex]::Replace($Label, '[^A-Za-z0-9_.-]', '-')
+    $logPath = Join-Path $BuildRoot ('installer-test-' + $safeLabel + '.log')
+    if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
+    $process = $null
+    try {
+        $env:DESKTOP_MCP_PORT = [string](Get-FreeLoopbackPort)
+        $env:DESKTOP_MCP_INSTANCE_NAMESPACE = 'installer-test-' + $Target + '-' + [guid]::NewGuid().ToString('N')
+        $env:DESKTOP_MCP_INSTALL_TEST_LOG = $logPath
+        $process = Start-Process -FilePath $Exe -ArgumentList $Arguments -Wait -PassThru
+    } finally {
+        $env:DESKTOP_MCP_PORT = $previousPort
+        $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $previousNamespace
+        $env:DESKTOP_MCP_INSTALL_TEST_LOG = $previousLog
+    }
+    $diagnostic = if (Test-Path -LiteralPath $logPath) { (Get-Content -LiteralPath $logPath -Raw).Trim() } else { '' }
+    if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue }
+    return [pscustomobject]@{ ExitCode = $process.ExitCode; Diagnostic = $diagnostic }
+}
+function Require-InstallerTest([object]$Result, [int]$ExpectedExitCode, [string]$Label) {
+    if ($Result.ExitCode -eq $ExpectedExitCode) { return }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Result.Diagnostic)) {
+        Write-Output ('INSTALLER_TEST_DIAGNOSTIC=' + [string]$Result.Diagnostic)
+    }
+    throw ($Label + ' failed: ' + $Result.ExitCode)
+}
 New-Item -ItemType Directory -Force -Path $BuildRoot, $ReleaseRoot | Out-Null
 Assert-StageNotRunning $StageRoot
 Require (Test-Path -LiteralPath $InstallerSource) 'Installer source is missing.'
@@ -181,8 +210,8 @@ if (Test-Path -LiteralPath $SmokeRoot) {
 }
 
 Write-Output 'STEP=installer-smoke-install'
-$install = Start-Process -FilePath $SetupExe -ArgumentList @('--install-test', ('"' + $SmokeRoot + '"')) -Wait -PassThru
-Require ($install.ExitCode -eq 0) "Smoke install failed: $($install.ExitCode)"
+$install = Invoke-IsolatedInstallerTest $SetupExe @('--install-test', ('"' + $SmokeRoot + '"')) 'clean-install'
+Require-InstallerTest $install 0 'Smoke install'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.exe')) 'Installed Panel is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCPUninstaller.exe')) 'Installed Uninstaller is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'node\node.exe')) 'Installed Node is missing.'
@@ -197,15 +226,15 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'install-integrity.sha256'
 $rollbackMarker = Join-Path $SmokeRoot 'ROLLBACK_OLD_MARKER.txt'
 [IO.File]::WriteAllText($rollbackMarker, 'old-install-must-survive', [Text.Encoding]::ASCII)
 Write-Output 'STEP=installer-smoke-rollback'
-$failedUpgrade = Start-Process -FilePath $SetupExe -ArgumentList @('--install-test-fail-after-backup', ('"' + $SmokeRoot + '"')) -Wait -PassThru
-Require ($failedUpgrade.ExitCode -eq 10) "Injected rollback test failed: $($failedUpgrade.ExitCode)"
+$failedUpgrade = Invoke-IsolatedInstallerTest $SetupExe @('--install-test-fail-after-backup', ('"' + $SmokeRoot + '"')) 'rollback-injected-failure'
+Require-InstallerTest $failedUpgrade 10 'Injected rollback test'
 Require (Test-Path -LiteralPath $rollbackMarker) 'Failed upgrade did not restore the previous install.'
 
 $marker = Join-Path $SmokeRoot 'UPGRADE_OLD_MARKER.txt'
 [IO.File]::WriteAllText($marker, 'old-install-marker', [Text.Encoding]::ASCII)
 Write-Output 'STEP=installer-smoke-upgrade'
-$upgrade = Start-Process -FilePath $SetupExe -ArgumentList @('--install-test', ('"' + $SmokeRoot + '"')) -Wait -PassThru
-Require ($upgrade.ExitCode -eq 0) "Smoke upgrade failed: $($upgrade.ExitCode)"
+$upgrade = Invoke-IsolatedInstallerTest $SetupExe @('--install-test', ('"' + $SmokeRoot + '"')) 'upgrade'
+Require-InstallerTest $upgrade 0 'Smoke upgrade'
 Require (-not (Test-Path -LiteralPath $marker)) 'Upgrade did not atomically replace the old install.'
 $smokeParent = Split-Path $SmokeRoot -Parent
 $backupDirs = @(Get-ChildItem -LiteralPath $smokeParent -Directory -Filter 'DesktopMCP.backup-*' -ErrorAction SilentlyContinue)
@@ -231,8 +260,8 @@ $corruptContract = Get-Content -LiteralPath (Join-Path $SmokeRoot 'release-targe
 $corruptTunnel = Join-Path $SmokeRoot ('tunnel-client\' + [string]$corruptContract.tunnelVersion + '\bin\tunnel-client.exe')
 New-Item -ItemType Directory -Force -Path (Split-Path $corruptTunnel -Parent) | Out-Null
 [IO.File]::WriteAllText($corruptTunnel, 'corrupt-but-present', [Text.Encoding]::ASCII)
-$recovery = Start-Process -FilePath $SetupExe -ArgumentList @('--recover-test', ('"' + $SmokeRoot + '"')) -Wait -PassThru
-Require ($recovery.ExitCode -eq 0) "Interrupted recovery failed: $($recovery.ExitCode)"
+$recovery = Invoke-IsolatedInstallerTest $SetupExe @('--recover-test', ('"' + $SmokeRoot + '"')) 'interrupted-recovery'
+Require-InstallerTest $recovery 0 'Interrupted recovery'
 Require (Test-Path -LiteralPath $recoveryMarker) 'Interrupted recovery did not restore the prior install.'
 Require (-not (Test-Path -LiteralPath $simBackup)) 'Interrupted recovery left backup state behind.'
 Require (-not (Test-Path -LiteralPath $simTemp)) 'Interrupted recovery left temp state behind.'
