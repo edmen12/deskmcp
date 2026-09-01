@@ -139,13 +139,21 @@ $mutexHolder = Start-Process -FilePath $SetupExe -ArgumentList @('--mutex-test-h
 $mutexHolderClean = $false
 try {
     $mutexDeadline = [DateTime]::UtcNow.AddSeconds(45)
-    while (-not (Test-Path -LiteralPath $mutexReady)) {
+    $mutexHandshake = $null
+    while ($mutexHandshake -ne 'ready') {
         if ($mutexHolder.HasExited) { throw ('Setup mutex holder exited before readiness: ' + $mutexHolder.ExitCode) }
-        if ([DateTime]::UtcNow -ge $mutexDeadline) { throw 'Setup mutex holder did not signal readiness within 45 seconds.' }
+        if (Test-Path -LiteralPath $mutexReady) {
+            try {
+                $mutexReadyText = Get-Content -LiteralPath $mutexReady -Raw -ErrorAction Stop
+                if ($null -ne $mutexReadyText) { $mutexHandshake = $mutexReadyText.Trim() }
+            } catch {
+                $mutexHandshake = $null
+            }
+        }
+        if ($mutexHandshake -eq 'ready') { break }
+        if ([DateTime]::UtcNow -ge $mutexDeadline) { throw 'Setup mutex holder did not provide a valid readiness handshake within 45 seconds.' }
         Start-Sleep -Milliseconds 100
     }
-    $mutexHandshake = (Get-Content -LiteralPath $mutexReady -Raw).Trim()
-    Require ($mutexHandshake -eq 'ready') 'Setup mutex holder returned an invalid readiness handshake.'
     $mutexBlocked = Start-Process -FilePath $SetupExe -ArgumentList '--mutex-test-hold' -Wait -PassThru
     Require ($mutexBlocked.ExitCode -eq 11) ('Second Setup instance was not rejected: ' + $mutexBlocked.ExitCode)
     [IO.File]::WriteAllText($mutexRelease, 'release', [Text.Encoding]::ASCII)
