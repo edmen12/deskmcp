@@ -26,7 +26,7 @@ No changes yet.
 
 - Reap exited Gateway-owned process sessions before enforcing the 32-session cap, and fail safely before spawning when capacity is exhausted so a rejected start cannot orphan a process.
 - Isolated release-stage and installed-runtime smoke tests onto temporary loopback ports and singleton namespaces, allowing release validation to run while the development Control Panel is active.
-- Hardened installer mutex smoke synchronization so native ARM64 validation checks the actual single-instance contract instead of depending on fragile process-ID timing.
+- Hardened installer mutex smoke synchronization so native ARM64 validation checks the actual single-instance contract, waits for a complete readiness handshake instead of racing an empty file, and no longer depends on fragile process-ID timing.
 
 ### Changed
 
