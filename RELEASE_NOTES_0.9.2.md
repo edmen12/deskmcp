@@ -16,7 +16,7 @@ DeskMCP 0.9.2 adds an explicit session-only Fully Unlocked mode, hardens process
 
 ## Windows architectures
 
-0.9.2 is prepared for separate native **Windows x64** and **Windows ARM64** artifacts. The full ARM64 chain now passes on GitHub's native Windows ARM64 runner, including release-stage runtime checks, the 13-tool MCP smoke test, single-instance behavior, process cleanup, install, rollback, upgrade, interrupted recovery, runtime startup, uninstall, and architecture-specific metadata.
+0.9.2 ships separate native **Windows x64** and **Windows ARM64** artifacts. The full ARM64 chain passes on GitHub's native Windows ARM64 runner, including release-stage runtime checks, the 13-tool MCP smoke test, single-instance behavior, process cleanup, install, rollback, upgrade, interrupted recovery, runtime startup, uninstall, and architecture-specific metadata.
 
 ## Update safety
 

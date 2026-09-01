@@ -169,7 +169,7 @@ Privacy and network behavior are documented in [PRIVACY.md](PRIVACY.md).
 
 ## Current limitations
 
-- The current public v0.9.1 release is Windows x64. Native Windows ARM64 packaging and the full install/upgrade/runtime/uninstall validation chain now pass on GitHub's native Windows ARM64 runner; the first public ARM64 artifact will ship with a future release rather than mutating v0.9.1.
+- DeskMCP 0.9.2 includes separate native Windows x64 and Windows ARM64 release artifacts. Both architectures pass the full release-stage, install, upgrade, rollback/recovery, runtime, and uninstall validation chain; the Windows artifacts remain unsigned while the SignPath Foundation application is pending.
 - A native macOS ARM64 menu-bar client, release stage, and downloadable **Developer Preview** artifact pass on Apple Silicon CI. The preview is ad-hoc signed and not notarized; a general-user macOS release still requires Developer ID signing and notarization. See [macOS Developer Preview](docs/MACOS_DEVELOPER_PREVIEW.md).
 - Settings now implement the user-controlled safe-update flow through download, local SHA-256/size verification, WinVerifyTrust, compiled publisher-pin checking, explicit install, and post-install version/profile verification. Current builds keep automatic execution disabled because no production Authenticode publisher pin is compiled in; manual installer upgrades remain available.
 - The open-source Windows Setup may be distributed unsigned; Windows can show **Unknown Publisher / SmartScreen** warnings until a release signing identity is configured.
@@ -177,7 +177,7 @@ Privacy and network behavior are documented in [PRIVACY.md](PRIVACY.md).
 
 ## Roadmap
 
-Post-0.9.1 work is tracked publicly with explicit acceptance criteria:
+Current and post-0.9.2 work is tracked publicly with explicit acceptance criteria:
 
 - 🚧 [#5 — Fresh Windows user end-to-end validation](https://github.com/edmen12/deskmcp/issues/5) — still requires a clean-user install/startup/First Run/uninstall pass outside the development account.
 - 🚧 [#6 — Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6) — SignPath Foundation approval, first signed artifact verification, and production publisher pin remain pending.
