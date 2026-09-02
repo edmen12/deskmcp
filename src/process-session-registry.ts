@@ -5,55 +5,99 @@ interface ProcessSession {
   readonly id: string;
   readonly pid: number;
   readonly createdAt: number;
-}
-
-function defaultProcessAliveCheck(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code !== 'ESRCH';
-  }
+  active: boolean;
 }
 
 export class ProcessSessionRegistry {
   private readonly sessions = new Map<string, ProcessSession>();
+  private readonly startReservations = new Set<string>();
 
   constructor(
     readonly maxSessions = 32,
-    private readonly isProcessAlive: (pid: number) => boolean = defaultProcessAliveCheck
+    readonly maxTrackedSessions = 128
   ) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 1024) {
       throw new Error(`Invalid process session limit: ${maxSessions}`);
     }
+    if (
+      !Number.isInteger(maxTrackedSessions)
+      || maxTrackedSessions < maxSessions
+      || maxTrackedSessions > 4096
+    ) {
+      throw new Error(`Invalid tracked process session limit: ${maxTrackedSessions}`);
+    }
   }
 
-  pruneDeadSessions(): number {
+  private pruneInactiveHistory(): number {
     let removed = 0;
-    for (const [id, session] of this.sessions) {
-      if (this.isProcessAlive(session.pid)) continue;
-      this.sessions.delete(id);
+    if (this.sessions.size <= this.maxTrackedSessions) return removed;
+
+    const inactive = [...this.sessions.values()]
+      .filter(session => !session.active)
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    for (const session of inactive) {
+      if (this.sessions.size <= this.maxTrackedSessions) break;
+      this.sessions.delete(session.id);
       removed += 1;
     }
     return removed;
   }
 
+  reconcileActivePids(activePids: Iterable<number>): number {
+    const active = new Set(activePids);
+    let changed = 0;
+    for (const session of this.sessions.values()) {
+      const next = active.has(session.pid);
+      if (next === session.active) continue;
+      session.active = next;
+      changed += 1;
+    }
+    this.pruneInactiveHistory();
+    return changed;
+  }
+
   assertCapacity(): void {
-    this.pruneDeadSessions();
-    if (this.sessions.size >= this.maxSessions) {
-      throw new PolicyDeniedError(`Process session limit reached (${this.maxSessions}). Terminate an owned session before starting another.`);
+    if (this.activeSize() + this.startReservations.size >= this.maxSessions) {
+      throw new PolicyDeniedError(
+        `Process session limit reached (${this.maxSessions}). Terminate an owned session before starting another.`
+      );
     }
   }
 
-  register(pid: number): string {
+  atCapacity(): boolean {
+    return this.activeSize() + this.startReservations.size >= this.maxSessions;
+  }
+
+  reserveStart(): string {
+    this.assertCapacity();
+    const reservationId = randomUUID();
+    this.startReservations.add(reservationId);
+    return reservationId;
+  }
+
+  releaseStart(reservationId: string): void {
+    this.startReservations.delete(reservationId);
+  }
+
+  registerReserved(reservationId: string, pid: number): string {
+    if (!this.startReservations.has(reservationId)) {
+      throw new Error('Unknown process start reservation.');
+    }
     if (!Number.isInteger(pid) || pid <= 0) {
+      this.startReservations.delete(reservationId);
       throw new Error(`Invalid process PID: ${pid}`);
     }
-    this.assertCapacity();
+    this.startReservations.delete(reservationId);
     const id = randomUUID();
-    this.sessions.set(id, { id, pid, createdAt: Date.now() });
+    this.sessions.set(id, { id, pid, createdAt: Date.now(), active: true });
+    this.pruneInactiveHistory();
     return id;
+  }
+
+  register(pid: number): string {
+    const reservationId = this.reserveStart();
+    return this.registerReserved(reservationId, pid);
   }
 
   resolve(sessionId: string): number {
@@ -61,11 +105,14 @@ export class ProcessSessionRegistry {
     if (!session) {
       throw new PolicyDeniedError('Unknown or unowned process session.');
     }
-    if (!this.isProcessAlive(session.pid)) {
-      this.sessions.delete(sessionId);
-      throw new PolicyDeniedError('Process session has already exited.');
-    }
     return session.pid;
+  }
+
+  markInactive(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.active = false;
+    this.pruneInactiveHistory();
   }
 
   forget(sessionId: string): void {
@@ -76,18 +123,37 @@ export class ProcessSessionRegistry {
     return this.sessions.has(sessionId);
   }
 
+  isActive(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.active === true;
+  }
+
   size(): number {
     return this.sessions.size;
   }
 
-  ownedSessions(): ReadonlyArray<{ id: string; pid: number }> {
+  activeSize(): number {
+    let count = 0;
+    for (const session of this.sessions.values()) {
+      if (session.active) count += 1;
+    }
+    return count;
+  }
+
+  pendingSize(): number {
+    return this.startReservations.size;
+  }
+
+  ownedSessions(): ReadonlyArray<{ id: string; pid: number; active: boolean }> {
     return [...this.sessions.values()].map(session => ({
       id: session.id,
-      pid: session.pid
+      pid: session.pid,
+      active: session.active
     }));
   }
+
   clear(): void {
     this.sessions.clear();
+    this.startReservations.clear();
   }
 }
 
@@ -99,6 +165,15 @@ export function extractStartedPid(text: string): number {
     throw new Error('Desktop Commander returned an invalid PID.');
   }
   return pid;
+}
+
+export function extractListedProcessPids(text: string): number[] {
+  const pids: number[] = [];
+  for (const match of text.matchAll(/\bPID:\s*(\d+)\b/gi)) {
+    const pid = Number.parseInt(match[1] ?? '', 10);
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+  }
+  return [...new Set(pids)];
 }
 
 export function redactPid(text: string, pid: number, sessionId: string): string {

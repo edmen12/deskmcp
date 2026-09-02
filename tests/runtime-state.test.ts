@@ -6,28 +6,55 @@ import { ObservationCapabilityError, ObservationRequiredError, ObservationStore,
 import { ProcessSessionRegistry } from '../src/process-session-registry.js';
 import { TEST_AREA } from '../src/paths.js';
 
-test('ProcessSessionRegistry rejects new live sessions at the ownership cap', () => {
-  const sessions = new ProcessSessionRegistry(2, () => true);
+test('ProcessSessionRegistry enforces the active-session cap without OS PID liveness guesses', () => {
+  const sessions = new ProcessSessionRegistry(2, 4);
   const first = sessions.register(101);
   sessions.register(202);
-  assert.equal(sessions.size(), 2);
+  assert.equal(sessions.activeSize(), 2);
   assert.throws(() => sessions.register(303), /Process session limit reached/);
-  sessions.forget(first);
+
+  sessions.reconcileActivePids([202]);
+  assert.equal(sessions.isActive(first), false);
+  assert.equal(sessions.activeSize(), 1);
+  assert.equal(sessions.resolve(first), 101, 'completed-session capability should remain readable');
   assert.doesNotThrow(() => sessions.register(303));
-  assert.equal(sessions.size(), 2);
+  assert.equal(sessions.activeSize(), 2);
 });
 
-test('ProcessSessionRegistry prunes exited sessions before enforcing the cap', () => {
-  const alive = new Set([101, 202]);
-  const sessions = new ProcessSessionRegistry(2, pid => alive.has(pid));
+test('ProcessSessionRegistry reserves capacity before process spawn', () => {
+  const sessions = new ProcessSessionRegistry(2, 4);
+  const firstReservation = sessions.reserveStart();
+  const secondReservation = sessions.reserveStart();
+  assert.equal(sessions.pendingSize(), 2);
+  assert.equal(sessions.atCapacity(), true);
+  assert.throws(() => sessions.reserveStart(), /Process session limit reached/);
+
+  const firstSession = sessions.registerReserved(firstReservation, 101);
+  assert.equal(sessions.pendingSize(), 1);
+  assert.equal(sessions.activeSize(), 1);
+  assert.equal(sessions.resolve(firstSession), 101);
+
+  sessions.releaseStart(secondReservation);
+  assert.equal(sessions.pendingSize(), 0);
+  assert.equal(sessions.atCapacity(), false);
+});
+
+test('ProcessSessionRegistry bounds inactive history while preserving active sessions', () => {
+  const sessions = new ProcessSessionRegistry(2, 3);
   const first = sessions.register(101);
-  sessions.register(202);
-  alive.delete(101);
-  alive.add(303);
-  assert.doesNotThrow(() => sessions.register(303));
-  assert.equal(sessions.size(), 2);
-  assert.equal(sessions.has(first), false);
-  assert.throws(() => sessions.resolve(first), /Unknown or unowned process session/);
+  sessions.reconcileActivePids([]);
+  const second = sessions.register(202);
+  sessions.reconcileActivePids([]);
+  const third = sessions.register(303);
+  sessions.reconcileActivePids([]);
+  const fourth = sessions.register(404);
+
+  assert.equal(sessions.size(), 3);
+  assert.equal(sessions.has(first), false, 'oldest inactive capability should be evicted first');
+  assert.equal(sessions.has(second), true);
+  assert.equal(sessions.has(third), true);
+  assert.equal(sessions.has(fourth), true);
+  assert.equal(sessions.activeSize(), 1);
 });
 
 test('ObservationStore evicts oldest capabilities without weakening write safety', async () => {

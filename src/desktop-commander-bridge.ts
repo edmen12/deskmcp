@@ -112,7 +112,7 @@ export class DesktopCommanderBridge {
       const listed = await client.listTools();
       const listToolsMs = elapsedMs(phaseStartedAt);
       phaseStartedAt = performance.now();
-      const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'force_terminate'];
+      const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'list_sessions', 'force_terminate'];
       for (const name of required) {
         if (!listed.tools.some(tool => tool.name === name)) {
           throw new Error(`Desktop Commander required tool unavailable: ${name}`);
@@ -287,6 +287,10 @@ export class DesktopCommanderBridge {
       timeout_ms: timeoutMs,
       wait_for_prompt: waitForPrompt
     });
+  }
+
+  async listProcessSessions(): Promise<DesktopCommanderToolResult> {
+    return this.callTextTool('list_sessions', {});
   }
 
   async forceTerminateProcess(pid: number): Promise<DesktopCommanderToolResult> {
