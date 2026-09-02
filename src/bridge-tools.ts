@@ -23,7 +23,18 @@ function resultText(result: { text: string; isError: boolean }) {
   };
 }
 
+function attachObservationId<T extends { text: string; isError: boolean }>(
+  result: T,
+  observationId: string
+): T {
+  return {
+    ...result,
+    text: `${result.text}\n\nDeskMCP observation_id: ${observationId}`
+  };
+}
+
 const pathSchema = z.string().min(1).max(4096);
+const observationIdSchema = z.string().uuid();
 function lexicalTarget(rawPath: string): string {
   return path.resolve(PROJECT_ROOT, rawPath);
 }
@@ -124,10 +135,9 @@ export function registerDesktopCommanderBridgeTools(
         const safePath = await policy.resolveReadPath(rawPath);
         const before = await observations.capture(safePath);
         const result = await bridge.readFile(safePath, offset, length);
-        if (!result.isError) {
-          await observations.recordIfUnchanged(safePath, before);
-        }
-        return result;
+        if (result.isError) return result;
+        const issued = await observations.recordIfUnchanged(safePath, before);
+        return attachObservationId(result, issued.observationId);
       }
     )
   );
@@ -277,10 +287,11 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_move_file',
     {
       title: 'Move Desktop File',
-      description: 'Move one observed regular file to a new path inside allowed roots. Destination must not exist.',
+      description: 'Move one observed regular file to a new path inside allowed roots. Pass source_observation_id from desktop_read_file. Destination must not exist.',
       inputSchema: z.object({
         source: pathSchema,
-        destination: pathSchema
+        destination: pathSchema,
+        source_observation_id: observationIdSchema.optional()
       }),
       annotations: {
         readOnlyHint: false,
@@ -289,7 +300,7 @@ export function registerDesktopCommanderBridgeTools(
         openWorldHint: false
       }
     },
-    async ({ source, destination }) => auditedCall(
+    async ({ source, destination, source_observation_id }) => auditedCall(
       audit,
       policy,
       'desktop_move_file',
@@ -299,14 +310,11 @@ export function registerDesktopCommanderBridgeTools(
       async () => {
         policy.assertCanWrite();
         const safeSource = await policy.resolveReadPath(source);
-        if (!policy.isFullyUnlocked()) await observations.requireFresh(safeSource);
         const safeDestination = await policy.resolveNewWritePath(destination);
-        const result = await bridge.moveFile(safeSource, safeDestination);
-        if (!result.isError) {
-          observations.forget(safeSource);
-          await observations.observe(safeDestination);
-        }
-        return result;
+        const move = () => bridge.moveFile(safeSource, safeDestination);
+        return policy.isFullyUnlocked()
+          ? observations.withExclusiveMutation([safeSource, safeDestination], move)
+          : observations.withMoveMutation(safeSource, source_observation_id, safeDestination, move);
       }
     )
   );
@@ -314,12 +322,13 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_edit_file',
     {
       title: 'Edit Desktop Text File',
-      description: 'Replace exact text through Desktop Commander. Requires a fresh prior desktop_read_file observation.',
+      description: 'Replace exact text through Desktop Commander. Pass observation_id from a fresh desktop_read_file call.',
       inputSchema: z.object({
         path: pathSchema,
         old_string: z.string().min(1).max(128 * 1024),
         new_string: z.string().max(128 * 1024),
-        expected_replacements: z.number().int().min(1).max(100).optional().default(1)
+        expected_replacements: z.number().int().min(1).max(100).optional().default(1),
+        observation_id: observationIdSchema.optional()
       }),
       annotations: {
         readOnlyHint: false,
@@ -328,7 +337,7 @@ export function registerDesktopCommanderBridgeTools(
         openWorldHint: false
       }
     },
-    async ({ path: rawPath, old_string, new_string, expected_replacements }) => auditedCall(
+    async ({ path: rawPath, old_string, new_string, expected_replacements, observation_id }) => auditedCall(
       audit,
       policy,
       'desktop_edit_file',
@@ -338,15 +347,15 @@ export function registerDesktopCommanderBridgeTools(
       async () => {
         policy.assertCanWrite();
         const safePath = await policy.resolveReadPath(rawPath);
-        if (!policy.isFullyUnlocked()) await observations.requireFresh(safePath);
-        const result = await bridge.editTextFile(
+        const edit = () => bridge.editTextFile(
           safePath,
           old_string,
           new_string,
           expected_replacements
         );
-        if (!result.isError) await observations.observe(safePath);
-        return result;
+        return policy.isFullyUnlocked()
+          ? observations.withExclusiveMutation([safePath], edit)
+          : observations.withObservedMutation(safePath, observation_id, edit);
       }
     )
   );
@@ -354,11 +363,12 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_write_file',
     {
       title: 'Write Desktop File',
-      description: 'Write or append a local file through Desktop Commander after DeskMCP policy checks.',
+      description: 'Write or append a local file through Desktop Commander after DeskMCP policy checks. Existing files require observation_id from desktop_read_file; new files do not.',
       inputSchema: z.object({
         path: pathSchema,
         content: z.string().min(1).max(1024 * 1024),
-        mode: z.enum(['rewrite', 'append'])
+        mode: z.enum(['rewrite', 'append']),
+        observation_id: observationIdSchema.optional()
       }),
       annotations: {
         readOnlyHint: false,
@@ -367,7 +377,7 @@ export function registerDesktopCommanderBridgeTools(
         openWorldHint: false
       }
     },
-    async ({ path: rawPath, content, mode }) => auditedCall(
+    async ({ path: rawPath, content, mode, observation_id }) => auditedCall(
       audit,
       policy,
       'desktop_write_file',
@@ -376,10 +386,10 @@ export function registerDesktopCommanderBridgeTools(
       'Desktop write denied or failed',
       async () => {
         const safePath = await policy.resolveWritePath(rawPath);
-        if (!policy.isFullyUnlocked()) await observations.requireFreshIfExists(safePath);
-        const result = await bridge.writeFile(safePath, content, mode);
-        if (!result.isError) await observations.observe(safePath);
-        return result;
+        const write = () => bridge.writeFile(safePath, content, mode);
+        return policy.isFullyUnlocked()
+          ? observations.withExclusiveMutation([safePath], write)
+          : observations.withWriteMutation(safePath, observation_id, write);
       }
     )
   );
