@@ -73,6 +73,37 @@ async function reconcileActiveProcessSessions(
   sessions.reconcileActivePids(extractListedProcessPids(listed.text));
 }
 
+async function terminateVerifiedOwnedProcess(
+  bridge: DesktopCommanderBridge,
+  sessions: ProcessSessionRegistry,
+  pid: number
+): Promise<DesktopCommanderToolResult> {
+  const listed = await bridge.listProcessSessions();
+  if (listed.isError) return listed;
+  const activePids = extractListedProcessPids(listed.text);
+  sessions.reconcileActivePids(activePids);
+  if (!activePids.includes(pid)) {
+    return { text: 'Process session is no longer active.', isError: true };
+  }
+
+  const terminated = await bridge.forceTerminateProcess(pid);
+  if (!terminated.isError) return terminated;
+
+  // force_terminate can race a process exiting naturally. If Desktop Commander
+  // confirms the owned root is gone after the attempt, termination is complete.
+  // Descendants are owned by DeskMCP.ProcessHost's Windows Job Object and are
+  // killed by the kernel when that host/root session closes.
+  const after = await bridge.listProcessSessions();
+  if (!after.isError) {
+    const afterPids = extractListedProcessPids(after.text);
+    sessions.reconcileActivePids(afterPids);
+    if (!afterPids.includes(pid)) {
+      return { text: 'Process session terminated.', isError: false };
+    }
+  }
+  return terminated;
+}
+
 function resultShowsCompletedProcess(result: DesktopCommanderToolResult): boolean {
   return /Process completed with exit code/i.test(result.text);
 }
@@ -243,7 +274,7 @@ export function registerProcessTools(
         requireFullControl(policy);
         const pid = sessions.resolve(session_id);
         const result = sanitizeProcessResult(
-          await bridge.forceTerminateProcess(pid),
+          await terminateVerifiedOwnedProcess(bridge, sessions, pid),
           pid,
           session_id
         );

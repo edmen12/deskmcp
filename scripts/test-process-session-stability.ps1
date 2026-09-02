@@ -10,6 +10,8 @@ if ($AttemptCount -eq 0) { $AttemptCount = $SessionCount }
 if ($AttemptCount -lt $SessionCount -or $AttemptCount -gt 64) { throw 'AttemptCount must be between SessionCount and 64.' }
 
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$HostTarget = if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'win-arm64'}else{'win-x64'}
+$ProcessHostExe = Join-Path $ProjectRoot ('runtime\process-host\' + $HostTarget + '\DeskMCP.ProcessHost.exe')
 $RunId = [guid]::NewGuid().ToString('N')
 $Marker = 'DESKMCP_PROCESS_PRESSURE_' + $RunId
 $RunRoot = Join-Path $ProjectRoot ('runtime\agent-safe-process-pressure\' + $RunId)
@@ -19,6 +21,7 @@ $Workspace = Join-Path $RunRoot 'workspace'
 $AuditLog = Join-Path $RunRoot 'audit.jsonl'
 $StressScript = Join-Path $RunRoot 'process-pressure.mjs'
 $ShutdownScript = Join-Path $RunRoot 'shutdown-pressure.mjs'
+$NestedProcessScript = Join-Path $RunRoot 'nested-process-tree.mjs'
 $NodeExe = Join-Path $ProjectRoot 'runtime\downloads\node-v24.19.0\node-v24.19.0-win-x64\node.exe'
 $TscCmd = Join-Path $ProjectRoot 'node_modules\.bin\tsc.cmd'
 $DcEntry = Join-Path $ProjectRoot 'node_modules\@wonderwhy-er\desktop-commander\dist\index.js'
@@ -52,7 +55,8 @@ function Require-UnchangedFileState([string]$Label,[string]$Path,[object]$Before
     Require ($after.Exists -eq $Before.Exists -and $after.Hash -eq $Before.Hash) ($Label + ' changed during process-session stability test.')
 }
 
-foreach ($required in @($NodeExe,$TscCmd,$DcEntry,$ClientEntry)) { Require (Test-Path -LiteralPath $required) ('Required dependency is missing: ' + $required) }
+& (Join-Path $PSScriptRoot 'build-process-host.ps1') -Target $HostTarget
+foreach ($required in @($NodeExe,$TscCmd,$DcEntry,$ClientEntry,$ProcessHostExe)) { Require (Test-Path -LiteralPath $required) ('Required dependency is missing: ' + $required) }
 $RealStartupLink = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) 'DeskMCP Control Panel.lnk'
 $RealSettingsPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP\settings.json'
 $RealTunnelProfile = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'tunnel-client\desktop-mcp.yaml'
@@ -62,7 +66,7 @@ $RealTunnelBefore = Get-OptionalFileState $RealTunnelProfile
 $LivePanelPidsBefore = @(Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $old = @{
     Profile=$env:DESKTOP_MCP_PROFILE; Roots=$env:DESKTOP_MCP_ALLOWED_ROOTS; Port=$env:DESKTOP_MCP_PORT;
-    Audit=$env:DESKTOP_MCP_AUDIT_LOG; Dc=$env:DESKTOP_COMMANDER_ENTRY
+    Audit=$env:DESKTOP_MCP_AUDIT_LOG; Dc=$env:DESKTOP_COMMANDER_ENTRY; ProcessHost=$env:DESKTOP_MCP_PROCESS_HOST
 }
 
 try {
@@ -74,9 +78,31 @@ try {
 
     $clientEntryUrl = $ClientEntry.Replace('\','/')
     $nodeForCommand = $NodeExe.Replace('\','\\')
+    $nestedSource = @'
+import { existsSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const [role, marker, readyFile] = process.argv.slice(2);
+const self = fileURLToPath(import.meta.url);
+if (role === 'root') {
+  spawn(process.execPath, [self, 'child', marker, readyFile], { stdio: 'ignore', windowsHide: true });
+  const deadline = Date.now() + 10000;
+  while (!existsSync(readyFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+  if (!existsSync(readyFile)) throw new Error('grandchild readiness timeout');
+  console.log(`${marker}:TREE_READY`);
+} else if (role === 'child') {
+  spawn(process.execPath, [self, 'grandchild', marker, readyFile], { stdio: 'ignore', windowsHide: true });
+} else if (role === 'grandchild') {
+  writeFileSync(readyFile, marker, 'utf8');
+} else {
+  throw new Error(`unknown role: ${role}`);
+}
+setInterval(() => {}, 1000);
+'@
+    [IO.File]::WriteAllText($NestedProcessScript,$nestedSource,[Text.UTF8Encoding]::new($false))
     $stressSource = @'
 import { pathToFileURL } from 'node:url';
-const [rawPort, rawExpectedCount, rawAttemptCount, marker] = process.argv.slice(2);
+const [rawPort, rawExpectedCount, rawAttemptCount, marker, nestedScript, nodeExe, treeReady] = process.argv.slice(2);
 const { Client, StreamableHTTPClientTransport } = await import(pathToFileURL('__CLIENT_ENTRY__').href);
 const expectedCount = Number(rawExpectedCount);
 const attemptCount = Number(rawAttemptCount);
@@ -192,6 +218,23 @@ try {
     }
   }));
   console.log(`PROCESS_READ_TERMINATE_RACE=${raceCount}`);
+
+  const treeMarker = `${marker}_TREE_TERMINATE`;
+  const treeCommand = `"${nodeExe}" "${nestedScript}" root "${treeMarker}" "${treeReady}"`;
+  const treeStart = await clients[0].callTool({
+    name: 'desktop_start_process',
+    arguments: { command: `& ${treeCommand}`, timeout_ms: 5000, shell: 'powershell.exe' }
+  });
+  if (treeStart.isError === true || !/TREE_READY/.test(text(treeStart))) {
+    throw new Error(`nested process tree did not become ready: ${text(treeStart)}`);
+  }
+  const treeId = sessionId(treeStart);
+  const treeTerminate = await clients[0].callTool({
+    name: 'desktop_terminate_process',
+    arguments: { session_id: treeId }
+  });
+  if (treeTerminate.isError === true) throw new Error(`nested process tree termination failed: ${text(treeTerminate)}`);
+  console.log('PROCESS_TREE_TERMINATE_REQUEST=PASS');
 } finally {
   await Promise.allSettled(clients.map(c => c.close()));
 }
@@ -199,7 +242,7 @@ try {
     [IO.File]::WriteAllText($StressScript,$stressSource.Replace('__CLIENT_ENTRY__',$clientEntryUrl),[Text.UTF8Encoding]::new($false))
     $shutdownSource = @'
 import { pathToFileURL } from 'node:url';
-const [rawPort,rawCount]=process.argv.slice(2);
+const [rawPort,rawCount,marker,nestedScript,nodeExe,readyBase]=process.argv.slice(2);
 const { Client, StreamableHTTPClientTransport }=await import(pathToFileURL('__CLIENT_ENTRY__').href);
 const count=Number(rawCount);
 const clients=Array.from({length:count},(_,i)=>new Client(
@@ -209,11 +252,15 @@ const clients=Array.from({length:count},(_,i)=>new Client(
 const text=result=>JSON.stringify(result.content);
 try {
   await Promise.all(clients.map(client=>client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${rawPort}/mcp`)))));
-  const results=await Promise.all(clients.map(client=>client.callTool({
+  const results=await Promise.all(clients.map((client,index)=>client.callTool({
     name:'desktop_start_process',
-    arguments:{command:'echo __MARKER__ && ping 127.0.0.1 -t',timeout_ms:750,shell:'cmd.exe'}
+    arguments:{
+      command:`& "${nodeExe}" "${nestedScript}" root "${marker}_SHUTDOWN_${index}" "${readyBase}.${index}"`,
+      timeout_ms:5000,
+      shell:'powershell.exe'
+    }
   })));
-  if(results.some(result=>result.isError===true)) throw new Error(`shutdown setup failed: ${results.map(text).join(' | ')}`);
+  if(results.some(result=>result.isError===true || !/TREE_READY/.test(text(result)))) throw new Error(`shutdown setup failed: ${results.map(text).join(' | ')}`);
   console.log(`PROCESS_SHUTDOWN_SESSIONS_STARTED=${results.length}`);
 } finally {
   await Promise.allSettled(clients.map(client=>client.close()));
@@ -228,10 +275,11 @@ try {
     $env:DESKTOP_MCP_PORT = [string]$port
     $env:DESKTOP_MCP_AUDIT_LOG = $AuditLog
     $env:DESKTOP_COMMANDER_ENTRY = $DcEntry
+    $env:DESKTOP_MCP_PROCESS_HOST = $ProcessHostExe
     $gateway = Start-Process -FilePath $NodeExe -ArgumentList 'dist\src\index.js' -WorkingDirectory $GatewayRoot -PassThru
 
     $base = 'http://127.0.0.1:' + $port
-    $health=$null;$deadline=[DateTime]::UtcNow.AddSeconds(40)
+    $health=$null;$deadline=[DateTime]::UtcNow.AddSeconds(90)
     do {
         if($gateway.HasExited){throw ('Private Gateway exited early: '+$gateway.ExitCode)}
         try{$health=Invoke-RestMethod ($base+'/health') -TimeoutSec 1}catch{Start-Sleep -Milliseconds 250}
@@ -239,7 +287,7 @@ try {
     Require ([bool]$health) 'Private process-pressure Gateway did not become healthy.'
     Require ($health.policy.profile -eq 'full-control') 'Private process-pressure Gateway has the wrong profile.'
 
-    & $NodeExe $StressScript ([string]$port) ([string]$SessionCount) ([string]$AttemptCount) $Marker
+    & $NodeExe $StressScript ([string]$port) ([string]$SessionCount) ([string]$AttemptCount) $Marker $NestedProcessScript $NodeExe (Join-Path $RunRoot 'tree-terminate.ready')
     if($LASTEXITCODE -ne 0){throw ('Process pressure exited '+$LASTEXITCODE)}
 
     # The client has already requested termination; all test processes must now disappear.
@@ -247,9 +295,9 @@ try {
 
     # A Desktop Commander crash must not orphan terminal children. The next process
     # call must reconnect only the bridge while keeping the Gateway alive.
-    & $NodeExe $ShutdownScript ([string]$port) '1'
+    & $NodeExe $ShutdownScript ([string]$port) '1' $Marker $NestedProcessScript $NodeExe (Join-Path $RunRoot 'dc-tree.ready')
     if($LASTEXITCODE -ne 0){throw ('DC-crash setup exited '+$LASTEXITCODE)}
-    [void](Wait-MarkerCount 1 15)
+    [void](Wait-MarkerCount 3 15)
     $privateDc=@(Get-CimInstance Win32_Process | Where-Object {
         [int]$_.ParentProcessId -eq $gateway.Id -and $_.Name -eq 'node.exe' -and $_.CommandLine -match 'desktop-commander'
     })
@@ -266,9 +314,9 @@ try {
     Write-Output 'PROCESS_DC_CRASH_CHILD_CLEANUP=PASS'
 
     $shutdownCount=[Math]::Min(8,$SessionCount)
-    & $NodeExe $ShutdownScript ([string]$port) ([string]$shutdownCount)
+    & $NodeExe $ShutdownScript ([string]$port) ([string]$shutdownCount) $Marker $NestedProcessScript $NodeExe (Join-Path $RunRoot 'shutdown-tree.ready')
     if($LASTEXITCODE -ne 0){throw ('Shutdown-cleanup setup exited '+$LASTEXITCODE)}
-    [void](Wait-MarkerCount $shutdownCount 15)
+    [void](Wait-MarkerCount ($shutdownCount * 3) 15)
     $reconnectedHealth=Invoke-RestMethod ($base+'/health') -TimeoutSec 2
     Require ($reconnectedHealth.desktopCommander.ready -eq $true) 'Desktop Commander bridge did not reconnect on the next process call.'
     Write-Output 'PROCESS_DC_RECONNECT=PASS'
@@ -301,7 +349,7 @@ try {
         }
     } finally {
         $env:DESKTOP_MCP_PROFILE=$old.Profile;$env:DESKTOP_MCP_ALLOWED_ROOTS=$old.Roots;$env:DESKTOP_MCP_PORT=$old.Port
-        $env:DESKTOP_MCP_AUDIT_LOG=$old.Audit;$env:DESKTOP_COMMANDER_ENTRY=$old.Dc
+        $env:DESKTOP_MCP_AUDIT_LOG=$old.Audit;$env:DESKTOP_COMMANDER_ENTRY=$old.Dc;$env:DESKTOP_MCP_PROCESS_HOST=$old.ProcessHost
         try{if(Test-Path -LiteralPath $RunRoot){Remove-Item -LiteralPath $RunRoot -Recurse -Force}}catch{}
     }
 }

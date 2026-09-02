@@ -36,6 +36,26 @@ const installedDesktopCommanderEntry = path.join(
 );
 export const DEFAULT_DESKTOP_COMMANDER_ENTRY = installedDesktopCommanderEntry;
 
+const defaultProcessHostEntry = path.basename(PROJECT_ROOT).toLowerCase() === 'gateway'
+  ? path.resolve(PROJECT_ROOT, '..', 'DeskMCP.ProcessHost.exe')
+  : path.join(
+      PROJECT_ROOT,
+      'runtime',
+      'process-host',
+      process.arch === 'arm64' ? 'win-arm64' : 'win-x64',
+      'DeskMCP.ProcessHost.exe'
+    );
+export const DEFAULT_PROCESS_HOST_ENTRY = defaultProcessHostEntry;
+
+function buildProcessHostCommand(
+  processHostEntry: string,
+  shell: 'powershell.exe' | 'cmd.exe',
+  command: string
+): string {
+  const command64 = Buffer.from(command, 'utf8').toString('base64');
+  return `"${processHostEntry}" --shell ${shell} --command64 ${command64}`;
+}
+
 function elapsedMs(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 100) / 100;
 }
@@ -51,7 +71,9 @@ export class DesktopCommanderBridge {
 
   constructor(
     readonly entry = process.env.DESKTOP_COMMANDER_ENTRY
-      ?? DEFAULT_DESKTOP_COMMANDER_ENTRY
+      ?? DEFAULT_DESKTOP_COMMANDER_ENTRY,
+    readonly processHostEntry = process.env.DESKTOP_MCP_PROCESS_HOST
+      ?? DEFAULT_PROCESS_HOST_ENTRY
   ) {}
 
   private invalidateConnection(
@@ -254,10 +276,24 @@ export class DesktopCommanderBridge {
     timeoutMs: number,
     shell?: 'powershell.exe' | 'cmd.exe'
   ): Promise<DesktopCommanderToolResult> {
+    if (process.platform !== 'win32') {
+      return this.callTextTool('start_process', {
+        command,
+        timeout_ms: timeoutMs,
+        ...(shell ? { shell } : {})
+      });
+    }
+
+    await access(this.processHostEntry);
+    const ownedCommand = buildProcessHostCommand(
+      this.processHostEntry,
+      shell ?? 'cmd.exe',
+      command
+    );
     return this.callTextTool('start_process', {
-      command,
+      command: ownedCommand,
       timeout_ms: timeoutMs,
-      ...(shell ? { shell } : {})
+      shell: 'cmd.exe'
     });
   }
 
@@ -296,6 +332,7 @@ export class DesktopCommanderBridge {
   async forceTerminateProcess(pid: number): Promise<DesktopCommanderToolResult> {
     return this.callTextTool('force_terminate', { pid });
   }
+
   async close(): Promise<void> {
     const client = this.client;
     this.client = null;

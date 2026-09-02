@@ -7,7 +7,10 @@ import { DesktopCommanderBridge } from './desktop-commander-bridge.js';
 import { DesktopPolicy } from './desktop-policy.js';
 import { startHttpServer, type RunningHttpServer } from './http-server.js';
 import { ObservationStore } from './observation-store.js';
-import { ProcessSessionRegistry } from './process-session-registry.js';
+import {
+  extractListedProcessPids,
+  ProcessSessionRegistry
+} from './process-session-registry.js';
 
 const host = '127.0.0.1';
 const rawPort = process.env.DESKTOP_MCP_PORT ?? '8765';
@@ -30,7 +33,21 @@ let control: RunningControlServer | null = null;
 let shuttingDown = false;
 
 async function cleanupOwnedProcesses(): Promise<void> {
+  try {
+    const listed = await bridge.listProcessSessions();
+    if (!listed.isError) {
+      processSessions.reconcileActivePids(extractListedProcessPids(listed.text));
+    }
+  } catch {
+    // Keep the registry's last known active state if Desktop Commander cannot list.
+  }
+
   for (const session of processSessions.ownedSessions()) {
+    if (!session.active) {
+      processSessions.forget(session.id);
+      continue;
+    }
+
     let operation;
     try {
       operation = await audit.begin(

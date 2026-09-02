@@ -35,6 +35,8 @@ control-panel/wpf/Panel.v2.xaml
 # .NET / IDE generated state
 control-panel/wpf/bin/
 control-panel/wpf/obj/
+process-host/bin/
+process-host/obj/
 .vs/
 .vscode/
 .idea/

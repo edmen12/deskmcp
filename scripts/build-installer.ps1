@@ -120,9 +120,14 @@ Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskM
 Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
 Require ([int]$targetContract.agentSafeIsolationContract -ge 1) 'Release stage predates the agent-safe isolation contract; rebuild it before packaging.'
+Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
     'DeskMCP.exe',
+    'DeskMCP.ProcessHost.exe',
+    'DeskMCP.ProcessHost.dll',
+    'DeskMCP.ProcessHost.deps.json',
+    'DeskMCP.ProcessHost.runtimeconfig.json',
     'Panel.xaml',
     'node\node.exe',
     'gateway\dist\src\index.js',
