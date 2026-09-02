@@ -54,6 +54,19 @@ export class DesktopCommanderBridge {
       ?? DEFAULT_DESKTOP_COMMANDER_ENTRY
   ) {}
 
+  private invalidateConnection(
+    client: Client,
+    transport: StdioClientTransport
+  ): void {
+    if (this.client !== client || this.transport !== transport) return;
+    this.client = null;
+    this.transport = null;
+    this.toolCount = 0;
+    this.serverName = undefined;
+    this.serverVersion = undefined;
+    this.startupTiming = undefined;
+  }
+
   async start(): Promise<void> {
     if (this.client) return;
     if (this.startPromise) return this.startPromise;
@@ -85,6 +98,11 @@ export class DesktopCommanderBridge {
       { name: 'deskmcp-gateway', version: '0.9.3' },
       { versionNegotiation: { mode: 'legacy' } }
     );
+    let closed = false;
+    transport.onclose = () => {
+      closed = true;
+      this.invalidateConnection(client, transport);
+    };
 
     try {
       phaseStartedAt = performance.now();
@@ -101,6 +119,7 @@ export class DesktopCommanderBridge {
         }
       }
       const validationMs = elapsedMs(phaseStartedAt);
+      if (closed) throw new Error('Desktop Commander transport closed during startup.');
 
       const version = client.getServerVersion();
       this.toolCount = listed.tools.length;
@@ -122,7 +141,7 @@ export class DesktopCommanderBridge {
   }
   info(): DesktopCommanderInfo {
     return {
-      ready: this.client !== null,
+      ready: this.client !== null && this.transport !== null,
       entry: this.entry,
       ...(this.serverName ? { serverName: this.serverName } : {}),
       ...(this.serverVersion ? { serverVersion: this.serverVersion } : {}),
@@ -135,17 +154,26 @@ export class DesktopCommanderBridge {
     name: string,
     args: Record<string, unknown>
   ): Promise<DesktopCommanderToolResult> {
-    if (!this.client) throw new Error('Desktop Commander bridge is not started.');
-    const result = await this.client.callTool({ name, arguments: args });
-    const text = result.content
-      .filter(block => block.type === 'text')
-      .map(block => block.text)
-      .join('\n');
+    await this.start();
+    const client = this.client;
+    const transport = this.transport;
+    if (!client || !transport) throw new Error('Desktop Commander bridge is not started.');
+    try {
+      const result = await client.callTool({ name, arguments: args });
+      const text = result.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('\n');
 
-    return {
-      text: text || JSON.stringify(result.content),
-      isError: result.isError === true
-    };
+      return {
+        text: text || JSON.stringify(result.content),
+        isError: result.isError === true
+      };
+    } catch (error) {
+      this.invalidateConnection(client, transport);
+      await client.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async readFile(filePath: string, offset = 0, length = 1000): Promise<DesktopCommanderToolResult> {

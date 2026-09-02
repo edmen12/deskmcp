@@ -571,3 +571,36 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
     await rm(searchSensitivePath, { force: true });
   }
 });
+
+
+test('Desktop Commander bridge reconnects after its child process exits', async () => {
+  const bridge = new DesktopCommanderBridge();
+  await bridge.start();
+  try {
+    const getTransportPid = (): number | null => {
+      const internal = bridge as unknown as {
+        transport: { pid: number | null } | null;
+      };
+      return internal.transport?.pid ?? null;
+    };
+
+    const originalPid = getTransportPid();
+    assert.ok(originalPid && originalPid > 0, 'Desktop Commander child pid was unavailable');
+    process.kill(originalPid, 'SIGKILL');
+
+    const deadline = Date.now() + 5000;
+    while (bridge.info().ready && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.equal(bridge.info().ready, false, 'bridge stayed ready after child exit');
+
+    const result = await bridge.getFileInfo(READ_TEST_FILE);
+    assert.equal(result.isError, false);
+    assert.equal(bridge.info().ready, true);
+    const replacementPid = getTransportPid();
+    assert.ok(replacementPid && replacementPid > 0);
+    assert.notEqual(replacementPid, originalPid, 'bridge did not create a replacement child');
+  } finally {
+    await bridge.close();
+  }
+});

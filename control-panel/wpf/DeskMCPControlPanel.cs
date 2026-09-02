@@ -61,6 +61,7 @@ internal sealed partial class ControlPanelRuntime
     private readonly string logsDir;
     private readonly string settingsDir;
     private readonly string nodePath;
+    private readonly int gatewayPort;
     private static readonly HttpClient StatusHttpClient = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
     private readonly Window window;
     private readonly Border rootCard;
@@ -144,10 +145,57 @@ internal sealed partial class ControlPanelRuntime
     private bool livePulseActive;
     private DateTime autoHideAfter;
 
+    private static int ResolveGatewayPort()
+    {
+        string raw = Environment.GetEnvironmentVariable("DESKTOP_MCP_PORT");
+        if (String.IsNullOrWhiteSpace(raw)) return 8765;
+        int port;
+        if (!Int32.TryParse(raw, out port) || port < 1 || port > 65535)
+            throw new InvalidOperationException("DESKTOP_MCP_PORT must be an integer from 1 to 65535.");
+        return port;
+    }
+
+    private static string ResolveStartupLinkPath()
+    {
+        string configured = Environment.GetEnvironmentVariable("DESKTOP_MCP_STARTUP_LINK_PATH");
+        if (!String.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "DeskMCP Control Panel.lnk");
+    }
+
+    private static string ResolveTunnelProfilePath()
+    {
+        string configured = Environment.GetEnvironmentVariable("DESKTOP_MCP_TUNNEL_PROFILE_PATH");
+        if (!String.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tunnel-client", "desktop-mcp.yaml");
+    }
+
+    internal static int RunAgentSafeIsolationSelfTest()
+    {
+        try
+        {
+            string expectedStartup = Environment.GetEnvironmentVariable("DESKTOP_MCP_STARTUP_LINK_PATH");
+            string expectedTunnelProfile = Environment.GetEnvironmentVariable("DESKTOP_MCP_TUNNEL_PROFILE_PATH");
+            if (String.IsNullOrWhiteSpace(expectedStartup) || String.IsNullOrWhiteSpace(expectedTunnelProfile))
+                throw new InvalidOperationException("Agent-safe isolation overrides are not configured.");
+            if (!String.Equals(ResolveStartupLinkPath(), Path.GetFullPath(expectedStartup), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Startup shortcut isolation override was not honored.");
+            if (!String.Equals(ResolveTunnelProfilePath(), Path.GetFullPath(expectedTunnelProfile), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Tunnel profile isolation override was not honored.");
+            Console.WriteLine("AGENT_SAFE_ISOLATION_SELF_TEST_OK");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("AGENT_SAFE_ISOLATION_SELF_TEST_FAILED=" + ex.Message);
+            return 1;
+        }
+    }
+
     public ControlPanelRuntime()
     {
         baseDir = AppDomain.CurrentDomain.BaseDirectory;
         projectRoot = ResolveGatewayRoot(baseDir);
+        gatewayPort = ResolveGatewayPort();
         dataRoot = ResolveStateDirectory("DESKTOP_MCP_DATA_ROOT", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP"));
         logsDir = Path.Combine(dataRoot, "logs");
         settingsDir = ResolveStateDirectory("DESKTOP_MCP_SETTINGS_DIR", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopMCP"));
@@ -157,11 +205,11 @@ internal sealed partial class ControlPanelRuntime
         Directory.CreateDirectory(currentWorkspace);
         string xamlPath = Path.Combine(baseDir, "Panel.xaml");
         settingsPath = Path.Combine(settingsDir, "settings.json");
-        startupLinkPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "DeskMCP Control Panel.lnk");
+        startupLinkPath = ResolveStartupLinkPath();
         tunnelSecretPath = Path.Combine(dataRoot, "secrets", "tunnel-runtime-key.dpapi");
         nodePath = ResolveNodePath(baseDir);
         tunnelClientPath = ResolveTunnelClientPath();
-        tunnelProfilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tunnel-client", "desktop-mcp.yaml");
+        tunnelProfilePath = ResolveTunnelProfilePath();
         MigrateLegacyData();
         onboardingCompleted = false;
         window = LoadWindow(xamlPath);
@@ -183,6 +231,7 @@ internal sealed partial class ControlPanelRuntime
         themeIndicatorTransform = (TranslateTransform)themeIndicator.RenderTransform;
         LoadSettings();
         InitializePendingUpdateVerification();
+        CleanupStaleUpdateDownloads();
         if (!IsValidTunnelId(tunnelId))
         {
             string migratedTunnelId = TryLoadTunnelIdFromProfile();
@@ -645,7 +694,7 @@ internal sealed partial class ControlPanelRuntime
     {
         try
         {
-            using (HttpResponseMessage response = StatusHttpClient.GetAsync("http://127.0.0.1:8765/health").GetAwaiter().GetResult())
+            using (HttpResponseMessage response = StatusHttpClient.GetAsync("http://127.0.0.1:" + gatewayPort + "/health").GetAwaiter().GetResult())
             {
                 if (!response.IsSuccessStatusCode) return null;
                 string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
@@ -687,7 +736,7 @@ internal sealed partial class ControlPanelRuntime
         gatewayUnhealthySince = DateTime.MinValue;
         try
         {
-            Process p = Process.Start(NewHiddenProcess(nodePath, "dist\\src\\stop.js"));
+            Process p = Process.Start(NewHiddenProcess(nodePath, "dist\\src\\stop.js " + gatewayPort));
             if (p != null)
             {
                 try { if (!p.WaitForExit(5000)) p.Kill(true); }
@@ -719,6 +768,7 @@ internal sealed partial class ControlPanelRuntime
         psi.EnvironmentVariables["DESKTOP_MCP_PROFILE"] = profile;
         psi.EnvironmentVariables["DESKTOP_MCP_ALLOWED_ROOTS"] = scope;
         psi.EnvironmentVariables["DESKTOP_MCP_AUDIT_LOG"] = Path.Combine(logsDir, "audit.jsonl");
+        psi.EnvironmentVariables["DESKTOP_MCP_PORT"] = gatewayPort.ToString();
         Process p = Process.Start(psi);
         if (p == null) throw new InvalidOperationException("Could not start DeskMCP Gateway.");
         gatewayProcess = p;
@@ -732,6 +782,7 @@ internal sealed partial class ControlPanelRuntime
                 {
                     if (!Object.ReferenceEquals(gatewayProcess, p)) return;
                     gatewayProcess = null;
+                    gatewayStartInFlight = false;
                     gatewayUnhealthySince = DateTime.MinValue;
                     ScheduleGatewayRetry();
                     UpdateStatus();
@@ -751,20 +802,37 @@ internal sealed partial class ControlPanelRuntime
 
     private void RestartGatewayAsync(string profile)
     {
+        if (quitting || gatewayStartInFlight || gatewayRecoveryInFlight) return;
         gatewayStartInFlight = true;
         Task.Run(delegate { RestartGateway(profile); })
             .ContinueWith(delegate(Task task) { window.Dispatcher.BeginInvoke(new Action(delegate
             {
                 gatewayStartInFlight = false;
-                if (task.IsFaulted && profileChangeInFlight && requestedProfile == profile) { profileChangeInFlight = false; requestedProfile = null; }
+                if (task.IsFaulted)
+                {
+                    ScheduleGatewayRetry();
+                    if (profileChangeInFlight && requestedProfile == profile) { profileChangeInFlight = false; requestedProfile = null; }
+                    LogRuntimeError("Gateway restart failed.", task.Exception);
+                }
                 UpdateStatus();
             })); });
     }
 
     private void StartGatewayAsync(string profile)
     {
+        if (quitting || gatewayStartInFlight || gatewayRecoveryInFlight || OwnedGatewayRunning()) return;
+        gatewayStartInFlight = true;
         Task.Run(delegate { StartGateway(profile); })
-            .ContinueWith(delegate { window.Dispatcher.BeginInvoke(new Action(UpdateStatus)); });
+            .ContinueWith(delegate(Task task) { window.Dispatcher.BeginInvoke(new Action(delegate
+            {
+                gatewayStartInFlight = false;
+                if (task.IsFaulted)
+                {
+                    ScheduleGatewayRetry();
+                    LogRuntimeError("Gateway start failed.", task.Exception);
+                }
+                UpdateStatus();
+            })); });
     }
 
     private void StopGatewayAsync()
@@ -1549,8 +1617,8 @@ internal sealed partial class ControlPanelRuntime
             }
 
             gatewayUnhealthySince = DateTime.MinValue;
-            gatewayStartInFlight = false;
-            if (!gatewayRecoveryInFlight && now >= nextGatewayRetry)
+            if (gatewayStartInFlight || gatewayRecoveryInFlight) return;
+            if (now >= nextGatewayRetry)
             {
                 gatewayStartInFlight = true;
                 Task.Run(delegate { StartGateway(selectedProfile); })
@@ -1559,7 +1627,12 @@ internal sealed partial class ControlPanelRuntime
                         window.Dispatcher.BeginInvoke(new Action(delegate
                         {
                             gatewayStartInFlight = OwnedGatewayRunning();
-                            if (task.IsFaulted) { gatewayStartInFlight = false; ScheduleGatewayRetry(); }
+                            if (task.IsFaulted)
+                            {
+                                gatewayStartInFlight = false;
+                                ScheduleGatewayRetry();
+                                LogRuntimeError("Gateway watchdog start failed.", task.Exception);
+                            }
                             UpdateStatus();
                         }));
                     });
@@ -2381,6 +2454,8 @@ internal static class Program
                 return ControlPanelRuntime.RunUpdateSecuritySelfTest();
             if (args.Length > 0 && args[0] == "--runtime-reliability-self-test")
                 return RuntimeReliability.RunSelfTest();
+            if (args.Length > 0 && args[0] == "--agent-safe-isolation-self-test")
+                return ControlPanelRuntime.RunAgentSafeIsolationSelfTest();
             if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))
             {
                 string mode = args[0];

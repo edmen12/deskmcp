@@ -60,6 +60,15 @@ internal static class DeskMcpUninstaller
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
+    private static string ResolveGatewayPortArgument()
+    {
+        string raw = Environment.GetEnvironmentVariable("DESKTOP_MCP_PORT");
+        if (String.IsNullOrWhiteSpace(raw)) return "8765";
+        int port;
+        if (!Int32.TryParse(raw, out port) || port < 1 || port > 65535) return "8765";
+        return port.ToString();
+    }
+
     private static void StopInstalledProcesses(string installDir)
     {
         StopExactProcesses("DeskMCP", Path.Combine(installDir, "DeskMCP.exe"));
@@ -72,7 +81,7 @@ internal static class DeskMcpUninstaller
         {
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo(nodePath, "dist\\src\\stop.js");
+                ProcessStartInfo psi = new ProcessStartInfo(nodePath, "dist\\src\\stop.js " + ResolveGatewayPortArgument());
                 psi.WorkingDirectory = gatewayDir;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;

@@ -123,6 +123,8 @@ internal sealed partial class ControlPanelRuntime
     private const int TrustEProviderUnknown = unchecked((int)0x800B0001);
     private const int TrustESubjectFormUnknown = unchecked((int)0x800B0003);
     private const int TrustENoSignature = unchecked((int)0x800B0100);
+    private const long MaxUpdateArtifactBytes = 2L * 1024L * 1024L * 1024L;
+    private const long UpdateDownloadSafetyMarginBytes = 128L * 1024L * 1024L;
 
     private enum AuthenticodeInspection
     {
@@ -139,6 +141,28 @@ internal sealed partial class ControlPanelRuntime
     private string PendingUpdateStatePath()
     {
         return Path.Combine(dataRoot, "updates", "pending-verification.json");
+    }
+
+    private void CleanupStaleUpdateDownloads()
+    {
+        string root = Path.Combine(dataRoot, "updates");
+        if (!Directory.Exists(root)) return;
+        try
+        {
+            foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                if (file.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) ||
+                    file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                    DeleteQuietly(file);
+            }
+            string[] directories = Directory.GetDirectories(root, "*", SearchOption.AllDirectories);
+            Array.Sort(directories, delegate(string a, string b) { return b.Length.CompareTo(a.Length); });
+            foreach (string directory in directories)
+            {
+                try { if (Directory.GetFileSystemEntries(directory).Length == 0) Directory.Delete(directory); } catch { }
+            }
+        }
+        catch (Exception ex) { LogRuntimeError("Stale update download cleanup failed.", ex); }
     }
 
     private static string NormalizeSha256(string value)
@@ -158,6 +182,7 @@ internal sealed partial class ControlPanelRuntime
         reason = null;
         if (candidate == null || candidate.kind != "verified-download-allowed") { reason = "candidate is not download-eligible"; return false; }
         if (candidate.sizeBytes == null || candidate.sizeBytes.Value <= 0) { reason = "invalid expected size"; return false; }
+        if (candidate.sizeBytes.Value > MaxUpdateArtifactBytes) { reason = "expected size exceeds updater safety limit"; return false; }
         if (NormalizeSha256(candidate.sha256) == null) { reason = "invalid expected SHA-256"; return false; }
         if (String.IsNullOrWhiteSpace(candidate.artifact) || Path.GetFileName(candidate.artifact) != candidate.artifact) { reason = "invalid artifact name"; return false; }
         Uri uri;
@@ -198,6 +223,18 @@ internal sealed partial class ControlPanelRuntime
     {
         try { if (!String.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { }
     }
+
+    private static void EnsureUpdateDownloadCapacity(string updateDir, long expectedSize)
+    {
+        string root = Path.GetPathRoot(Path.GetFullPath(updateDir));
+        if (String.IsNullOrWhiteSpace(root)) return;
+        DriveInfo drive = new DriveInfo(root);
+        if (!drive.IsReady) return;
+        long required = expectedSize + UpdateDownloadSafetyMarginBytes;
+        if (drive.AvailableFreeSpace < required)
+            throw new IOException("Not enough free disk space to download the update safely.");
+    }
+
     private static AuthenticodeInspection InspectAuthenticode(string path, out string signerFingerprint, out string reason)
     {
         signerFingerprint = null;
@@ -327,57 +364,64 @@ internal sealed partial class ControlPanelRuntime
         string versionPart = String.IsNullOrWhiteSpace(candidate.version) ? "unknown" : "v" + candidate.version;
         string updateDir = Path.Combine(dataRoot, "updates", versionPart, candidate.target ?? InstalledUpdateTarget());
         Directory.CreateDirectory(updateDir);
+        long expectedSize = candidate.sizeBytes.Value;
+        EnsureUpdateDownloadCapacity(updateDir, expectedSize);
         string finalPath = Path.Combine(updateDir, candidate.artifact);
         string partialPath = finalPath + ".partial";
         DeleteQuietly(partialPath);
         DeleteQuietly(finalPath);
+        bool verifiedFinalReady = false;
 
-        Uri uri = new Uri(candidate.downloadUrl);
-        using (HttpClient client = new HttpClient())
+        try
         {
-            client.Timeout = TimeSpan.FromMinutes(3);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("DeskMCP/" + CurrentProductVersion());
-            using (HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
+            Uri uri = new Uri(candidate.downloadUrl);
+            using (HttpClient client = new HttpClient())
             {
-                response.EnsureSuccessStatusCode();
-                long expectedSize = candidate.sizeBytes.Value;
-                if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != expectedSize)
-                    throw new InvalidDataException("GitHub Content-Length does not match the release manifest.");
-                using (Stream input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                using (FileStream output = new FileStream(partialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, true))
+                client.Timeout = TimeSpan.FromMinutes(3);
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("DeskMCP/" + CurrentProductVersion());
+                using (HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
                 {
-                    byte[] buffer = new byte[1024 * 128];
-                    long total = 0;
-                    while (true)
+                    response.EnsureSuccessStatusCode();
+                    if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != expectedSize)
+                        throw new InvalidDataException("GitHub Content-Length does not match the release manifest.");
+                    using (Stream input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                    using (FileStream output = new FileStream(partialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, true))
                     {
-                        int read = await input.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
-                        if (read == 0) break;
-                        total += read;
-                        if (total > expectedSize) throw new InvalidDataException("Downloaded file exceeded the manifest size.");
-                        await output.WriteAsync(buffer, 0, read).ConfigureAwait(false);
+                        byte[] buffer = new byte[1024 * 128];
+                        long total = 0;
+                        while (true)
+                        {
+                            int read = await input.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                            if (read == 0) break;
+                            total += read;
+                            if (total > expectedSize) throw new InvalidDataException("Downloaded file exceeded the manifest size.");
+                            await output.WriteAsync(buffer, 0, read).ConfigureAwait(false);
+                        }
+                        await output.FlushAsync().ConfigureAwait(false);
+                        if (total != expectedSize) throw new InvalidDataException("Downloaded file size does not match the manifest.");
                     }
-                    await output.FlushAsync().ConfigureAwait(false);
-                    if (total != expectedSize) throw new InvalidDataException("Downloaded file size does not match the manifest.");
                 }
             }
-        }
 
-        string expectedSha = NormalizeSha256(candidate.sha256);
-        string actualSha = ComputeSha256(partialPath);
-        if (!String.Equals(expectedSha, actualSha, StringComparison.Ordinal))
+            string expectedSha = NormalizeSha256(candidate.sha256);
+            string actualSha = ComputeSha256(partialPath);
+            if (!String.Equals(expectedSha, actualSha, StringComparison.Ordinal))
+                throw new InvalidDataException("Downloaded SHA-256 does not match the manifest.");
+
+            File.Move(partialPath, finalPath, true);
+            string signer;
+            string trustReason;
+            if (!VerifyDownloadedUpdate(finalPath, candidate, out signer, out trustReason))
+                throw new InvalidDataException(trustReason);
+
+            verifiedFinalReady = true;
+            return finalPath;
+        }
+        finally
         {
             DeleteQuietly(partialPath);
-            throw new InvalidDataException("Downloaded SHA-256 does not match the manifest.");
+            if (!verifiedFinalReady) DeleteQuietly(finalPath);
         }
-        File.Move(partialPath, finalPath, true);
-        string signer;
-        string trustReason;
-        if (!VerifyDownloadedUpdate(finalPath, candidate, out signer, out trustReason))
-        {
-            DeleteQuietly(finalPath);
-            throw new InvalidDataException(trustReason);
-        }
-        return finalPath;
     }
     private async Task HandleVerifiedUpdateDownloadAsync(Button button, TextBlock status)
     {
@@ -421,18 +465,28 @@ internal sealed partial class ControlPanelRuntime
             installerSha256 = NormalizeSha256(candidate.sha256)
         };
         string path = PendingUpdateStatePath();
-        string dir = Path.GetDirectoryName(path);
-        Directory.CreateDirectory(dir);
-        string temp = path + ".tmp";
         string json = JsonSerializer.Serialize(state);
-        File.WriteAllText(temp, json, new UTF8Encoding(false));
-        File.Move(temp, path, true);
+        RuntimeReliability.WriteAllTextAtomic(path, json, false);
     }
 
     private void ClearPendingUpdateVerification()
     {
         DeleteQuietly(PendingUpdateStatePath());
         pendingUpdateVerification = null;
+    }
+
+    private void RecoverManagedServicesAfterFailedUpdateLaunch()
+    {
+        gatewayRetryIndex = 0;
+        nextGatewayRetry = DateTime.MinValue;
+        tunnelRetryIndex = 0;
+        nextTunnelRetry = DateTime.MinValue;
+        try
+        {
+            if (!OwnedGatewayRunning()) StartGatewayAsync(selectedProfile);
+            UpdateStatus();
+        }
+        catch (Exception ex) { LogRuntimeError("Runtime recovery after failed update launch failed.", ex); }
     }
 
     private void InstallVerifiedUpdate()
@@ -474,6 +528,7 @@ internal sealed partial class ControlPanelRuntime
         {
             quitting = false;
             ClearPendingUpdateVerification();
+            RecoverManagedServicesAfterFailedUpdateLaunch();
             throw;
         }
     }
@@ -620,6 +675,13 @@ internal sealed partial class ControlPanelRuntime
             };
             if (IsSafeUpdateDownload(badHost, out reason)) throw new InvalidOperationException("non-GitHub download host was accepted");
             if (IsCandidateForInstalledClient(candidate, "9.9.8", "win-arm64", out reason)) throw new InvalidOperationException("wrong target candidate was accepted");
+            UpdateCheckInfo oversized = new UpdateCheckInfo
+            {
+                kind = candidate.kind, version = candidate.version, target = candidate.target,
+                artifact = candidate.artifact, sizeBytes = MaxUpdateArtifactBytes + 1, sha256 = candidate.sha256,
+                downloadUrl = candidate.downloadUrl
+            };
+            if (IsSafeUpdateDownload(oversized, out reason)) throw new InvalidOperationException("oversized update artifact was accepted");
             UpdateCheckInfo badPath = new UpdateCheckInfo
             {
                 kind = candidate.kind, version = candidate.version, target = candidate.target,

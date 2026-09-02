@@ -722,6 +722,21 @@ internal static class InstallerProgram
 {
     private const string InstallerMutexName = @"Local\DeskMCP.Setup.Singleton";
 
+    private static string ResolveInstallerMutexName(string[] args)
+    {
+        if (args.Length == 0 || !args[0].StartsWith("--", StringComparison.Ordinal)) return InstallerMutexName;
+        string testNamespace = Environment.GetEnvironmentVariable("DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE");
+        if (String.IsNullOrWhiteSpace(testNamespace)) return InstallerMutexName;
+        if (testNamespace.Length > 64) throw new InvalidOperationException("Installer test mutex namespace is too long.");
+        for (int i = 0; i < testNamespace.Length; i++)
+        {
+            char c = testNamespace[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'))
+                throw new InvalidOperationException("Installer test mutex namespace contains invalid characters.");
+        }
+        return InstallerMutexName + "." + testNamespace;
+    }
+
     private static void WriteTestFailure(string prefix, Exception ex)
     {
         string message = prefix + "=" + ex.GetType().Name + ": " + ex.Message;
@@ -749,7 +764,7 @@ internal static class InstallerProgram
             return 0;
         }
 
-        using (Mutex mutex = new Mutex(false, InstallerMutexName))
+        using (Mutex mutex = new Mutex(false, ResolveInstallerMutexName(args)))
         {
             bool acquired;
             try { acquired = mutex.WaitOne(0, false); }
