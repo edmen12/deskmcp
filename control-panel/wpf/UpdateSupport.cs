@@ -38,7 +38,7 @@ internal sealed partial class ControlPanelRuntime
 
     private async void HandleUpdateButton()
     {
-        if (updateCheckInFlight) return;
+        if (!CanContinueUpdateOperation(quitting) || updateCheckInFlight) return;
         Button button = Find<Button>("UpdateButton");
         string action = button.Content as string;
         if (action == "View Release" && !String.IsNullOrWhiteSpace(lastUpdateReleaseUrl))

@@ -12,6 +12,7 @@ All notable changes to DeskMCP are documented here.
 - Hardened multi-agent file mutation safety: `desktop_read_file` now returns a one-time path/version-bound `observation_id`; edit, move, and existing-file writes consume that capability, and same-path mutations are serialized to prevent concurrent lost updates.
 - Added agent-safe runtime and multi-client stress harnesses that isolate ports, state, Startup shortcuts, Tunnel profiles, singleton namespaces, and owned process trees from any DeskMCP instance already in use.
 - Hardened Full Control process ownership for concurrent agents: active state now follows Desktop Commander's session registry rather than OS PID liveness guesses, completed sessions remain readable in bounded history, start reservations enforce the 32-session ceiling before spawn, and stress coverage now includes 40-way start bursts, read/terminate races, Desktop Commander crash recovery, and Gateway-owned shutdown cleanup.
+- Prevented a verified update from launching Setup after the user has already begun quitting DeskMCP; shutdown now gates every update entry/continuation, discards a just-finished verified download, and avoids touching closing UI state.
 
 ## 0.9.2 — 2026-09-01
 

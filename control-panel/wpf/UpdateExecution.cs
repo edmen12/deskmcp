@@ -133,6 +133,11 @@ internal sealed partial class ControlPanelRuntime
         Invalid
     }
 
+    private static bool CanContinueUpdateOperation(bool isQuitting)
+    {
+        return !isQuitting;
+    }
+
     private static bool HasPinnedUpdatePublisher()
     {
         return UpdatePublisherPins.CertificateSha256 != null && UpdatePublisherPins.CertificateSha256.Length > 0;
@@ -425,7 +430,7 @@ internal sealed partial class ControlPanelRuntime
     }
     private async Task HandleVerifiedUpdateDownloadAsync(Button button, TextBlock status)
     {
-        if (lastUpdateCandidate == null) return;
+        if (!CanContinueUpdateOperation(quitting) || lastUpdateCandidate == null) return;
         updateCheckInFlight = true;
         button.IsEnabled = false;
         button.Content = "Updating…";
@@ -434,6 +439,11 @@ internal sealed partial class ControlPanelRuntime
         try
         {
             string path = await DownloadAndVerifyUpdateFileAsync(lastUpdateCandidate);
+            if (!CanContinueUpdateOperation(quitting))
+            {
+                DeleteQuietly(path);
+                return;
+            }
             verifiedUpdatePath = path;
             status.Text = "Update verified · starting installer…";
             button.Content = "Starting…";
@@ -441,6 +451,7 @@ internal sealed partial class ControlPanelRuntime
         }
         catch (Exception ex)
         {
+            if (!CanContinueUpdateOperation(quitting)) return;
             bool installerReady = !String.IsNullOrWhiteSpace(verifiedUpdatePath) && File.Exists(verifiedUpdatePath);
             status.Text = ex is InvalidDataException
                 ? "Update verification failed · " + ex.Message
@@ -450,7 +461,7 @@ internal sealed partial class ControlPanelRuntime
         finally
         {
             updateCheckInFlight = false;
-            button.IsEnabled = true;
+            if (CanContinueUpdateOperation(quitting)) button.IsEnabled = true;
         }
     }
 
@@ -491,7 +502,7 @@ internal sealed partial class ControlPanelRuntime
 
     private void InstallVerifiedUpdate()
     {
-        if (lastUpdateCandidate == null || String.IsNullOrWhiteSpace(verifiedUpdatePath)) return;
+        if (!CanContinueUpdateOperation(quitting) || lastUpdateCandidate == null || String.IsNullOrWhiteSpace(verifiedUpdatePath)) return;
         string signer;
         string reason;
         if (!IsCandidateForInstalledClient(lastUpdateCandidate, CurrentProductVersion(), InstalledUpdateTarget(), out reason))
@@ -666,6 +677,8 @@ internal sealed partial class ControlPanelRuntime
             string reason;
             if (!IsSafeUpdateDownload(candidate, out reason)) throw new InvalidOperationException("valid candidate rejected: " + reason);
             if (!IsCandidateForInstalledClient(candidate, "9.9.8", "win-x64", out reason)) throw new InvalidOperationException("valid installed-client candidate rejected: " + reason);
+            if (!CanContinueUpdateOperation(false)) throw new InvalidOperationException("active updater operation was blocked without shutdown");
+            if (CanContinueUpdateOperation(true)) throw new InvalidOperationException("updater operation remained eligible after shutdown began");
 
             UpdateCheckInfo badHost = new UpdateCheckInfo
             {
@@ -741,6 +754,7 @@ internal sealed partial class ControlPanelRuntime
             Console.WriteLine("UNSIGNED_VERIFIED_EXECUTION_ALLOWED=OK");
             Console.WriteLine("INVALID_SIGNATURE_BLOCKED=OK");
             Console.WriteLine("PROFILE_MISMATCH_HOLD=OK");
+            Console.WriteLine("UPDATE_SHUTDOWN_GUARD=OK");
             return 0;
         }
         finally
