@@ -39,6 +39,18 @@ test('ProcessSessionRegistry reserves capacity before process spawn', () => {
   assert.equal(sessions.atCapacity(), false);
 });
 
+test('ProcessSessionRegistry invalidates older capabilities when an OS PID is reused', () => {
+  const sessions = new ProcessSessionRegistry(2, 4);
+  const oldSession = sessions.register(777);
+  sessions.reconcileActivePids([]);
+
+  const newSession = sessions.register(777);
+  assert.equal(sessions.has(oldSession), false);
+  assert.throws(() => sessions.resolve(oldSession), /Unknown or unowned process session/);
+  assert.equal(sessions.resolve(newSession), 777);
+  assert.equal(sessions.activeSize(), 1);
+});
+
 test('ProcessSessionRegistry bounds inactive history while preserving active sessions', () => {
   const sessions = new ProcessSessionRegistry(2, 3);
   const first = sessions.register(101);

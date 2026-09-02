@@ -89,6 +89,15 @@ export class ProcessSessionRegistry {
       throw new Error(`Invalid process PID: ${pid}`);
     }
     this.startReservations.delete(reservationId);
+
+    // Desktop Commander identifies terminal sessions by the OS PID. Windows may
+    // eventually reuse a PID after a completed process exits. Invalidate every
+    // older opaque capability for that PID before attaching the PID to a new
+    // process so an old session_id can never target a later process instance.
+    for (const [existingId, existing] of this.sessions) {
+      if (existing.pid === pid) this.sessions.delete(existingId);
+    }
+
     const id = randomUUID();
     this.sessions.set(id, { id, pid, createdAt: Date.now(), active: true });
     this.pruneInactiveHistory();
