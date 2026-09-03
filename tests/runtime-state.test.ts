@@ -21,6 +21,14 @@ test('ProcessSessionRegistry enforces the active-session cap without OS PID live
   assert.equal(sessions.activeSize(), 2);
 });
 
+test('ProcessSessionRegistry tracks visible and hidden window modes', () => {
+  const sessions = new ProcessSessionRegistry(2, 4);
+  const hidden = sessions.register(101);
+  const visible = sessions.register(202, 'visible');
+  assert.equal(sessions.windowMode(hidden), 'hidden');
+  assert.equal(sessions.windowMode(visible), 'visible');
+});
+
 test('ProcessSessionRegistry reserves capacity before process spawn', () => {
   const sessions = new ProcessSessionRegistry(2, 4);
   const firstReservation = sessions.reserveStart();

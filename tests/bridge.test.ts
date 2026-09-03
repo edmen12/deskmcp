@@ -501,6 +501,10 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       ]) {
         assert.ok(fullControlTools.tools.some(tool => tool.name === name));
       }
+      const startTool = fullControlTools.tools.find(tool => tool.name === 'desktop_start_process');
+      assert.ok(startTool);
+      const windowModeSchema = (startTool.inputSchema as { properties?: Record<string, { enum?: string[] }> }).properties?.window_mode;
+      assert.deepEqual(windowModeSchema?.enum, ['hidden', 'visible']);
 
       const processCommand = 'node -i';
       const started = await fullControlClient.callTool({

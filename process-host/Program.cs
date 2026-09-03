@@ -10,6 +10,7 @@ internal static class Program
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
     private const uint SYNCHRONIZE = 0x00100000;
     private const uint CREATE_SUSPENDED = 0x00000004;
+    private const uint CREATE_NEW_CONSOLE = 0x00000010;
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
@@ -31,7 +32,7 @@ internal static class Program
 
         try
         {
-            ParseArguments(args, out string shell, out string command);
+            ParseArguments(args, out string shell, out string command, out string windowMode);
             int parentPid = GetParentProcessId(Environment.ProcessId);
             if (parentPid <= 0)
                 throw new InvalidOperationException("Could not resolve the owning terminal process.");
@@ -54,14 +55,20 @@ internal static class Program
 
             string applicationPath = ResolveShellPath(shell);
             string commandLine = BuildShellCommandLine(applicationPath, shell, command);
-            STARTUPINFO startup = new STARTUPINFO
+            STARTUPINFO startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+            uint creationFlags = CREATE_SUSPENDED;
+            if (windowMode == "visible")
             {
-                cb = Marshal.SizeOf<STARTUPINFO>(),
-                dwFlags = STARTF_USESTDHANDLES,
-                hStdInput = GetStdHandle(STD_INPUT_HANDLE),
-                hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE),
-                hStdError = GetStdHandle(STD_ERROR_HANDLE)
-            };
+                creationFlags |= CREATE_NEW_CONSOLE;
+            }
+            else
+            {
+                creationFlags |= CREATE_NO_WINDOW;
+                startup.dwFlags = STARTF_USESTDHANDLES;
+                startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+                startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+                startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+            }
 
             if (!CreateProcessW(
                 applicationPath,
@@ -69,7 +76,7 @@ internal static class Program
                 IntPtr.Zero,
                 IntPtr.Zero,
                 true,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                creationFlags,
                 IntPtr.Zero,
                 null,
                 ref startup,
@@ -140,14 +147,16 @@ internal static class Program
         }
     }
 
-    private static void ParseArguments(string[] args, out string shell, out string command)
+    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode)
     {
         string? shellValue = null;
         string? command64 = null;
+        string? windowModeValue = null;
         for (int index = 0; index < args.Length; index++)
         {
             if (args[index] == "--shell" && index + 1 < args.Length) shellValue = args[++index];
             else if (args[index] == "--command64" && index + 1 < args.Length) command64 = args[++index];
+            else if (args[index] == "--window-mode" && index + 1 < args.Length) windowModeValue = args[++index];
             else throw new ArgumentException("Unknown or incomplete process-host argument.");
         }
 
@@ -156,6 +165,9 @@ internal static class Program
             throw new ArgumentException("Unsupported process shell.");
         if (String.IsNullOrWhiteSpace(command64))
             throw new ArgumentException("Missing encoded process command.");
+        windowMode = (windowModeValue ?? "hidden").ToLowerInvariant();
+        if (windowMode != "hidden" && windowMode != "visible")
+            throw new ArgumentException("Unsupported process window mode.");
 
         try { command = Encoding.UTF8.GetString(Convert.FromBase64String(command64)); }
         catch (FormatException) { throw new ArgumentException("Invalid encoded process command."); }
