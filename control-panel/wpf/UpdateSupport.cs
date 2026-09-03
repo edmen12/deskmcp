@@ -38,7 +38,7 @@ internal sealed partial class ControlPanelRuntime
 
     private async void HandleUpdateButton()
     {
-        if (updateCheckInFlight) return;
+        if (!CanContinueUpdateOperation(quitting) || updateCheckInFlight) return;
         Button button = Find<Button>("UpdateButton");
         string action = button.Content as string;
         if (action == "View Release" && !String.IsNullOrWhiteSpace(lastUpdateReleaseUrl))
@@ -46,7 +46,7 @@ internal sealed partial class ControlPanelRuntime
             OpenPath(lastUpdateReleaseUrl);
             return;
         }
-        if (action == "Download & Verify" && lastUpdateCandidate != null)
+        if ((action == "Update Now" || action == "Retry Update") && lastUpdateCandidate != null)
         {
             await HandleVerifiedUpdateDownloadAsync(button, Find<TextBlock>("UpdateStatus"));
             return;
@@ -118,8 +118,17 @@ internal sealed partial class ControlPanelRuntime
             Task<string> errorTask = process.StandardError.ReadToEndAsync();
             if (!process.WaitForExit(25000))
             {
-                try { process.Kill(true); } catch { }
-                throw new TimeoutException("Update check timed out.");
+                bool terminated = false;
+                try
+                {
+                    process.Kill(true);
+                    terminated = process.WaitForExit(3000);
+                }
+                catch { }
+                try { Task.WaitAll(new Task[] { outputTask, errorTask }, 3000); } catch { }
+                throw new TimeoutException(terminated
+                    ? "Update check timed out."
+                    : "Update check timed out and its helper process did not terminate cleanly.");
             }
             if (!Task.WaitAll(new Task[] { outputTask, errorTask }, 3000))
                 throw new TimeoutException("Update checker output did not close cleanly.");
@@ -147,14 +156,8 @@ internal sealed partial class ControlPanelRuntime
         if (result.kind == "verified-download-allowed")
         {
             lastUpdateCandidate = result;
-            if (!HasPinnedUpdatePublisher())
-            {
-                status.Text = version + " available · metadata verified; automatic install disabled until a publisher pin is compiled in";
-                button.Content = "View Release";
-                return;
-            }
-            status.Text = version + " available · metadata verified; local signature verification required";
-            button.Content = "Download & Verify";
+            status.Text = version + " available";
+            button.Content = "Update Now";
             return;
         }
         if (result.kind == "manual-only")

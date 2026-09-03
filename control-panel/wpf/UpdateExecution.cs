@@ -104,7 +104,7 @@ internal sealed partial class ControlPanelRuntime
         public IntPtr hCertStore;
     }
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern int WinVerifyTrust(IntPtr hwnd, [MarshalAs(UnmanagedType.LPStruct)] Guid actionId, IntPtr trustData);
 
     [DllImport("wintrust.dll", ExactSpelling = true)]
@@ -120,6 +120,23 @@ internal sealed partial class ControlPanelRuntime
     private const uint WtdStateActionVerify = 1;
     private const uint WtdStateActionClose = 2;
     private const uint WtdRevocationCheckChainExcludeRoot = 0x00000080;
+    private const int TrustEProviderUnknown = unchecked((int)0x800B0001);
+    private const int TrustESubjectFormUnknown = unchecked((int)0x800B0003);
+    private const int TrustENoSignature = unchecked((int)0x800B0100);
+    private const long MaxUpdateArtifactBytes = 2L * 1024L * 1024L * 1024L;
+    private const long UpdateDownloadSafetyMarginBytes = 128L * 1024L * 1024L;
+
+    private enum AuthenticodeInspection
+    {
+        Absent,
+        Trusted,
+        Invalid
+    }
+
+    private static bool CanContinueUpdateOperation(bool isQuitting)
+    {
+        return !isQuitting;
+    }
 
     private static bool HasPinnedUpdatePublisher()
     {
@@ -129,6 +146,28 @@ internal sealed partial class ControlPanelRuntime
     private string PendingUpdateStatePath()
     {
         return Path.Combine(dataRoot, "updates", "pending-verification.json");
+    }
+
+    private void CleanupStaleUpdateDownloads()
+    {
+        string root = Path.Combine(dataRoot, "updates");
+        if (!Directory.Exists(root)) return;
+        try
+        {
+            foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                if (file.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) ||
+                    file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                    DeleteQuietly(file);
+            }
+            string[] directories = Directory.GetDirectories(root, "*", SearchOption.AllDirectories);
+            Array.Sort(directories, delegate(string a, string b) { return b.Length.CompareTo(a.Length); });
+            foreach (string directory in directories)
+            {
+                try { if (Directory.GetFileSystemEntries(directory).Length == 0) Directory.Delete(directory); } catch { }
+            }
+        }
+        catch (Exception ex) { LogRuntimeError("Stale update download cleanup failed.", ex); }
     }
 
     private static string NormalizeSha256(string value)
@@ -148,6 +187,7 @@ internal sealed partial class ControlPanelRuntime
         reason = null;
         if (candidate == null || candidate.kind != "verified-download-allowed") { reason = "candidate is not download-eligible"; return false; }
         if (candidate.sizeBytes == null || candidate.sizeBytes.Value <= 0) { reason = "invalid expected size"; return false; }
+        if (candidate.sizeBytes.Value > MaxUpdateArtifactBytes) { reason = "expected size exceeds updater safety limit"; return false; }
         if (NormalizeSha256(candidate.sha256) == null) { reason = "invalid expected SHA-256"; return false; }
         if (String.IsNullOrWhiteSpace(candidate.artifact) || Path.GetFileName(candidate.artifact) != candidate.artifact) { reason = "invalid artifact name"; return false; }
         Uri uri;
@@ -188,7 +228,19 @@ internal sealed partial class ControlPanelRuntime
     {
         try { if (!String.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { }
     }
-    private static bool VerifyWinTrust(string path, out string signerFingerprint, out string reason)
+
+    private static void EnsureUpdateDownloadCapacity(string updateDir, long expectedSize)
+    {
+        string root = Path.GetPathRoot(Path.GetFullPath(updateDir));
+        if (String.IsNullOrWhiteSpace(root)) return;
+        DriveInfo drive = new DriveInfo(root);
+        if (!drive.IsReady) return;
+        long required = expectedSize + UpdateDownloadSafetyMarginBytes;
+        if (drive.AvailableFreeSpace < required)
+            throw new IOException("Not enough free disk space to download the update safely.");
+    }
+
+    private static AuthenticodeInspection InspectAuthenticode(string path, out string signerFingerprint, out string reason)
     {
         signerFingerprint = null;
         reason = null;
@@ -219,26 +271,34 @@ internal sealed partial class ControlPanelRuntime
             trustDataPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustData>());
             Marshal.StructureToPtr(data, trustDataPtr, false);
             int result = WinVerifyTrust(IntPtr.Zero, WinTrustActionGenericVerifyV2, trustDataPtr);
+            int lastError = Marshal.GetLastWin32Error();
             data = Marshal.PtrToStructure<WinTrustData>(trustDataPtr);
             stateOpened = data.hWVTStateData != IntPtr.Zero;
+            if (result == TrustENoSignature)
+            {
+                if (lastError == TrustENoSignature || lastError == TrustESubjectFormUnknown || lastError == TrustEProviderUnknown)
+                    return AuthenticodeInspection.Absent;
+                reason = "WinVerifyTrust reported no valid signature but Windows returned verification error 0x" + lastError.ToString("X8");
+                return AuthenticodeInspection.Invalid;
+            }
             if (result != 0)
             {
                 reason = "WinVerifyTrust rejected the Authenticode signature (0x" + result.ToString("X8") + ")";
-                return false;
+                return AuthenticodeInspection.Invalid;
             }
             IntPtr providerData = WTHelperProvDataFromStateData(data.hWVTStateData);
             IntPtr signerPtr = providerData == IntPtr.Zero ? IntPtr.Zero : WTHelperGetProvSignerFromChain(providerData, 0, false, 0);
-            if (signerPtr == IntPtr.Zero) { reason = "WinVerifyTrust did not expose a signer chain"; return false; }
+            if (signerPtr == IntPtr.Zero) { reason = "WinVerifyTrust did not expose a signer chain"; return AuthenticodeInspection.Invalid; }
             CryptProviderSigner signer = Marshal.PtrToStructure<CryptProviderSigner>(signerPtr);
-            if (signer.csCertChain == 0 || signer.pasCertChain == IntPtr.Zero) { reason = "Authenticode signer chain is empty"; return false; }
+            if (signer.csCertChain == 0 || signer.pasCertChain == IntPtr.Zero) { reason = "Authenticode signer chain is empty"; return AuthenticodeInspection.Invalid; }
             CryptProviderCert providerCert = Marshal.PtrToStructure<CryptProviderCert>(signer.pasCertChain);
-            if (providerCert.pCert == IntPtr.Zero) { reason = "Authenticode signer certificate is missing"; return false; }
+            if (providerCert.pCert == IntPtr.Zero) { reason = "Authenticode signer certificate is missing"; return AuthenticodeInspection.Invalid; }
             CertContext cert = Marshal.PtrToStructure<CertContext>(providerCert.pCert);
-            if (cert.pbCertEncoded == IntPtr.Zero || cert.cbCertEncoded == 0) { reason = "Authenticode signer certificate is invalid"; return false; }
+            if (cert.pbCertEncoded == IntPtr.Zero || cert.cbCertEncoded == 0) { reason = "Authenticode signer certificate is invalid"; return AuthenticodeInspection.Invalid; }
             byte[] rawCert = new byte[cert.cbCertEncoded];
             Marshal.Copy(cert.pbCertEncoded, rawCert, 0, rawCert.Length);
             signerFingerprint = Convert.ToHexString(SHA256.HashData(rawCert));
-            return true;
+            return AuthenticodeInspection.Trusted;
         }
         finally
         {
@@ -268,6 +328,25 @@ internal sealed partial class ControlPanelRuntime
         return false;
     }
 
+    private static bool VerifyAuthenticodeExecutionPolicy(
+        AuthenticodeInspection signature,
+        string signerFingerprint,
+        string inspectionReason,
+        out string reason)
+    {
+        if (signature == AuthenticodeInspection.Invalid)
+        {
+            reason = inspectionReason ?? "Authenticode signature validation failed";
+            return false;
+        }
+        if (signature == AuthenticodeInspection.Trusted && HasPinnedUpdatePublisher())
+        {
+            return VerifyPinnedPublisher(signerFingerprint, out reason);
+        }
+        reason = null;
+        return true;
+    }
+
     private static bool VerifyDownloadedUpdate(string path, UpdateCheckInfo candidate, out string signerFingerprint, out string reason)
     {
         signerFingerprint = null;
@@ -278,96 +357,111 @@ internal sealed partial class ControlPanelRuntime
         string expected = NormalizeSha256(candidate.sha256);
         string actual = ComputeSha256(path);
         if (expected == null || !String.Equals(expected, actual, StringComparison.Ordinal)) { reason = "downloaded SHA-256 does not match the manifest"; return false; }
-        if (!VerifyWinTrust(path, out signerFingerprint, out reason)) return false;
-        if (!VerifyPinnedPublisher(signerFingerprint, out reason)) return false;
-        return true;
+
+        AuthenticodeInspection signature = InspectAuthenticode(path, out signerFingerprint, out string inspectionReason);
+        return VerifyAuthenticodeExecutionPolicy(signature, signerFingerprint, inspectionReason, out reason);
     }
     private async Task<string> DownloadAndVerifyUpdateFileAsync(UpdateCheckInfo candidate)
     {
         string validationReason;
         if (!IsCandidateForInstalledClient(candidate, CurrentProductVersion(), InstalledUpdateTarget(), out validationReason)) throw new InvalidDataException(validationReason);
-        if (!HasPinnedUpdatePublisher()) throw new InvalidOperationException("Automatic install is disabled because this build has no pinned Authenticode publisher.");
 
         string versionPart = String.IsNullOrWhiteSpace(candidate.version) ? "unknown" : "v" + candidate.version;
         string updateDir = Path.Combine(dataRoot, "updates", versionPart, candidate.target ?? InstalledUpdateTarget());
         Directory.CreateDirectory(updateDir);
+        long expectedSize = candidate.sizeBytes.Value;
+        EnsureUpdateDownloadCapacity(updateDir, expectedSize);
         string finalPath = Path.Combine(updateDir, candidate.artifact);
         string partialPath = finalPath + ".partial";
         DeleteQuietly(partialPath);
         DeleteQuietly(finalPath);
+        bool verifiedFinalReady = false;
 
-        Uri uri = new Uri(candidate.downloadUrl);
-        using (HttpClient client = new HttpClient())
+        try
         {
-            client.Timeout = TimeSpan.FromMinutes(3);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("DeskMCP/" + CurrentProductVersion());
-            using (HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
+            Uri uri = new Uri(candidate.downloadUrl);
+            using (HttpClient client = new HttpClient())
             {
-                response.EnsureSuccessStatusCode();
-                long expectedSize = candidate.sizeBytes.Value;
-                if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != expectedSize)
-                    throw new InvalidDataException("GitHub Content-Length does not match the release manifest.");
-                using (Stream input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                using (FileStream output = new FileStream(partialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, true))
+                client.Timeout = TimeSpan.FromMinutes(3);
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("DeskMCP/" + CurrentProductVersion());
+                using (HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
                 {
-                    byte[] buffer = new byte[1024 * 128];
-                    long total = 0;
-                    while (true)
+                    response.EnsureSuccessStatusCode();
+                    if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value != expectedSize)
+                        throw new InvalidDataException("GitHub Content-Length does not match the release manifest.");
+                    using (Stream input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                    using (FileStream output = new FileStream(partialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, true))
                     {
-                        int read = await input.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
-                        if (read == 0) break;
-                        total += read;
-                        if (total > expectedSize) throw new InvalidDataException("Downloaded file exceeded the manifest size.");
-                        await output.WriteAsync(buffer, 0, read).ConfigureAwait(false);
+                        byte[] buffer = new byte[1024 * 128];
+                        long total = 0;
+                        while (true)
+                        {
+                            int read = await input.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                            if (read == 0) break;
+                            total += read;
+                            if (total > expectedSize) throw new InvalidDataException("Downloaded file exceeded the manifest size.");
+                            await output.WriteAsync(buffer, 0, read).ConfigureAwait(false);
+                        }
+                        await output.FlushAsync().ConfigureAwait(false);
+                        if (total != expectedSize) throw new InvalidDataException("Downloaded file size does not match the manifest.");
                     }
-                    await output.FlushAsync().ConfigureAwait(false);
-                    if (total != expectedSize) throw new InvalidDataException("Downloaded file size does not match the manifest.");
                 }
             }
-        }
 
-        string expectedSha = NormalizeSha256(candidate.sha256);
-        string actualSha = ComputeSha256(partialPath);
-        if (!String.Equals(expectedSha, actualSha, StringComparison.Ordinal))
+            string expectedSha = NormalizeSha256(candidate.sha256);
+            string actualSha = ComputeSha256(partialPath);
+            if (!String.Equals(expectedSha, actualSha, StringComparison.Ordinal))
+                throw new InvalidDataException("Downloaded SHA-256 does not match the manifest.");
+
+            File.Move(partialPath, finalPath, true);
+            string signer;
+            string trustReason;
+            if (!VerifyDownloadedUpdate(finalPath, candidate, out signer, out trustReason))
+                throw new InvalidDataException(trustReason);
+
+            verifiedFinalReady = true;
+            return finalPath;
+        }
+        finally
         {
             DeleteQuietly(partialPath);
-            throw new InvalidDataException("Downloaded SHA-256 does not match the manifest.");
+            if (!verifiedFinalReady) DeleteQuietly(finalPath);
         }
-        File.Move(partialPath, finalPath, true);
-        string signer;
-        string trustReason;
-        if (!VerifyDownloadedUpdate(finalPath, candidate, out signer, out trustReason))
-        {
-            DeleteQuietly(finalPath);
-            throw new InvalidDataException(trustReason);
-        }
-        return finalPath;
     }
     private async Task HandleVerifiedUpdateDownloadAsync(Button button, TextBlock status)
     {
-        if (lastUpdateCandidate == null) return;
+        if (!CanContinueUpdateOperation(quitting) || lastUpdateCandidate == null) return;
         updateCheckInFlight = true;
         button.IsEnabled = false;
-        button.Content = "Downloading…";
-        status.Text = "Downloading verified release asset…";
+        button.Content = "Updating…";
+        status.Text = "Downloading update…";
         verifiedUpdatePath = null;
         try
         {
             string path = await DownloadAndVerifyUpdateFileAsync(lastUpdateCandidate);
+            if (!CanContinueUpdateOperation(quitting))
+            {
+                DeleteQuietly(path);
+                return;
+            }
             verifiedUpdatePath = path;
-            status.Text = "Verified update ready · Authenticode publisher matched";
-            button.Content = "Install Update";
+            status.Text = "Update verified · starting installer…";
+            button.Content = "Starting…";
+            InstallVerifiedUpdate();
         }
         catch (Exception ex)
         {
-            verifiedUpdatePath = null;
-            status.Text = "Update was not trusted · " + ex.Message;
-            button.Content = HasPinnedUpdatePublisher() ? "Download & Verify" : "View Release";
+            if (!CanContinueUpdateOperation(quitting)) return;
+            bool installerReady = !String.IsNullOrWhiteSpace(verifiedUpdatePath) && File.Exists(verifiedUpdatePath);
+            status.Text = ex is InvalidDataException
+                ? "Update verification failed · " + ex.Message
+                : "Could not update · " + ex.Message;
+            button.Content = installerReady ? "Install Update" : "Retry Update";
         }
         finally
         {
             updateCheckInFlight = false;
-            button.IsEnabled = true;
+            if (CanContinueUpdateOperation(quitting)) button.IsEnabled = true;
         }
     }
 
@@ -382,12 +476,8 @@ internal sealed partial class ControlPanelRuntime
             installerSha256 = NormalizeSha256(candidate.sha256)
         };
         string path = PendingUpdateStatePath();
-        string dir = Path.GetDirectoryName(path);
-        Directory.CreateDirectory(dir);
-        string temp = path + ".tmp";
         string json = JsonSerializer.Serialize(state);
-        File.WriteAllText(temp, json, new UTF8Encoding(false));
-        File.Move(temp, path, true);
+        RuntimeReliability.WriteAllTextAtomic(path, json, false);
     }
 
     private void ClearPendingUpdateVerification()
@@ -396,9 +486,23 @@ internal sealed partial class ControlPanelRuntime
         pendingUpdateVerification = null;
     }
 
+    private void RecoverManagedServicesAfterFailedUpdateLaunch()
+    {
+        gatewayRetryIndex = 0;
+        nextGatewayRetry = DateTime.MinValue;
+        tunnelRetryIndex = 0;
+        nextTunnelRetry = DateTime.MinValue;
+        try
+        {
+            if (!OwnedGatewayRunning()) StartGatewayAsync(selectedProfile);
+            UpdateStatus();
+        }
+        catch (Exception ex) { LogRuntimeError("Runtime recovery after failed update launch failed.", ex); }
+    }
+
     private void InstallVerifiedUpdate()
     {
-        if (lastUpdateCandidate == null || String.IsNullOrWhiteSpace(verifiedUpdatePath)) return;
+        if (!CanContinueUpdateOperation(quitting) || lastUpdateCandidate == null || String.IsNullOrWhiteSpace(verifiedUpdatePath)) return;
         string signer;
         string reason;
         if (!IsCandidateForInstalledClient(lastUpdateCandidate, CurrentProductVersion(), InstalledUpdateTarget(), out reason))
@@ -411,8 +515,7 @@ internal sealed partial class ControlPanelRuntime
         {
             DeleteQuietly(verifiedUpdatePath);
             verifiedUpdatePath = null;
-            ShowToast("Update verification failed: " + reason, true);
-            return;
+            throw new InvalidDataException("Update verification failed: " + reason);
         }
 
         WritePendingUpdateVerification(lastUpdateCandidate);
@@ -436,6 +539,7 @@ internal sealed partial class ControlPanelRuntime
         {
             quitting = false;
             ClearPendingUpdateVerification();
+            RecoverManagedServicesAfterFailedUpdateLaunch();
             throw;
         }
     }
@@ -573,6 +677,8 @@ internal sealed partial class ControlPanelRuntime
             string reason;
             if (!IsSafeUpdateDownload(candidate, out reason)) throw new InvalidOperationException("valid candidate rejected: " + reason);
             if (!IsCandidateForInstalledClient(candidate, "9.9.8", "win-x64", out reason)) throw new InvalidOperationException("valid installed-client candidate rejected: " + reason);
+            if (!CanContinueUpdateOperation(false)) throw new InvalidOperationException("active updater operation was blocked without shutdown");
+            if (CanContinueUpdateOperation(true)) throw new InvalidOperationException("updater operation remained eligible after shutdown began");
 
             UpdateCheckInfo badHost = new UpdateCheckInfo
             {
@@ -582,6 +688,13 @@ internal sealed partial class ControlPanelRuntime
             };
             if (IsSafeUpdateDownload(badHost, out reason)) throw new InvalidOperationException("non-GitHub download host was accepted");
             if (IsCandidateForInstalledClient(candidate, "9.9.8", "win-arm64", out reason)) throw new InvalidOperationException("wrong target candidate was accepted");
+            UpdateCheckInfo oversized = new UpdateCheckInfo
+            {
+                kind = candidate.kind, version = candidate.version, target = candidate.target,
+                artifact = candidate.artifact, sizeBytes = MaxUpdateArtifactBytes + 1, sha256 = candidate.sha256,
+                downloadUrl = candidate.downloadUrl
+            };
+            if (IsSafeUpdateDownload(oversized, out reason)) throw new InvalidOperationException("oversized update artifact was accepted");
             UpdateCheckInfo badPath = new UpdateCheckInfo
             {
                 kind = candidate.kind, version = candidate.version, target = candidate.target,
@@ -590,9 +703,26 @@ internal sealed partial class ControlPanelRuntime
             };
             if (IsCandidateForInstalledClient(badPath, "9.9.8", "win-x64", out reason)) throw new InvalidOperationException("version-mismatched download path was accepted");
 
-            string signer;
-            if (VerifyDownloadedUpdate(file, candidate, out signer, out reason))
-                throw new InvalidOperationException("unsigned file entered trusted execution state");
+            string selfPath = typeof(ControlPanelRuntime).Assembly.Location;
+            string selfSigner;
+            string selfInspectionReason;
+            AuthenticodeInspection selfInspection = InspectAuthenticode(selfPath, out selfSigner, out selfInspectionReason);
+            if (selfInspection == AuthenticodeInspection.Invalid)
+                throw new InvalidOperationException("local Authenticode inspection misclassified the build artifact: " + selfInspectionReason);
+            UpdateCheckInfo selfCandidate = new UpdateCheckInfo
+            {
+                sizeBytes = new FileInfo(selfPath).Length,
+                sha256 = ComputeSha256(selfPath)
+            };
+            if (!VerifyDownloadedUpdate(selfPath, selfCandidate, out selfSigner, out reason))
+                throw new InvalidOperationException("real unsigned PE did not pass the verified download path: " + reason);
+            selfCandidate.sha256 = new string('0', 64);
+            if (VerifyDownloadedUpdate(selfPath, selfCandidate, out selfSigner, out reason))
+                throw new InvalidOperationException("tampered expected SHA-256 was accepted for the unsigned PE");
+            if (!VerifyAuthenticodeExecutionPolicy(AuthenticodeInspection.Absent, null, null, out reason))
+                throw new InvalidOperationException("unsigned artifact was rejected after integrity verification: " + reason);
+            if (VerifyAuthenticodeExecutionPolicy(AuthenticodeInspection.Invalid, null, "invalid signature", out reason))
+                throw new InvalidOperationException("invalid Authenticode was downgraded to unsigned");
 
             PendingUpdateVerification pending = new PendingUpdateVerification
             {
@@ -620,8 +750,11 @@ internal sealed partial class ControlPanelRuntime
                 throw new InvalidOperationException("matching post-install profile did not verify");
 
             Console.WriteLine("UPDATE_SECURITY_SELF_TEST_OK");
-            Console.WriteLine("UNSIGNED_EXECUTION_BLOCKED=OK");
+            Console.WriteLine("LOCAL_AUTHENTICODE_INSPECTION=" + selfInspection);
+            Console.WriteLine("UNSIGNED_VERIFIED_EXECUTION_ALLOWED=OK");
+            Console.WriteLine("INVALID_SIGNATURE_BLOCKED=OK");
             Console.WriteLine("PROFILE_MISMATCH_HOLD=OK");
+            Console.WriteLine("UPDATE_SHUTDOWN_GUARD=OK");
             return 0;
         }
         finally

@@ -36,6 +36,12 @@ function parseAudit(text: string): AuditRecord[] {
   return text.trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as AuditRecord);
 }
 
+function observationIdFrom(result: { content: unknown[] }): string {
+  const match = JSON.stringify(result.content).match(/DeskMCP observation_id: ([0-9a-f-]{36})/i);
+  assert.ok(match?.[1], 'desktop_read_file did not return an observation_id');
+  return match[1];
+}
+
 test('workspace-write policy exposes guarded Desktop Commander filesystem tools', async () => {
   await rm(bridgeWritePath, { force: true });
   await rm(auditPath, { force: true });
@@ -205,6 +211,7 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       arguments: { path: existingWritePath }
     });
     assert.equal(existingRead.isError, undefined);
+    const existingObservation = observationIdFrom(existingRead);
 
     await writeFile(existingWritePath, 'EXTERNAL', 'utf8');
     const staleWrite = await client.callTool({
@@ -212,7 +219,8 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       arguments: {
         path: existingWritePath,
         content: 'SHOULD_STILL_NOT_WRITE',
-        mode: 'rewrite'
+        mode: 'rewrite',
+        observation_id: existingObservation
       }
     });
     assert.equal(staleWrite.isError, true);
@@ -224,9 +232,10 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       arguments: { path: existingWritePath }
     });
     assert.equal(existingReread.isError, undefined);
+    const existingRereadObservation = observationIdFrom(existingReread);
     const existingWriteAllowed = await client.callTool({
       name: 'desktop_write_file',
-      arguments: { path: existingWritePath, content: 'AFTER', mode: 'rewrite' }
+      arguments: { path: existingWritePath, content: 'AFTER', mode: 'rewrite', observation_id: existingRereadObservation }
     });
     assert.equal(existingWriteAllowed.isError, undefined);
     assert.equal(await readFile(existingWritePath, 'utf8'), 'AFTER');
@@ -248,6 +257,7 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       arguments: { path: editPath }
     });
     assert.equal(editRead.isError, undefined);
+    const editObservation = observationIdFrom(editRead);
     await writeFile(editPath, 'external beta alpha', 'utf8');
 
     const staleEdit = await client.callTool({
@@ -256,7 +266,8 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
         path: editPath,
         old_string: 'external',
         new_string: 'gamma',
-        expected_replacements: 1
+        expected_replacements: 1,
+        observation_id: editObservation
       }
     });
     assert.equal(staleEdit.isError, true);
@@ -268,13 +279,15 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       arguments: { path: editPath }
     });
     assert.equal(editReread.isError, undefined);
+    const editRereadObservation = observationIdFrom(editReread);
     const editAllowed = await client.callTool({
       name: 'desktop_edit_file',
       arguments: {
         path: editPath,
         old_string: 'external',
         new_string: 'gamma',
-        expected_replacements: 1
+        expected_replacements: 1,
+        observation_id: editRereadObservation
       }
     });
     assert.equal(editAllowed.isError, undefined);
@@ -297,10 +310,11 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       arguments: { path: moveSourcePath }
     });
     assert.equal(moveRead.isError, undefined);
+    const moveObservation = observationIdFrom(moveRead);
 
     const moveAllowed = await client.callTool({
       name: 'desktop_move_file',
-      arguments: { source: moveSourcePath, destination: moveDestPath }
+      arguments: { source: moveSourcePath, destination: moveDestPath, source_observation_id: moveObservation }
     });
     assert.equal(moveAllowed.isError, undefined);
     await assert.rejects(readFile(moveSourcePath, 'utf8'), /ENOENT/);
@@ -569,5 +583,110 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
     await rm(existingWritePath, { force: true });
     await rm(searchPublicPath, { force: true });
     await rm(searchSensitivePath, { force: true });
+  }
+});
+
+
+test('observation capabilities isolate concurrent MCP clients and prevent lost updates', async () => {
+  const file = path.join(TEST_AREA, 'multi-client-observation.txt');
+  const localAuditPath = path.join(TEST_AREA, 'multi-client-observation-audit.jsonl');
+  await writeFile(file, 'BASE', 'utf8');
+  await rm(localAuditPath, { force: true });
+
+  const policy = await DesktopPolicy.create({ profile: 'workspace-write', allowedRoots: [TEST_AREA] });
+  const audit = new AuditLogger(localAuditPath);
+  await audit.init();
+  const observations = new ObservationStore();
+  const processSessions = new ProcessSessionRegistry();
+  const bridge = new DesktopCommanderBridge();
+  await bridge.start();
+  const running = await startHttpServer('127.0.0.1', 0, bridge, policy, audit, observations, processSessions);
+  const clientA = makeClient('multi-client-a');
+  const clientB = makeClient('multi-client-b');
+
+  try {
+    await Promise.all([
+      clientA.connect(new StreamableHTTPClientTransport(new URL(`${running.url}/mcp`))),
+      clientB.connect(new StreamableHTTPClientTransport(new URL(`${running.url}/mcp`)))
+    ]);
+
+    const readA = await clientA.callTool({ name: 'desktop_read_file', arguments: { path: file } });
+    assert.equal(readA.isError, undefined);
+    const observationA = observationIdFrom(readA);
+
+    const borrowedWithoutToken = await clientB.callTool({
+      name: 'desktop_write_file',
+      arguments: { path: file, content: 'B_WITHOUT_TOKEN', mode: 'rewrite' }
+    });
+    assert.equal(borrowedWithoutToken.isError, true);
+    assert.match(JSON.stringify(borrowedWithoutToken.content), /Read-before-write required/);
+    assert.equal(await readFile(file, 'utf8'), 'BASE');
+
+    const readB = await clientB.callTool({ name: 'desktop_read_file', arguments: { path: file } });
+    assert.equal(readB.isError, undefined);
+    const observationB = observationIdFrom(readB);
+
+    const [writeA, writeB] = await Promise.all([
+      clientA.callTool({
+        name: 'desktop_write_file',
+        arguments: { path: file, content: 'A_WON', mode: 'rewrite', observation_id: observationA }
+      }),
+      clientB.callTool({
+        name: 'desktop_write_file',
+        arguments: { path: file, content: 'B_WON', mode: 'rewrite', observation_id: observationB }
+      })
+    ]);
+
+    const outcomes = [writeA, writeB];
+    assert.equal(outcomes.filter(result => result.isError !== true).length, 1);
+    assert.equal(outcomes.filter(result => result.isError === true).length, 1);
+    const denied = outcomes.find(result => result.isError === true);
+    assert.match(JSON.stringify(denied?.content), /STALE observation/);
+    assert.match(await readFile(file, 'utf8'), /^(A_WON|B_WON)$/);
+
+    const replay = await clientA.callTool({
+      name: 'desktop_write_file',
+      arguments: { path: file, content: 'REPLAY', mode: 'rewrite', observation_id: observationA }
+    });
+    assert.equal(replay.isError, true);
+    assert.match(JSON.stringify(replay.content), /already-consumed observation_id/);
+  } finally {
+    await Promise.allSettled([clientA.close(), clientB.close()]);
+    await running.close();
+    await bridge.close();
+    await rm(file, { force: true });
+    await rm(localAuditPath, { force: true });
+  }
+});
+
+test('Desktop Commander bridge reconnects after its child process exits', async () => {
+  const bridge = new DesktopCommanderBridge();
+  await bridge.start();
+  try {
+    const getTransportPid = (): number | null => {
+      const internal = bridge as unknown as {
+        transport: { pid: number | null } | null;
+      };
+      return internal.transport?.pid ?? null;
+    };
+
+    const originalPid = getTransportPid();
+    assert.ok(originalPid && originalPid > 0, 'Desktop Commander child pid was unavailable');
+    process.kill(originalPid, 'SIGKILL');
+
+    const deadline = Date.now() + 5000;
+    while (bridge.info().ready && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.equal(bridge.info().ready, false, 'bridge stayed ready after child exit');
+
+    const result = await bridge.getFileInfo(READ_TEST_FILE);
+    assert.equal(result.isError, false);
+    assert.equal(bridge.info().ready, true);
+    const replacementPid = getTransportPid();
+    assert.ok(replacementPid && replacementPid > 0);
+    assert.notEqual(replacementPid, originalPid, 'bridge did not create a replacement child');
+  } finally {
+    await bridge.close();
   }
 });

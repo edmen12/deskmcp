@@ -7,6 +7,7 @@ $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $PanelProject = Join-Path $ProjectRoot 'control-panel\wpf\DeskMCP.ControlPanel.csproj'
 $PanelPublish = Join-Path $RuntimeRoot ('publish\control-panel-' + $Target)
+$ProcessHostPublish = Join-Path $RuntimeRoot ('process-host\' + $Target)
 $NodeZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.NodeArchive)
 $NodeUrl = 'https://nodejs.org/dist/v' + $TargetConfig.NodeVersion + '/' + $TargetConfig.NodeArchive
 $TunnelZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.TunnelAsset)
@@ -62,10 +63,19 @@ Require (Test-Path -LiteralPath $publishedPanel) 'Control Panel publish output i
 $panelMachine = Get-PeMachine $publishedPanel
 Require ($panelMachine -eq $TargetConfig.PeMachine) ('Control Panel PE architecture mismatch: 0x{0:X4}' -f $panelMachine)
 
+& (Join-Path $PSScriptRoot 'build-process-host.ps1') -Target $Target
+$processHostExe = Join-Path $ProcessHostPublish 'DeskMCP.ProcessHost.exe'
+$processHostMachine = Get-PeMachine $processHostExe
+Require ($processHostMachine -eq $TargetConfig.PeMachine) ('ProcessHost PE architecture mismatch: 0x{0:X4}' -f $processHostMachine)
+
 if (Test-Path -LiteralPath $StageRoot) { Remove-Item -LiteralPath $StageRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 Copy-Item -Path (Join-Path $PanelPublish '*') -Destination $StageRoot -Recurse -Force
+foreach ($name in @('DeskMCP.ProcessHost.exe','DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
+    Copy-Item -LiteralPath (Join-Path $ProcessHostPublish $name) -Destination (Join-Path $StageRoot $name) -Force
+}
 Require (Test-Path -LiteralPath (Join-Path $StageRoot 'Panel.xaml')) 'Panel.xaml payload missing.'
+Require (Test-Path -LiteralPath (Join-Path $StageRoot 'DeskMCP.ProcessHost.exe')) 'ProcessHost payload missing.'
 $projectLicense = Join-Path $ProjectRoot 'LICENSE'
 Require (Test-Path -LiteralPath $projectLicense) 'Apache-2.0 project LICENSE is missing.'
 Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $StageRoot 'LICENSE') -Force
@@ -159,7 +169,7 @@ Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\@emn
 $noticeGenerator = Join-Path $ProjectRoot 'scripts\generate-third-party-notices.mjs'
 Require (Test-Path -LiteralPath $noticeGenerator) 'Third-party notice generator is missing.'
 Invoke-Native $hostNode @($noticeGenerator,$ProjectRoot,$StageRoot,$Target,$TargetConfig.NodeVersion)
-$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; panelPeMachine=('0x{0:X4}' -f $panelMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine) }
+$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; agentSafeIsolationContract=1; processJobObjectContract=1; panelPeMachine=('0x{0:X4}' -f $panelMachine); processHostPeMachine=('0x{0:X4}' -f $processHostMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine) }
 $stageInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Encoding UTF8
 $files = Get-ChildItem -LiteralPath $StageRoot -Recurse -File
 $bytes = ($files | Measure-Object Length -Sum).Sum

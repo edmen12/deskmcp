@@ -44,6 +44,7 @@ $manifest = [ordered]@{
         fullControlSessionOnly = $true
         manualInstallerFallback = $true
         automaticExecutionRequiresImmutableRelease = $true
+        # Schema-v2 compatibility flag for already released clients; current clients inspect Authenticode locally instead of using this as an execution gate.
         automaticExecutionRequiresAuthenticode = $true
     }
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')

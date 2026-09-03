@@ -8,7 +8,12 @@ $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $InstallerRoot = Join-Path $ProjectRoot 'installer'
 $BuildRoot = Join-Path $RuntimeRoot ('installer\' + $Target)
 $ReleaseRoot = Join-Path $RuntimeRoot 'release'
-$SmokeRoot = Join-Path $RuntimeRoot ('install-smoke\' + $Target + '\DesktopMCP')
+$SmokeRunId = $Target + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+# Keep the isolated installer smoke root deliberately short. The installer uses
+# sibling .install-<GUID> / .backup-<GUID> directories during atomic upgrades,
+# so an unnecessarily deep test root can create an artificial MAX_PATH failure
+# that the fixed per-user production install path would never hit.
+$SmokeRoot = Join-Path $RuntimeRoot ('i\' + $SmokeRunId + '\D')
 $InstallerSource = Join-Path $InstallerRoot 'DeskMCPInstaller.cs'
 $UninstallerSource = Join-Path $InstallerRoot 'DeskMCPUninstaller.cs'
 $UninstallerExe = Join-Path $BuildRoot 'DeskMCPUninstaller.exe'
@@ -21,6 +26,32 @@ if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Install
 
 function Require([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
+}
+function Assert-InstallerPathBudget([string]$StagePath, [string]$SmokeInstallPath) {
+    $stageFull = [IO.Path]::GetFullPath($StagePath).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $maxFileRelative = 0
+    $maxDirectoryRelative = 0
+    foreach ($file in Get-ChildItem -LiteralPath $StagePath -Recurse -Force -File) {
+        $relativeLength = $file.FullName.Substring($stageFull.Length + 1).Length
+        if ($relativeLength -gt $maxFileRelative) { $maxFileRelative = $relativeLength }
+    }
+    foreach ($directory in Get-ChildItem -LiteralPath $StagePath -Recurse -Force -Directory) {
+        $relativeLength = $directory.FullName.Substring($stageFull.Length + 1).Length
+        if ($relativeLength -gt $maxDirectoryRelative) { $maxDirectoryRelative = $relativeLength }
+    }
+
+    $guidSuffix = '.install-' + ('0' * 32)
+    $defaultInstall = Join-Path $env:LOCALAPPDATA 'Programs\DesktopMCP'
+    foreach ($probe in @(
+        [pscustomobject]@{ Label='DEFAULT'; Root=($defaultInstall + $guidSuffix) },
+        [pscustomobject]@{ Label='SMOKE'; Root=([IO.Path]::GetFullPath($SmokeInstallPath) + $guidSuffix) }
+    )) {
+        $maxFilePath = $probe.Root.Length + 1 + $maxFileRelative
+        $maxDirectoryPath = $probe.Root.Length + 1 + $maxDirectoryRelative
+        Require ($maxFilePath -lt 260) ($probe.Label + ' installer temp file path budget exceeds legacy MAX_PATH: ' + $maxFilePath)
+        Require ($maxDirectoryPath -lt 248) ($probe.Label + ' installer temp directory path budget exceeds legacy directory limit: ' + $maxDirectoryPath)
+        Write-Output ('INSTALL_PATH_BUDGET_' + $probe.Label + '=OK file=' + $maxFilePath + ' dir=' + $maxDirectoryPath)
+    }
 }
 function Assert-StageNotRunning([string]$StagePath) {
     if (-not (Test-Path -LiteralPath $StagePath)) { return }
@@ -57,6 +88,7 @@ function Invoke-IsolatedInstallerTest([string]$Exe, [string[]]$Arguments, [strin
     $previousPort = $env:DESKTOP_MCP_PORT
     $previousNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
     $previousLog = $env:DESKTOP_MCP_INSTALL_TEST_LOG
+    $previousInstallerMutexNamespace = $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE
     $safeLabel = [regex]::Replace($Label, '[^A-Za-z0-9_.-]', '-')
     $logPath = Join-Path $BuildRoot ('installer-test-' + $safeLabel + '.log')
     if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
@@ -64,11 +96,13 @@ function Invoke-IsolatedInstallerTest([string]$Exe, [string[]]$Arguments, [strin
     try {
         $env:DESKTOP_MCP_PORT = [string](Get-FreeLoopbackPort)
         $env:DESKTOP_MCP_INSTANCE_NAMESPACE = 'installer-test-' + $Target + '-' + [guid]::NewGuid().ToString('N')
+        $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = 'installer-test-' + $Target + '-' + [guid]::NewGuid().ToString('N')
         $env:DESKTOP_MCP_INSTALL_TEST_LOG = $logPath
         $process = Start-Process -FilePath $Exe -ArgumentList $Arguments -Wait -PassThru
     } finally {
         $env:DESKTOP_MCP_PORT = $previousPort
         $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $previousNamespace
+        $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = $previousInstallerMutexNamespace
         $env:DESKTOP_MCP_INSTALL_TEST_LOG = $previousLog
     }
     $diagnostic = if (Test-Path -LiteralPath $logPath) { (Get-Content -LiteralPath $logPath -Raw).Trim() } else { '' }
@@ -98,6 +132,9 @@ if (-not $SkipStage) {
     Require (Test-Path -LiteralPath $StageRoot) 'Release stage is missing.'
 }
 
+Write-Output 'STEP=installer-path-budget'
+Assert-InstallerPathBudget $StageRoot $SmokeRoot
+
 $cscCandidates = @(
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
@@ -115,9 +152,15 @@ Require (Test-Path -LiteralPath $UninstallerExe) 'Uninstaller build output is mi
 Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskMCPUninstaller.exe') -Force
 Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
+Require ([int]$targetContract.agentSafeIsolationContract -ge 1) 'Release stage predates the agent-safe isolation contract; rebuild it before packaging.'
+Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
     'DeskMCP.exe',
+    'DeskMCP.ProcessHost.exe',
+    'DeskMCP.ProcessHost.dll',
+    'DeskMCP.ProcessHost.deps.json',
+    'DeskMCP.ProcessHost.runtimeconfig.json',
     'Panel.xaml',
     'node\node.exe',
     'gateway\dist\src\index.js',
@@ -164,6 +207,8 @@ $mutexProbeRoot = Join-Path $RuntimeRoot ('installer-mutex-probe\' + $Target + '
 $mutexReady = Join-Path $mutexProbeRoot 'ready.txt'
 $mutexRelease = Join-Path $mutexProbeRoot 'release.txt'
 New-Item -ItemType Directory -Force -Path $mutexProbeRoot | Out-Null
+$previousMutexProbeNamespace = $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE
+$env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = 'installer-mutex-probe-' + $Target + '-' + [guid]::NewGuid().ToString('N')
 $mutexHolder = Start-Process -FilePath $SetupExe -ArgumentList @('--mutex-test-hold', ('"' + $mutexReady + '"'), ('"' + $mutexRelease + '"')) -PassThru
 $mutexHolderClean = $false
 try {
@@ -190,6 +235,7 @@ try {
     $mutexHolderClean = $mutexHolder.HasExited -and $mutexHolder.ExitCode -eq 0
 } finally {
     if (-not $mutexHolder.HasExited) { Stop-Process -Id $mutexHolder.Id -Force -ErrorAction SilentlyContinue }
+    $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = $previousMutexProbeNamespace
     if (Test-Path -LiteralPath $mutexProbeRoot) { Remove-Item -LiteralPath $mutexProbeRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 Require $mutexHolderClean 'Setup mutex holder did not finish cleanly.'
@@ -270,26 +316,40 @@ $installerSmokeStateRoot = Join-Path $RuntimeRoot ('installer-smoke-state\' + $T
 $installerSmokeDataRoot = Join-Path $installerSmokeStateRoot 'local'
 $settingsDir = Join-Path $installerSmokeStateRoot 'roaming'
 $settingsPath = Join-Path $settingsDir 'settings.json'
+$installerSmokeStartupDir = Join-Path $installerSmokeStateRoot 'startup'
+$installerSmokeStartupLink = Join-Path $installerSmokeStartupDir 'DeskMCP Control Panel.lnk'
+$installerSmokeTunnelProfileDir = Join-Path $installerSmokeStateRoot 'tunnel-profile'
+$installerSmokeTunnelProfile = Join-Path $installerSmokeTunnelProfileDir 'desktop-mcp.yaml'
+$realStartupLink = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) 'DeskMCP Control Panel.lnk'
+$realStartupExistsBefore = Test-Path -LiteralPath $realStartupLink
+$realStartupHashBefore = if ($realStartupExistsBefore) { (Get-FileHash -Algorithm SHA256 -LiteralPath $realStartupLink).Hash } else { $null }
+$livePanelPidsBefore = @(Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $previousDataRoot = $env:DESKTOP_MCP_DATA_ROOT
 $previousSettingsDir = $env:DESKTOP_MCP_SETTINGS_DIR
 $previousPort = $env:DESKTOP_MCP_PORT
 $previousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
+$previousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
+$previousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
 $installerSmokePort = Get-FreeLoopbackPort
 $installerSmokeBaseUrl = 'http://127.0.0.1:' + $installerSmokePort
 $installerSmokeInstanceNamespace = 'installer-smoke-' + $Target + '-' + [guid]::NewGuid().ToString('N')
 $panel = $null
 $health = $null
 try {
-    New-Item -ItemType Directory -Force -Path $settingsDir, $installerSmokeDataRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $settingsDir, $installerSmokeDataRoot, $installerSmokeStartupDir, $installerSmokeTunnelProfileDir | Out-Null
     $smokeSettings = @{ onboardingCompleted = $true; profile = 'read-only'; autoStartTunnel = $false; theme = 'system' } | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($settingsPath, $smokeSettings, [Text.UTF8Encoding]::new($false))
     $env:DESKTOP_MCP_DATA_ROOT = $installerSmokeDataRoot
     $env:DESKTOP_MCP_SETTINGS_DIR = $settingsDir
     $env:DESKTOP_MCP_PORT = [string]$installerSmokePort
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $installerSmokeInstanceNamespace
+    $env:DESKTOP_MCP_STARTUP_LINK_PATH = $installerSmokeStartupLink
+    $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $installerSmokeTunnelProfile
     Write-Output 'INSTALLER_SMOKE_SETTINGS=ISOLATED_TEMPORARY'
     Write-Output ('INSTALLER_SMOKE_PORT=' + $installerSmokePort)
     Write-Output 'INSTALLER_SMOKE_INSTANCE_NAMESPACE=ISOLATED'
+    Write-Output 'INSTALLER_SMOKE_STARTUP_LINK=ISOLATED'
+    Write-Output 'INSTALLER_SMOKE_TUNNEL_PROFILE=ISOLATED'
 
     Write-Output 'STEP=installer-smoke-runtime'
     $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
@@ -325,8 +385,18 @@ try {
     $env:DESKTOP_MCP_SETTINGS_DIR = $previousSettingsDir
     $env:DESKTOP_MCP_PORT = $previousPort
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $previousInstanceNamespace
+    $env:DESKTOP_MCP_STARTUP_LINK_PATH = $previousStartupLinkPath
+    $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $previousTunnelProfilePath
     if (Test-Path -LiteralPath $installerSmokeStateRoot) { try { [IO.Directory]::Delete($installerSmokeStateRoot, $true) } catch { } }
 }
+$realStartupExistsAfter = Test-Path -LiteralPath $realStartupLink
+$realStartupHashAfter = if ($realStartupExistsAfter) { (Get-FileHash -Algorithm SHA256 -LiteralPath $realStartupLink).Hash } else { $null }
+Require ($realStartupExistsAfter -eq $realStartupExistsBefore -and $realStartupHashAfter -eq $realStartupHashBefore) 'Installer smoke modified the real Windows Startup shortcut.'
+foreach ($livePid in $livePanelPidsBefore) {
+    Require ([bool](Get-Process -Id $livePid -ErrorAction SilentlyContinue)) "Installer smoke terminated pre-existing DeskMCP process PID $livePid."
+}
+Write-Output 'INSTALLER_REAL_STARTUP_SHORTCUT_UNCHANGED=OK'
+Write-Output 'INSTALLER_PREEXISTING_DESKMCP_PROCESSES_PRESERVED=OK'
 
 $setupItem = Get-Item -LiteralPath $SetupExe
 $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupExe).Hash.ToLowerInvariant()

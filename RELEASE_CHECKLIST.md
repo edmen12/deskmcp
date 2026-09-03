@@ -13,7 +13,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 - [ ] **SignPath Foundation OSS code signing approval.**
   - Application has been submitted; SignPath Foundation approval is still pending.
-  - Until approval and a real signed artifact exist, releases remain unsigned/manual-only and must not claim a SignPath signature.
+  - Until approval and a real signed artifact exist, releases remain unsigned and must not claim a SignPath signature; verified user-initiated updates still depend on the source/integrity gates.
 - [ ] **Production publisher pin enabled only after signed-release verification.**
   - The updater pin set stays empty until a SignPath-signed release identity is available and independently verified.
 
@@ -25,7 +25,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] Tray exit semantics distinguish keeping services running from quitting DeskMCP.
 - [x] Release-stage smoke: read-only profile, 13 tools, single instance, Node cleanup, directory lockcheck.
 - [x] Installer smoke: install, injected failure rollback, upgrade, interrupted-install recovery, runtime, uninstall all pass.
-- [x] Safe-update contract: manifest schema v2, immutable-release/digest gates, local Authenticode/publisher gate, post-install profile verification.
+- [x] Safe-update contract: manifest schema v2, immutable-release/digest/size gates, optional local Authenticode publisher verification, and post-install profile verification.
 - [x] Upgrade Setup preserves an existing **Start with Windows** choice instead of silently enabling it.
 - [x] Production npm audit: 0 vulnerabilities.
 - [x] Repository secret hygiene scan: 0 findings.
@@ -64,7 +64,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 ## Documented limitations — not blockers for the current win-x64 release
 
 - [x] Windows ARM64 build/install/upgrade/runtime/uninstall validation passes on the native GitHub ARM64 runner; the current public v0.9.1 asset remains Windows x64 and is not mutated.
-- [x] Updater download/verify/install/post-install security-hold path is implemented and passes x64 + ARM64 self-tests. Automatic execution remains intentionally blocked until SignPath approval, a verified production publisher pin, and immutable future releases are available.
+- [x] Updater download/verify/install/post-install security-hold path is implemented and passes x64 + ARM64 self-tests. User-initiated execution is gated by fixed-repository immutable release metadata plus matching size/SHA-256; Authenticode adds publisher verification when present but is not required for the verified unsigned update path.
 - [ ] Upstream deprecated npm dependencies remain in Desktop Commander / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
 
 ## Current validated artifact

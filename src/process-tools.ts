@@ -4,6 +4,7 @@ import type { AuditLogger } from './audit.js';
 import type { DesktopCommanderBridge, DesktopCommanderToolResult } from './desktop-commander-bridge.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import {
+  extractListedProcessPids,
   extractStartedPid,
   ProcessSessionRegistry,
   redactPid
@@ -63,6 +64,54 @@ function requireFullControl(policy: DesktopPolicy): void {
   }
 }
 
+async function reconcileActiveProcessSessions(
+  bridge: DesktopCommanderBridge,
+  sessions: ProcessSessionRegistry
+): Promise<void> {
+  const listed = await bridge.listProcessSessions();
+  if (listed.isError) return;
+  sessions.reconcileActivePids(extractListedProcessPids(listed.text));
+}
+
+async function terminateVerifiedOwnedProcess(
+  bridge: DesktopCommanderBridge,
+  sessions: ProcessSessionRegistry,
+  pid: number
+): Promise<DesktopCommanderToolResult> {
+  const listed = await bridge.listProcessSessions();
+  if (listed.isError) return listed;
+  const activePids = extractListedProcessPids(listed.text);
+  sessions.reconcileActivePids(activePids);
+  if (!activePids.includes(pid)) {
+    return { text: 'Process session is no longer active.', isError: true };
+  }
+
+  const terminated = await bridge.forceTerminateProcess(pid);
+  if (!terminated.isError) return terminated;
+
+  // force_terminate can race a process exiting naturally. If Desktop Commander
+  // confirms the owned root is gone after the attempt, termination is complete.
+  // Descendants are owned by DeskMCP.ProcessHost's Windows Job Object and are
+  // killed by the kernel when that host/root session closes.
+  const after = await bridge.listProcessSessions();
+  if (!after.isError) {
+    const afterPids = extractListedProcessPids(after.text);
+    sessions.reconcileActivePids(afterPids);
+    if (!afterPids.includes(pid)) {
+      return { text: 'Process session terminated.', isError: false };
+    }
+  }
+  return terminated;
+}
+
+function resultShowsCompletedProcess(result: DesktopCommanderToolResult): boolean {
+  return /Process completed with exit code/i.test(result.text);
+}
+
+function resultShowsMissingActiveProcess(result: DesktopCommanderToolResult): boolean {
+  return /No active session found|No active process found|No session found/i.test(result.text);
+}
+
 function sanitizeProcessResult(
   result: DesktopCommanderToolResult,
   pid: number,
@@ -107,15 +156,25 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
-        sessions.assertCapacity();
-        const result = await bridge.startProcess(command, timeout_ms, shell);
-        if (result.isError) return result;
-        const pid = extractStartedPid(result.text);
+        if (sessions.atCapacity()) {
+          await reconcileActiveProcessSessions(bridge, sessions);
+        }
+        const reservationId = sessions.reserveStart();
+        let pid: number | undefined;
         try {
-          const sessionId = sessions.register(pid);
+          const result = await bridge.startProcess(command, timeout_ms, shell);
+          if (result.isError) {
+            sessions.releaseStart(reservationId);
+            return result;
+          }
+          pid = extractStartedPid(result.text);
+          const sessionId = sessions.registerReserved(reservationId, pid);
           return sanitizeProcessResult(result, pid, sessionId);
         } catch (error) {
-          await bridge.forceTerminateProcess(pid).catch(() => undefined);
+          sessions.releaseStart(reservationId);
+          if (pid !== undefined) {
+            await bridge.forceTerminateProcess(pid).catch(() => undefined);
+          }
           throw error;
         }
       }
@@ -149,11 +208,11 @@ export function registerProcessTools(
       async () => {
         requireFullControl(policy);
         const pid = sessions.resolve(session_id);
-        return sanitizeProcessResult(
-          await bridge.readProcessOutput(pid, timeout_ms, offset, length),
-          pid,
-          session_id
-        );
+        const raw = await bridge.readProcessOutput(pid, timeout_ms, offset, length);
+        if (resultShowsCompletedProcess(raw) || resultShowsMissingActiveProcess(raw)) {
+          sessions.markInactive(session_id);
+        }
+        return sanitizeProcessResult(raw, pid, session_id);
       }
     )
   );
@@ -185,11 +244,9 @@ export function registerProcessTools(
       async () => {
         requireFullControl(policy);
         const pid = sessions.resolve(session_id);
-        return sanitizeProcessResult(
-          await bridge.interactWithProcess(pid, input, timeout_ms, wait_for_prompt),
-          pid,
-          session_id
-        );
+        const raw = await bridge.interactWithProcess(pid, input, timeout_ms, wait_for_prompt);
+        if (resultShowsMissingActiveProcess(raw)) sessions.markInactive(session_id);
+        return sanitizeProcessResult(raw, pid, session_id);
       }
     )
   );
@@ -217,7 +274,7 @@ export function registerProcessTools(
         requireFullControl(policy);
         const pid = sessions.resolve(session_id);
         const result = sanitizeProcessResult(
-          await bridge.forceTerminateProcess(pid),
+          await terminateVerifiedOwnedProcess(bridge, sessions, pid),
           pid,
           session_id
         );

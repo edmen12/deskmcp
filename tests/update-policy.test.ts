@@ -53,6 +53,18 @@ test('immutable release metadata permits verified download', () => {
   assert.deepEqual(decision.reasons, []);
 });
 
+test('schema-v2 Authenticode flag is compatibility metadata, not a local execution gate', () => {
+  const base = manifest();
+  const decision = evaluateUpdateMetadata('0.9.1', release(), manifest({
+    updatePolicy: {
+      ...base.updatePolicy,
+      automaticExecutionRequiresAuthenticode: false
+    }
+  }));
+  assert.equal(decision.kind, 'verified-download-allowed');
+  assert.deepEqual(decision.reasons, []);
+});
+
 test('mutable release is manual-only even when hashes match', () => {
   const decision = evaluateUpdateMetadata(
     '0.9.1', release({ immutable: false }), manifest()
@@ -116,16 +128,60 @@ test('Windows ARM64 accepts a matching ARM64 release asset', () => {
   assert.equal(decision.kind, 'verified-download-allowed');
   assert.deepEqual(decision.reasons, []);
 });
-test('automatic execution requires local Authenticode and pinned publisher trust', () => {
+test('verified unsigned artifact is eligible before execution', () => {
   const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());
   const decision = evaluateUpdateExecution(metadata, manifest(), {
     sha256: SHA,
     sizeBytes: 123456,
+    authenticodePresent: false,
     authenticodeValid: false,
+    publisherPinConfigured: false,
     signerMatchesPinnedPublisher: false
   });
-  assert.equal(decision.kind, 'manual-only');
-  assert.deepEqual(decision.reasons, ['authenticode-invalid', 'publisher-mismatch']);
+  assert.equal(decision.kind, 'auto-install-eligible');
+  assert.deepEqual(decision.reasons, []);
+});
+
+test('invalid Authenticode is blocked instead of downgraded to unsigned', () => {
+  const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());
+  const decision = evaluateUpdateExecution(metadata, manifest(), {
+    sha256: SHA,
+    sizeBytes: 123456,
+    authenticodePresent: true,
+    authenticodeValid: false,
+    publisherPinConfigured: true,
+    signerMatchesPinnedPublisher: false
+  });
+  assert.equal(decision.kind, 'reject');
+  assert.deepEqual(decision.reasons, ['authenticode-invalid']);
+});
+
+test('pinned publisher mismatch is blocked for an otherwise valid signature', () => {
+  const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());
+  const decision = evaluateUpdateExecution(metadata, manifest(), {
+    sha256: SHA,
+    sizeBytes: 123456,
+    authenticodePresent: true,
+    authenticodeValid: true,
+    publisherPinConfigured: true,
+    signerMatchesPinnedPublisher: false
+  });
+  assert.equal(decision.kind, 'reject');
+  assert.deepEqual(decision.reasons, ['publisher-mismatch']);
+});
+
+test('integrity mismatch is blocked', () => {
+  const metadata = evaluateUpdateMetadata('0.9.1', release(), manifest());
+  const decision = evaluateUpdateExecution(metadata, manifest(), {
+    sha256: 'b'.repeat(64),
+    sizeBytes: 123456,
+    authenticodePresent: false,
+    authenticodeValid: false,
+    publisherPinConfigured: false,
+    signerMatchesPinnedPublisher: false
+  });
+  assert.equal(decision.kind, 'reject');
+  assert.deepEqual(decision.reasons, ['local-sha256-mismatch']);
 });
 
 test('post-install verification detects permission profile changes', () => {
@@ -138,7 +194,9 @@ test('verified signed artifact is eligible before execution', () => {
   const decision = evaluateUpdateExecution(metadata, manifest(), {
     sha256: SHA,
     sizeBytes: 123456,
+    authenticodePresent: true,
     authenticodeValid: true,
+    publisherPinConfigured: true,
     signerMatchesPinnedPublisher: true
   });
   assert.equal(decision.kind, 'auto-install-eligible');

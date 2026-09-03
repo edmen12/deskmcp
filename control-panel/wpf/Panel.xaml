@@ -133,7 +133,7 @@
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
-        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
       </Grid.RowDefinitions>
       <Border x:Name="HeroCard" Grid.Row="0" CornerRadius="24" BorderBrush="#24FFFFFF" BorderThickness="1" Padding="18">
         <Border.Background>
@@ -158,8 +158,8 @@
             </Grid.ColumnDefinitions>
             <Image x:Name="BrandMark" Grid.Column="0" Source="pack://application:,,,/brand/deskmcp-mark-64.png" Width="42" Height="42" Stretch="Uniform" VerticalAlignment="Center"/>
             <StackPanel Grid.Column="2" VerticalAlignment="Center">
-              <TextBlock Text="DeskMCP" Foreground="White" FontSize="21" FontWeight="SemiBold"/>
-              <TextBlock Text="Your desktop. Connected to AI." Foreground="#A1A1AA" FontSize="11" Margin="0,3,0,0"/>
+              <TextBlock x:Name="BrandTitle" Text="DeskMCP" Foreground="White" FontSize="21" FontWeight="SemiBold"/>
+              <TextBlock x:Name="BrandSubtitle" Text="Your desktop. Connected to AI." Foreground="#A1A1AA" FontSize="11" Margin="0,3,0,0"/>
             </StackPanel>
             <Border Grid.Column="3" x:Name="LivePill" Background="#FF214A30" BorderBrush="#FF2B5C3C" BorderThickness="1" CornerRadius="12" Padding="10,5" VerticalAlignment="Top">
               <StackPanel Orientation="Horizontal">
@@ -177,7 +177,7 @@
             </Grid.ColumnDefinitions>
             <Border x:Name="GatewayCard" Grid.Column="0" Background="#FF2A2A2E" BorderBrush="#FF3A3A3F" BorderThickness="1" CornerRadius="15" Padding="11,9">
               <StackPanel>
-                <TextBlock Text="Gateway" Foreground="#A1A1AA" FontSize="10"/>
+                <TextBlock x:Name="GatewayLabel" Text="Gateway" Foreground="#A1A1AA" FontSize="10"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                   <Ellipse x:Name="GatewayDot" Width="7" Height="7" Fill="#8E8E93" Margin="0,0,6,0"/>
                   <TextBlock x:Name="GatewayStatus" Text="Checking" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
@@ -186,7 +186,7 @@
             </Border>
             <Border x:Name="TunnelCard" Grid.Column="2" Background="#FF2A2A2E" BorderBrush="#FF3A3A3F" BorderThickness="1" CornerRadius="15" Padding="11,9">
               <StackPanel>
-                <TextBlock Text="Tunnel" Foreground="#A1A1AA" FontSize="10"/>
+                <TextBlock x:Name="TunnelLabel" Text="Tunnel" Foreground="#A1A1AA" FontSize="10"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                   <Ellipse x:Name="TunnelDot" Width="7" Height="7" Fill="#8E8E93" Margin="0,0,6,0"/>
                   <TextBlock x:Name="TunnelStatus" Text="Checking" Foreground="White" FontSize="12" FontWeight="SemiBold"/>

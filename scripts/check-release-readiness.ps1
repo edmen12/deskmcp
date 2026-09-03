@@ -89,7 +89,7 @@ if (Require-File $manifestPath 'Release manifest') {
         $policy = $manifest.updatePolicy
         $requiredPolicy = $policy -and $policy.preserveUserData -eq $true -and $policy.preservePermissionProfile -eq $true -and
             $policy.fullControlSessionOnly -eq $true -and $policy.manualInstallerFallback -eq $true -and
-            $policy.automaticExecutionRequiresImmutableRelease -eq $true -and $policy.automaticExecutionRequiresAuthenticode -eq $true
+            $policy.automaticExecutionRequiresImmutableRelease -eq $true -and ($policy.automaticExecutionRequiresAuthenticode -is [bool])
         if ($requiredPolicy) { Pass 'Safe update policy contract present' } else { Block 'Release manifest safe update policy contract is incomplete' }
     } else { Warn 'Legacy release manifest schema; automatic update execution must remain disabled' }
 }
@@ -98,7 +98,7 @@ if (Require-File $sumPath 'SHA256SUMS.txt') {
     if ($sum.StartsWith($setupHash + '  ')) { Pass 'SHA256SUMS matches Setup' } else { Block 'SHA256SUMS does not match Setup' }
 }
 
-Warn 'Automatic execution remains gated on an immutable GitHub Release plus valid pinned-publisher Authenticode; manual installer upgrades remain supported'
+Warn 'User-initiated updater execution requires an immutable GitHub Release plus matching source/integrity metadata; Authenticode adds publisher verification when present'
 Write-Output '------------------------------------'
 Write-Output ('BLOCKERS=' + $blockers.Count)
 Write-Output ('WARNINGS=' + $warnings.Count)

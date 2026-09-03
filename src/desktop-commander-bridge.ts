@@ -36,6 +36,26 @@ const installedDesktopCommanderEntry = path.join(
 );
 export const DEFAULT_DESKTOP_COMMANDER_ENTRY = installedDesktopCommanderEntry;
 
+const defaultProcessHostEntry = path.basename(PROJECT_ROOT).toLowerCase() === 'gateway'
+  ? path.resolve(PROJECT_ROOT, '..', 'DeskMCP.ProcessHost.exe')
+  : path.join(
+      PROJECT_ROOT,
+      'runtime',
+      'process-host',
+      process.arch === 'arm64' ? 'win-arm64' : 'win-x64',
+      'DeskMCP.ProcessHost.exe'
+    );
+export const DEFAULT_PROCESS_HOST_ENTRY = defaultProcessHostEntry;
+
+function buildProcessHostCommand(
+  processHostEntry: string,
+  shell: 'powershell.exe' | 'cmd.exe',
+  command: string
+): string {
+  const command64 = Buffer.from(command, 'utf8').toString('base64');
+  return `"${processHostEntry}" --shell ${shell} --command64 ${command64}`;
+}
+
 function elapsedMs(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 100) / 100;
 }
@@ -51,8 +71,23 @@ export class DesktopCommanderBridge {
 
   constructor(
     readonly entry = process.env.DESKTOP_COMMANDER_ENTRY
-      ?? DEFAULT_DESKTOP_COMMANDER_ENTRY
+      ?? DEFAULT_DESKTOP_COMMANDER_ENTRY,
+    readonly processHostEntry = process.env.DESKTOP_MCP_PROCESS_HOST
+      ?? DEFAULT_PROCESS_HOST_ENTRY
   ) {}
+
+  private invalidateConnection(
+    client: Client,
+    transport: StdioClientTransport
+  ): void {
+    if (this.client !== client || this.transport !== transport) return;
+    this.client = null;
+    this.transport = null;
+    this.toolCount = 0;
+    this.serverName = undefined;
+    this.serverVersion = undefined;
+    this.startupTiming = undefined;
+  }
 
   async start(): Promise<void> {
     if (this.client) return;
@@ -82,9 +117,14 @@ export class DesktopCommanderBridge {
     });
 
     const client = new Client(
-      { name: 'deskmcp-gateway', version: '0.9.2' },
+      { name: 'deskmcp-gateway', version: '0.9.3' },
       { versionNegotiation: { mode: 'legacy' } }
     );
+    let closed = false;
+    transport.onclose = () => {
+      closed = true;
+      this.invalidateConnection(client, transport);
+    };
 
     try {
       phaseStartedAt = performance.now();
@@ -94,13 +134,14 @@ export class DesktopCommanderBridge {
       const listed = await client.listTools();
       const listToolsMs = elapsedMs(phaseStartedAt);
       phaseStartedAt = performance.now();
-      const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'force_terminate'];
+      const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'list_sessions', 'force_terminate'];
       for (const name of required) {
         if (!listed.tools.some(tool => tool.name === name)) {
           throw new Error(`Desktop Commander required tool unavailable: ${name}`);
         }
       }
       const validationMs = elapsedMs(phaseStartedAt);
+      if (closed) throw new Error('Desktop Commander transport closed during startup.');
 
       const version = client.getServerVersion();
       this.toolCount = listed.tools.length;
@@ -122,7 +163,7 @@ export class DesktopCommanderBridge {
   }
   info(): DesktopCommanderInfo {
     return {
-      ready: this.client !== null,
+      ready: this.client !== null && this.transport !== null,
       entry: this.entry,
       ...(this.serverName ? { serverName: this.serverName } : {}),
       ...(this.serverVersion ? { serverVersion: this.serverVersion } : {}),
@@ -135,17 +176,26 @@ export class DesktopCommanderBridge {
     name: string,
     args: Record<string, unknown>
   ): Promise<DesktopCommanderToolResult> {
-    if (!this.client) throw new Error('Desktop Commander bridge is not started.');
-    const result = await this.client.callTool({ name, arguments: args });
-    const text = result.content
-      .filter(block => block.type === 'text')
-      .map(block => block.text)
-      .join('\n');
+    await this.start();
+    const client = this.client;
+    const transport = this.transport;
+    if (!client || !transport) throw new Error('Desktop Commander bridge is not started.');
+    try {
+      const result = await client.callTool({ name, arguments: args });
+      const text = result.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('\n');
 
-    return {
-      text: text || JSON.stringify(result.content),
-      isError: result.isError === true
-    };
+      return {
+        text: text || JSON.stringify(result.content),
+        isError: result.isError === true
+      };
+    } catch (error) {
+      this.invalidateConnection(client, transport);
+      await client.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async readFile(filePath: string, offset = 0, length = 1000): Promise<DesktopCommanderToolResult> {
@@ -226,10 +276,24 @@ export class DesktopCommanderBridge {
     timeoutMs: number,
     shell?: 'powershell.exe' | 'cmd.exe'
   ): Promise<DesktopCommanderToolResult> {
+    if (process.platform !== 'win32') {
+      return this.callTextTool('start_process', {
+        command,
+        timeout_ms: timeoutMs,
+        ...(shell ? { shell } : {})
+      });
+    }
+
+    await access(this.processHostEntry);
+    const ownedCommand = buildProcessHostCommand(
+      this.processHostEntry,
+      shell ?? 'cmd.exe',
+      command
+    );
     return this.callTextTool('start_process', {
-      command,
+      command: ownedCommand,
       timeout_ms: timeoutMs,
-      ...(shell ? { shell } : {})
+      shell: 'cmd.exe'
     });
   }
 
@@ -261,9 +325,14 @@ export class DesktopCommanderBridge {
     });
   }
 
+  async listProcessSessions(): Promise<DesktopCommanderToolResult> {
+    return this.callTextTool('list_sessions', {});
+  }
+
   async forceTerminateProcess(pid: number): Promise<DesktopCommanderToolResult> {
     return this.callTextTool('force_terminate', { pid });
   }
+
   async close(): Promise<void> {
     const client = this.client;
     this.client = null;
