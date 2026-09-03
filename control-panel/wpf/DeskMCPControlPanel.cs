@@ -28,7 +28,13 @@ using Forms = System.Windows.Forms;
 internal sealed class HealthInfo
 {
     public string version { get; set; }
+    public DesktopCommanderHealthInfo desktopCommander { get; set; }
     public PolicyInfo policy { get; set; }
+}
+
+internal sealed class DesktopCommanderHealthInfo
+{
+    public bool ready { get; set; }
 }
 
 internal sealed class PolicyInfo
@@ -105,6 +111,8 @@ internal sealed partial class ControlPanelRuntime
     private DateTime tunnelUnreadySince = DateTime.MinValue;
     private bool tunnelRecoveryInFlight;
     private bool tunnelCredentialInvalid;
+    private bool tunnelCredentialRejected;
+    private TunnelRuntimeStatus lastTunnelStatus = new TunnelRuntimeStatus();
     private bool gatewayStartInFlight;
     private Process gatewayProcess;
     private int gatewayRetryIndex;
@@ -131,6 +139,34 @@ internal sealed partial class ControlPanelRuntime
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [DllImport("user32.dll")]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    private const uint AbmGetState = 0x00000004;
+    private const uint AbmGetTaskbarPos = 0x00000005;
+    private const uint AbsAutoHide = 0x00000001;
+    private const uint AbeBottom = 3;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AppBarData
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public NativeRect rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern UIntPtr SHAppBarMessage(uint dwMessage, ref AppBarData pData);
 
 
     private string selectedProfile = "read-only";
@@ -514,7 +550,7 @@ internal sealed partial class ControlPanelRuntime
         return false;
     }
 
-    private LinearGradientBrush Gradient(string a, string b)
+    private static LinearGradientBrush Gradient(string a, string b)
     {
         Color ca = (Color)ColorConverter.ConvertFromString(a);
         Color cb = (Color)ColorConverter.ConvertFromString(b);
@@ -578,7 +614,21 @@ internal sealed partial class ControlPanelRuntime
             ApplySemanticResources(window, dark);
             rootCard.Background = BrushFrom(dark ? "#FF0B0B0D" : "#FFFFFFFF");
             rootCard.BorderBrush = BrushFrom(dark ? "#18FFFFFF" : "#10000000");
-            Find<Border>("HeroCard").Background = Gradient("#FF111113", "#FF202024");
+            Border heroCard = Find<Border>("HeroCard");
+            heroCard.Background = dark ? Gradient("#FF111113", "#FF202024") : Gradient("#FFFFFFFF", "#FFF5F7FA");
+            heroCard.BorderBrush = BrushFrom(dark ? "#24FFFFFF" : "#12000000");
+            Find<TextBlock>("BrandTitle").Foreground = BrushFrom(dark ? "#FFFFFFFF" : "#FF18181B");
+            Find<TextBlock>("BrandSubtitle").Foreground = BrushFrom(dark ? "#FFA1A1AA" : "#FF71717A");
+            foreach (string cardName in new string[] { "GatewayCard", "TunnelCard" })
+            {
+                Border statusCard = Find<Border>(cardName);
+                statusCard.Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFF5F5F7");
+                statusCard.BorderBrush = BrushFrom(dark ? "#FF3A3A3F" : "#10000000");
+            }
+            Find<TextBlock>("GatewayLabel").Foreground = BrushFrom(dark ? "#FFA1A1AA" : "#FF8E8E93");
+            Find<TextBlock>("TunnelLabel").Foreground = BrushFrom(dark ? "#FFA1A1AA" : "#FF8E8E93");
+            Find<TextBlock>("GatewayStatus").Foreground = BrushFrom(dark ? "#FFFFFFFF" : "#FF18181B");
+            Find<TextBlock>("TunnelStatus").Foreground = BrushFrom(dark ? "#FFFFFFFF" : "#FF18181B");
             Find<TextBlock>("ProfileSectionTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("ProfileHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<Border>("ProfileShell").Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFE7E7EC");
@@ -704,17 +754,43 @@ internal sealed partial class ControlPanelRuntime
         catch { return null; }
     }
 
-    private bool IsTunnelReady()
+    private TunnelRuntimeStatus GetTunnelStatus()
     {
+        bool readyOk = false;
+        string readyBody = null;
+        string statusJson = null;
+        string metricsText = null;
         try
         {
             using (HttpResponseMessage response = StatusHttpClient.GetAsync("http://127.0.0.1:8080/readyz").GetAwaiter().GetResult())
             {
-                if (!response.IsSuccessStatusCode) return false;
-                return response.Content.ReadAsStringAsync().GetAwaiter().GetResult().Trim() == "ready";
+                readyOk = response.IsSuccessStatusCode;
+                readyBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
             }
         }
-        catch { return false; }
+        catch { }
+        try
+        {
+            using (HttpResponseMessage response = StatusHttpClient.GetAsync("http://127.0.0.1:8080/api/status").GetAwaiter().GetResult())
+            {
+                statusJson = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                    statusJson = "status 401 unauthorized " + (statusJson ?? String.Empty);
+            }
+        }
+        catch { }
+        try
+        {
+            using (HttpResponseMessage response = StatusHttpClient.GetAsync("http://127.0.0.1:8080/metrics").GetAwaiter().GetResult())
+                if (response.IsSuccessStatusCode) metricsText = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }
+        catch { }
+        return TunnelRuntimeStatusEvaluator.Evaluate(tunnelId, readyOk, readyBody, statusJson, metricsText, DateTimeOffset.UtcNow);
+    }
+
+    private bool IsTunnelReady()
+    {
+        return GetTunnelStatus().Ready;
     }
 
     private ProcessStartInfo NewHiddenProcess(string fileName, string args)
@@ -800,9 +876,9 @@ internal sealed partial class ControlPanelRuntime
         StartGateway(profile);
     }
 
-    private void RestartGatewayAsync(string profile)
+    private bool RestartGatewayAsync(string profile)
     {
-        if (quitting || gatewayStartInFlight || gatewayRecoveryInFlight) return;
+        if (quitting || gatewayStartInFlight || gatewayRecoveryInFlight) return false;
         gatewayStartInFlight = true;
         Task.Run(delegate { RestartGateway(profile); })
             .ContinueWith(delegate(Task task) { window.Dispatcher.BeginInvoke(new Action(delegate
@@ -816,6 +892,7 @@ internal sealed partial class ControlPanelRuntime
                 }
                 UpdateStatus();
             })); });
+        return true;
     }
 
     private void StartGatewayAsync(string profile)
@@ -841,9 +918,32 @@ internal sealed partial class ControlPanelRuntime
             .ContinueWith(delegate { window.Dispatcher.BeginInvoke(new Action(UpdateStatus)); });
     }
 
+    private static double ResolveBottomGap(double scaleY)
+    {
+        const double visualGap = 14.0;
+        try
+        {
+            AppBarData state = new AppBarData();
+            state.cbSize = Marshal.SizeOf<AppBarData>();
+            bool autoHide = (SHAppBarMessage(AbmGetState, ref state).ToUInt64() & AbsAutoHide) != 0;
+            if (!autoHide) return visualGap;
+
+            AppBarData position = new AppBarData();
+            position.cbSize = Marshal.SizeOf<AppBarData>();
+            if (SHAppBarMessage(AbmGetTaskbarPos, ref position) == UIntPtr.Zero || position.uEdge != AbeBottom)
+                return visualGap;
+
+            double taskbarHeightPx = Math.Max(0.0, position.rc.Bottom - position.rc.Top);
+            double taskbarHeightDip = taskbarHeightPx / Math.Max(0.5, scaleY);
+            if (taskbarHeightDip < 20.0 || taskbarHeightDip > 120.0) taskbarHeightDip = 48.0;
+            return taskbarHeightDip + visualGap;
+        }
+        catch { return visualGap; }
+    }
+
     private void PositionPanel()
     {
-        const double gap = 14.0;
+        const double edgeGap = 14.0;
         Forms.Screen screen = Forms.Screen.FromPoint(Forms.Cursor.Position);
         Drawing.Rectangle workPx = screen.WorkingArea;
 
@@ -862,17 +962,18 @@ internal sealed partial class ControlPanelRuntime
         double workRight = workPx.Right / scaleX;
         double workBottom = workPx.Bottom / scaleY;
 
-        double availableWidth = Math.Max(1.0, workRight - workLeft - gap * 2.0);
-        double availableHeight = Math.Max(1.0, workBottom - workTop - gap * 2.0);
+        double bottomGap = ResolveBottomGap(scaleY);
+        double availableWidth = Math.Max(1.0, workRight - workLeft - edgeGap * 2.0);
+        double availableHeight = Math.Max(1.0, workBottom - workTop - edgeGap - bottomGap);
         window.Width = Math.Min(420.0, availableWidth);
         double desiredHeight = settingsExpanded ? 650.0 : 560.0;
         window.Height = Math.Min(desiredHeight, availableHeight);
 
-        double left = workRight - window.Width - gap;
-        double top = workBottom - window.Height - gap;
+        double left = workRight - window.Width - edgeGap;
+        double top = workBottom - window.Height - bottomGap;
 
-        window.Left = Math.Max(workLeft + gap, left);
-        window.Top = Math.Max(workTop + gap, top);
+        window.Left = Math.Max(workLeft + edgeGap, left);
+        window.Top = Math.Max(workTop + edgeGap, top);
     }
 
     private void AnimateShow()
@@ -1037,8 +1138,8 @@ internal sealed partial class ControlPanelRuntime
         ApplyTheme(false);
         if (statusRefreshInFlight) return;
         statusRefreshInFlight = true;
-        Task.Run(delegate { return Tuple.Create(GetGatewayHealth(), IsTunnelReady()); })
-            .ContinueWith(delegate(Task<Tuple<HealthInfo, bool>> task)
+        Task.Run(delegate { return Tuple.Create(GetGatewayHealth(), GetTunnelStatus()); })
+            .ContinueWith(delegate(Task<Tuple<HealthInfo, TunnelRuntimeStatus>> task)
             {
                 try
                 {
@@ -1053,11 +1154,14 @@ internal sealed partial class ControlPanelRuntime
             });
     }
 
-    private void ApplyStatus(HealthInfo health, bool tunnelReady)
+    private void ApplyStatus(HealthInfo health, TunnelRuntimeStatus tunnelStatus)
     {
         statusInitialized = true;
+        lastTunnelStatus = tunnelStatus ?? new TunnelRuntimeStatus();
+        bool tunnelReady = lastTunnelStatus.Ready;
         gatewayIsRunning = health != null;
-        bool gatewayStarting = health == null && (gatewayStartInFlight || OwnedGatewayRunning());
+        bool gatewayReady = health != null && (health.desktopCommander == null || health.desktopCommander.ready);
+        bool gatewayStarting = (health != null && !gatewayReady) || (health == null && (gatewayStartInFlight || OwnedGatewayRunning()));
         Ellipse gatewayDot = Find<Ellipse>("GatewayDot");
         TextBlock gatewayText = Find<TextBlock>("GatewayStatus");
         Ellipse tunnelDot = Find<Ellipse>("TunnelDot");
@@ -1065,21 +1169,36 @@ internal sealed partial class ControlPanelRuntime
         Button power = Find<Button>("PowerButton");
         power.IsEnabled = true;
 
-        if (health != null)
+        if (gatewayReady)
         {
             gatewayDot.Fill = BrushFrom("#34C759");
             gatewayText.Text = "Running";
             power.Content = "Restart Gateway";
+            bool profileSwitchPending = false;
             if (health.policy != null && !String.IsNullOrEmpty(health.policy.profile))
             {
                 string runningProfile = health.policy.profile;
                 if (profileChangeInFlight)
                 {
-                    if (String.Equals(runningProfile, requestedProfile, StringComparison.Ordinal)) { profileChangeInFlight = false; requestedProfile = null; }
+                    selectedProfile = runningProfile;
+                    if (String.Equals(runningProfile, requestedProfile, StringComparison.Ordinal))
+                    {
+                        profileChangeInFlight = false;
+                        requestedProfile = null;
+                    }
+                    else profileSwitchPending = true;
                 }
                 else if ((runningProfile == "full-control" || runningProfile == "fully-unlocked") && selectedProfile != runningProfile)
                 {
-                    profileChangeInFlight = true; requestedProfile = persistentProfile; RestartGatewayAsync(persistentProfile);
+                    selectedProfile = runningProfile;
+                    profileChangeInFlight = true;
+                    requestedProfile = persistentProfile;
+                    if (RestartGatewayAsync(persistentProfile)) profileSwitchPending = true;
+                    else
+                    {
+                        profileChangeInFlight = false;
+                        requestedProfile = null;
+                    }
                 }
                 else if (selectedProfile != runningProfile)
                 {
@@ -1087,6 +1206,13 @@ internal sealed partial class ControlPanelRuntime
                     if (runningProfile == "read-only" || runningProfile == "workspace-write") persistentProfile = runningProfile;
                     SaveSettings();
                 }
+            }
+            if (profileSwitchPending)
+            {
+                gatewayDot.Fill = BrushFrom("#FF9F0A");
+                gatewayText.Text = "Switching…";
+                power.Content = "Switching profile…";
+                power.IsEnabled = false;
             }
             SetProfileVisual(selectedProfile, true);
             Find<TextBlock>("VersionText").Text = "Gateway " + health.version;
@@ -1116,9 +1242,13 @@ internal sealed partial class ControlPanelRuntime
         {
             bool idConfigured = IsValidTunnelId(tunnelId);
             bool keyConfigured = HasTunnelKey();
-            tunnelDot.Fill = BrushFrom(idConfigured && keyConfigured ? "#FF9F0A" : "#8E8E93");
+            bool rejected = lastTunnelStatus.CredentialRejected || tunnelCredentialRejected;
+            bool mismatch = lastTunnelStatus.TunnelIdMismatch;
+            tunnelDot.Fill = BrushFrom((rejected || mismatch) ? "#FF453A" : (idConfigured && keyConfigured ? "#FF9F0A" : "#8E8E93"));
             if (!idConfigured) tunnelText.Text = "Set Tunnel ID";
             else if (!keyConfigured) tunnelText.Text = tunnelCredentialInvalid ? "Re-enter API key" : "Add API key";
+            else if (rejected) tunnelText.Text = "Re-enter API key";
+            else if (mismatch) tunnelText.Text = "Tunnel ID mismatch";
             else if (!autoStartTunnel) tunnelText.Text = "Stopped";
             else if (OwnedTunnelRunning()) tunnelText.Text = "Connecting…";
             else tunnelText.Text = "Offline";
@@ -1136,7 +1266,7 @@ internal sealed partial class ControlPanelRuntime
         Ellipse liveDot = Find<Ellipse>("LiveDot");
         TextBlock liveText = Find<TextBlock>("LiveText");
         Border livePill = Find<Border>("LivePill");
-        if (health != null && tunnelReady)
+        if (gatewayReady && tunnelReady)
         {
             liveDot.Fill = BrushFrom("#34C759");
             liveText.Text = "Live";
@@ -1145,7 +1275,7 @@ internal sealed partial class ControlPanelRuntime
             livePill.BorderBrush = BrushFrom("#FF2B5C3C");
             SetLivePulse(window.IsVisible);
         }
-        else if (health != null)
+        else if (gatewayReady)
         {
             liveDot.Fill = BrushFrom("#FF9F0A");
             liveText.Text = "Local";
@@ -1173,7 +1303,7 @@ internal sealed partial class ControlPanelRuntime
             SetLivePulse(false);
         }
 
-        EnsureManagedServices(health, tunnelReady);
+        EnsureManagedServices(health, lastTunnelStatus);
         UpdateTunnelSettingsUi();
         ApplyUpdateSecurityHoldUi();
 
@@ -1227,11 +1357,38 @@ internal sealed partial class ControlPanelRuntime
 
     private void ApplyProfile(string profile)
     {
-        selectedProfile = profile;
-        if (profile != "full-control" && profile != "fully-unlocked") persistentProfile = profile;
-        SaveSettings(); SetProfileVisual(profile, true);
-        profileChangeInFlight = true; requestedProfile = profile;
-        Find<TextBlock>("GatewayStatus").Text = "Restarting…"; Find<Ellipse>("GatewayDot").Fill = BrushFrom("#FF9F0A"); RestartGatewayAsync(profile);
+        if (profileChangeInFlight)
+        {
+            ShowToast("A permission change is already in progress.", true);
+            return;
+        }
+
+        string previousPersistentProfile = persistentProfile;
+        bool persistentChange = profile != "full-control" && profile != "fully-unlocked";
+        if (persistentChange)
+        {
+            persistentProfile = profile;
+            SaveSettings();
+        }
+
+        profileChangeInFlight = true;
+        requestedProfile = profile;
+        if (!RestartGatewayAsync(profile))
+        {
+            profileChangeInFlight = false;
+            requestedProfile = null;
+            if (persistentChange)
+            {
+                persistentProfile = previousPersistentProfile;
+                SaveSettings();
+            }
+            ShowToast("Gateway is busy. Permission was not changed.", true);
+            UpdateStatus();
+            return;
+        }
+
+        Find<TextBlock>("GatewayStatus").Text = "Switching…";
+        Find<Ellipse>("GatewayDot").Fill = BrushFrom("#FF9F0A");
     }
 
     private void SelectProfile(string profile)
@@ -1326,6 +1483,8 @@ internal sealed partial class ControlPanelRuntime
             if (!CryptographicOperations.FixedTimeEquals(plain, verified))
                 throw new CryptographicException("Tunnel Runtime Key verification failed after save.");
             tunnelCredentialInvalid = false;
+            tunnelCredentialRejected = false;
+            lastTunnelStatus = new TunnelRuntimeStatus();
             try { File.SetAttributes(tunnelSecretPath, FileAttributes.Hidden); } catch { }
         }
         finally
@@ -1375,6 +1534,8 @@ internal sealed partial class ControlPanelRuntime
             if (runtimeState == "Ready") status.Text = "Ready";
             else if (!idConfigured) status.Text = "Tunnel ID required";
             else if (!keyConfigured) status.Text = tunnelCredentialInvalid ? "Runtime key unreadable · re-enter it" : "Runtime key required";
+            else if (lastTunnelStatus.CredentialRejected || tunnelCredentialRejected) status.Text = "Runtime key rejected · re-enter it";
+            else if (lastTunnelStatus.TunnelIdMismatch) status.Text = "Tunnel ID mismatch";
             else if (!autoStartTunnel) status.Text = "Configured · auto start off";
             else if (OwnedTunnelRunning()) status.Text = "Connecting…";
             else status.Text = "Configured";
@@ -1501,10 +1662,44 @@ internal sealed partial class ControlPanelRuntime
         if (gatewayRetryIndex < 3) gatewayRetryIndex++;
     }
 
+    private bool StopDetachedManagedTunnelIfSafe()
+    {
+        if (OwnedTunnelRunning()) return true;
+        string expectedPath = Path.GetFullPath(tunnelClientPath);
+        Process match = null;
+        int matches = 0;
+        foreach (Process candidate in Process.GetProcessesByName("tunnel-client"))
+        {
+            try
+            {
+                string candidatePath = candidate.MainModule != null ? candidate.MainModule.FileName : null;
+                if (!String.IsNullOrWhiteSpace(candidatePath) && String.Equals(Path.GetFullPath(candidatePath), expectedPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches++;
+                    if (match == null) match = candidate; else candidate.Dispose();
+                }
+                else candidate.Dispose();
+            }
+            catch { try { candidate.Dispose(); } catch { } }
+        }
+        if (matches != 1 || match == null) { if (match != null) match.Dispose(); return false; }
+        try
+        {
+            if (!match.HasExited) { match.Kill(true); match.WaitForExit(5000); }
+            return true;
+        }
+        catch (Exception ex) { LogRuntimeError("Detached Tunnel cleanup failed.", ex); return false; }
+        finally { try { match.Dispose(); } catch { } }
+    }
+
     private void StartManagedTunnel()
     {
-        if (!IsValidTunnelId(tunnelId) || !HasTunnelKey() || IsTunnelReady() || OwnedTunnelRunning()) return;
+        if (!IsValidTunnelId(tunnelId) || !HasTunnelKey() || tunnelCredentialRejected || OwnedTunnelRunning()) return;
         if (!File.Exists(tunnelClientPath)) throw new FileNotFoundException("tunnel-client.exe not found.", tunnelClientPath);
+        TunnelRuntimeStatus existing = GetTunnelStatus();
+        if (existing.Ready) return;
+        if (existing.LocalReady && !StopDetachedManagedTunnelIfSafe())
+            throw new InvalidOperationException("A detached DeskMCP tunnel is using the local tunnel endpoint and could not be safely replaced.");
         string profileId = TryLoadTunnelIdFromProfile();
         if (!String.Equals(profileId, tunnelId, StringComparison.Ordinal)) ConfigureTunnelProfile(tunnelId);
         string key = LoadTunnelKey();
@@ -1584,9 +1779,10 @@ internal sealed partial class ControlPanelRuntime
         finally { UpdateTunnelSettingsUi(); UpdateStatus(); }
     }
 
-    private void EnsureManagedServices(HealthInfo health, bool tunnelReady)
+    private void EnsureManagedServices(HealthInfo health, TunnelRuntimeStatus tunnelStatus)
     {
         if (quitting || !onboardingCompleted || updateSecurityHold) return;
+        bool tunnelReady = tunnelStatus != null && tunnelStatus.Ready;
         DateTime now = DateTime.UtcNow;
         if (health == null)
         {
@@ -1646,8 +1842,25 @@ internal sealed partial class ControlPanelRuntime
         gatewayRetryIndex = 0;
         nextGatewayRetry = DateTime.MinValue;
 
+        if (tunnelStatus != null && tunnelStatus.CredentialRejected && OwnedTunnelRunning())
+        {
+            tunnelCredentialRejected = true;
+            if (!tunnelRecoveryInFlight)
+            {
+                tunnelRecoveryInFlight = true;
+                Task.Run(delegate { StopOwnedTunnel(); })
+                    .ContinueWith(delegate
+                    {
+                        try { window.Dispatcher.BeginInvoke(new Action(delegate { tunnelRecoveryInFlight = false; tunnelStartInFlight = false; UpdateStatus(); })); }
+                        catch { tunnelRecoveryInFlight = false; tunnelStartInFlight = false; }
+                    });
+            }
+            return;
+        }
+
         if (tunnelReady)
         {
+            tunnelCredentialRejected = false;
             tunnelRetryIndex = 0;
             nextTunnelRetry = DateTime.MinValue;
             tunnelUnreadySince = DateTime.MinValue;
@@ -1681,7 +1894,7 @@ internal sealed partial class ControlPanelRuntime
         }
 
         tunnelUnreadySince = DateTime.MinValue;
-        if (!autoStartTunnel || !IsValidTunnelId(tunnelId) || !HasTunnelKey() || now < nextTunnelRetry || tunnelStartInFlight || tunnelRecoveryInFlight) return;
+        if (!autoStartTunnel || !IsValidTunnelId(tunnelId) || !HasTunnelKey() || tunnelCredentialRejected || now < nextTunnelRetry || tunnelStartInFlight || tunnelRecoveryInFlight) return;
         tunnelStartInFlight = true;
         Task.Run(delegate { StartManagedTunnel(); })
             .ContinueWith(delegate(Task task)
@@ -2272,6 +2485,21 @@ internal sealed partial class ControlPanelRuntime
         ApplySemanticResources(preview, dark);
         ((Border)preview.FindName("RootCard")).Background = BrushFrom(dark ? "#FF0B0B0D" : "#FFFFFFFF");
         ((Border)preview.FindName("RootCard")).BorderBrush = BrushFrom(dark ? "#18FFFFFF" : "#10000000");
+        Border heroCard = (Border)preview.FindName("HeroCard");
+        heroCard.Background = dark ? Gradient("#FF111113", "#FF202024") : Gradient("#FFFFFFFF", "#FFF5F7FA");
+        heroCard.BorderBrush = BrushFrom(dark ? "#24FFFFFF" : "#12000000");
+        ((TextBlock)preview.FindName("BrandTitle")).Foreground = BrushFrom(dark ? "#FFFFFFFF" : "#FF18181B");
+        ((TextBlock)preview.FindName("BrandSubtitle")).Foreground = BrushFrom(dark ? "#FFA1A1AA" : "#FF71717A");
+        foreach (string cardName in new string[] { "GatewayCard", "TunnelCard" })
+        {
+            Border statusCard = (Border)preview.FindName(cardName);
+            statusCard.Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFF5F5F7");
+            statusCard.BorderBrush = BrushFrom(dark ? "#FF3A3A3F" : "#10000000");
+        }
+        ((TextBlock)preview.FindName("GatewayLabel")).Foreground = BrushFrom(dark ? "#FFA1A1AA" : "#FF8E8E93");
+        ((TextBlock)preview.FindName("TunnelLabel")).Foreground = BrushFrom(dark ? "#FFA1A1AA" : "#FF8E8E93");
+        ((TextBlock)preview.FindName("GatewayStatus")).Foreground = BrushFrom(dark ? "#FFFFFFFF" : "#FF18181B");
+        ((TextBlock)preview.FindName("TunnelStatus")).Foreground = BrushFrom(dark ? "#FFFFFFFF" : "#FF18181B");
         ((TextBlock)preview.FindName("ProfileSectionTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
         ((TextBlock)preview.FindName("ProfileHint")).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
         ((Border)preview.FindName("ProfileShell")).Background = BrushFrom(dark ? "#FF2A2A2E" : "#FFE7E7EC");
@@ -2454,6 +2682,8 @@ internal static class Program
                 return ControlPanelRuntime.RunUpdateSecuritySelfTest();
             if (args.Length > 0 && args[0] == "--runtime-reliability-self-test")
                 return RuntimeReliability.RunSelfTest();
+            if (args.Length > 0 && args[0] == "--tunnel-status-self-test")
+                return TunnelRuntimeStatusEvaluator.RunSelfTest();
             if (args.Length > 0 && args[0] == "--agent-safe-isolation-self-test")
                 return ControlPanelRuntime.RunAgentSafeIsolationSelfTest();
             if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))

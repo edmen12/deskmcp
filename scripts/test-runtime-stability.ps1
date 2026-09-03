@@ -79,12 +79,12 @@ function ProbeTool([int]$Port) {
     & $NodeExe $ProbeScript ([string]$Port) $Workspace *> $null
     return [int]$LASTEXITCODE
 }
-function WaitInitial([string]$BaseUrl,[int]$PanelPid,[int]$Seconds=40) {
+function WaitInitial([string]$BaseUrl,[int]$PanelPid,[int]$Seconds=90) {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
         $health = Health $BaseUrl
         $gateway = GatewayChild $PanelPid
-        if ($health -and $gateway) {
+        if ($health -and $health.desktopCommander.ready -eq $true -and $gateway) {
             $dc = DcChild ([int]$gateway.ProcessId)
             if ($dc) { return @($health,$gateway,$dc) }
         }
@@ -112,7 +112,7 @@ $old = @{
 
 try {
     New-Item -ItemType Directory -Force -Path $PrivateWpfRoot,$PrivateBrandRoot,$PanelRoot,$GatewayRoot,$GatewayDist,$DataRoot,$SettingsRoot,$Workspace,$StartupDir,$TunnelProfileDir | Out-Null
-    foreach ($name in @('DeskMCP.ControlPanel.csproj','DeskMCPControlPanel.cs','Panel.xaml','RuntimeReliability.cs','UpdateExecution.cs','UpdatePublisherPins.cs','UpdateSupport.cs')) {
+    foreach ($name in @('DeskMCP.ControlPanel.csproj','DeskMCPControlPanel.cs','Panel.xaml','RuntimeReliability.cs','TunnelRuntimeStatus.cs','UpdateExecution.cs','UpdatePublisherPins.cs','UpdateSupport.cs')) {
         Copy-Item -LiteralPath (Join-Path $ProjectRoot ('control-panel\wpf\' + $name)) -Destination (Join-Path $PrivateWpfRoot $name) -Force
     }
     Copy-Item -LiteralPath (Join-Path $ProjectRoot 'assets\brand\DeskMCP.ico') -Destination (Join-Path $PrivateBrandRoot 'DeskMCP.ico') -Force
@@ -170,7 +170,7 @@ try {
         $deadline=[DateTime]::UtcNow.AddSeconds(45); $gateway=$null;$dc=$null
         do {
             Start-Sleep -Milliseconds 250; $h=Health $base; $candidate=GatewayChild ([int]$panel.Id)
-            if($h -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateDc=DcChild ([int]$candidate.ProcessId);if($candidateDc){$gateway=$candidate;$dc=$candidateDc;break}}
+            if($h -and $h.desktopCommander.ready -eq $true -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateDc=DcChild ([int]$candidate.ProcessId);if($candidateDc){$gateway=$candidate;$dc=$candidateDc;break}}
         } while([DateTime]::UtcNow -lt $deadline)
         $timer.Stop(); Require ($gateway -and $dc) "Spaced Gateway crash recovery $i failed."
         Require ((ProbeTool $port) -eq 0) "Spaced Gateway tool probe $i failed."
@@ -185,7 +185,7 @@ try {
         $deadline=[DateTime]::UtcNow.AddSeconds(60); $gateway=$null;$dc=$null
         do {
             Start-Sleep -Milliseconds 250; $h=Health $base; $candidate=GatewayChild ([int]$panel.Id)
-            if($h -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateDc=DcChild ([int]$candidate.ProcessId);if($candidateDc){$gateway=$candidate;$dc=$candidateDc;break}}
+            if($h -and $h.desktopCommander.ready -eq $true -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateDc=DcChild ([int]$candidate.ProcessId);if($candidateDc){$gateway=$candidate;$dc=$candidateDc;break}}
         } while([DateTime]::UtcNow -lt $deadline)
         $timer.Stop(); Require ($gateway -and $dc) "Gateway crash storm recovery $i failed."
         Require ((ProbeTool $port) -eq 0) "Gateway crash storm tool probe $i failed."

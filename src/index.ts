@@ -26,7 +26,6 @@ const policy = await DesktopPolicy.create();
 const observations = new ObservationStore();
 const processSessions = new ProcessSessionRegistry();
 const bridge = new DesktopCommanderBridge();
-await bridge.start();
 
 let running: RunningHttpServer | null = null;
 let control: RunningControlServer | null = null;
@@ -119,6 +118,7 @@ try {
     processSessions
   );
   control = await startControlServer(port, () => shutdown('LOCAL_CONTROL'));
+  await bridge.start();
 } catch (error) {
   await control?.close().catch(() => undefined);
   await running?.close().catch(() => undefined);

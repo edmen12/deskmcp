@@ -5,10 +5,13 @@ $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
 $Setup = if ([string]::IsNullOrWhiteSpace($SetupPath)) { Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig) } else { [IO.Path]::GetFullPath($SetupPath) }
-$RunId = $Target + '-' + [guid]::NewGuid().ToString('N')
-$SmokeParent = Join-Path $ProjectRoot ('runtime\install-smoke\' + $RunId)
-$SmokeRoot = Join-Path $SmokeParent 'DesktopMCP'
-$StateRoot = Join-Path $ProjectRoot ('runtime\installer-release-state\' + $RunId)
+$RunId = $Target + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+# Keep the isolated install root short enough that the installer's sibling
+# .install-<GUID> / .backup-<GUID> directories do not manufacture a test-only
+# MAX_PATH failure. The production install root is fixed and shorter still.
+$SmokeParent = Join-Path $ProjectRoot ('runtime\ir\' + $RunId)
+$SmokeRoot = Join-Path $SmokeParent 'D'
+$StateRoot = Join-Path $ProjectRoot ('runtime\irs\' + $RunId)
 $DataRoot = Join-Path $StateRoot 'local'
 $SettingsDir = Join-Path $StateRoot 'roaming'
 $SettingsPath = Join-Path $SettingsDir 'settings.json'

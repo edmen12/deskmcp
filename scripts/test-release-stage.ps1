@@ -113,11 +113,15 @@ try {
     if ($isolationProbe.ExitCode -ne 0) { throw 'Release-stage Panel failed the agent-safe isolation self-test.' }
     Write-Output 'AGENT_SAFE_ISOLATION_CONTRACT=OK'
     $panel = Start-Process -FilePath $PanelExe -ArgumentList '--startup' -WorkingDirectory $StageRoot -PassThru
-    $healthDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    $healthDeadline = [DateTime]::UtcNow.AddSeconds(90)
     while ([DateTime]::UtcNow -lt $healthDeadline -and $null -eq $health) {
         if ($panel.HasExited) { Write-Output ('RELEASE_PANEL_EXIT=' + $panel.ExitCode); break }
-        try { $health = Invoke-RestMethod ($SmokeBaseUrl + '/health') -TimeoutSec 1 }
-        catch { if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 } }
+        try {
+            $candidateHealth = Invoke-RestMethod ($SmokeBaseUrl + '/health') -TimeoutSec 1
+            if ($candidateHealth.desktopCommander -and $candidateHealth.desktopCommander.ready -eq $true) { $health = $candidateHealth; break }
+        }
+        catch { }
+        if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 }
     }
     if ($null -eq $health) {
         $stageNodeCount = @(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object {
@@ -126,7 +130,7 @@ try {
         Write-Output ('RELEASE_SMOKE_NODE_COUNT_ON_FAILURE=' + $stageNodeCount)
         $panelErrorLog = Join-Path $SmokeDataRoot 'logs\control-panel-error.log'
         if (Test-Path -LiteralPath $panelErrorLog) { Write-Output 'RELEASE_PANEL_ERROR_LOG_BEGIN'; Get-Content -LiteralPath $panelErrorLog -Tail 30; Write-Output 'RELEASE_PANEL_ERROR_LOG_END' }
-        throw 'Release-stage Gateway did not become healthy within 45 seconds.'
+        throw 'Release-stage Gateway + Desktop Commander did not become ready within 90 seconds.'
     }
     if ($health.policy.profile -ne 'read-only') { throw "Unexpected profile: $($health.policy.profile)" }
     if ($health.version -ne $Version) { throw "Unexpected Gateway version: $($health.version); expected $Version" }

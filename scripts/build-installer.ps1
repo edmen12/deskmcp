@@ -8,8 +8,12 @@ $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $InstallerRoot = Join-Path $ProjectRoot 'installer'
 $BuildRoot = Join-Path $RuntimeRoot ('installer\' + $Target)
 $ReleaseRoot = Join-Path $RuntimeRoot 'release'
-$SmokeRunId = $Target + '-' + [guid]::NewGuid().ToString('N')
-$SmokeRoot = Join-Path $RuntimeRoot ('install-smoke\' + $SmokeRunId + '\DesktopMCP')
+$SmokeRunId = $Target + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+# Keep the isolated installer smoke root deliberately short. The installer uses
+# sibling .install-<GUID> / .backup-<GUID> directories during atomic upgrades,
+# so an unnecessarily deep test root can create an artificial MAX_PATH failure
+# that the fixed per-user production install path would never hit.
+$SmokeRoot = Join-Path $RuntimeRoot ('i\' + $SmokeRunId + '\D')
 $InstallerSource = Join-Path $InstallerRoot 'DeskMCPInstaller.cs'
 $UninstallerSource = Join-Path $InstallerRoot 'DeskMCPUninstaller.cs'
 $UninstallerExe = Join-Path $BuildRoot 'DeskMCPUninstaller.exe'
@@ -22,6 +26,32 @@ if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Install
 
 function Require([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
+}
+function Assert-InstallerPathBudget([string]$StagePath, [string]$SmokeInstallPath) {
+    $stageFull = [IO.Path]::GetFullPath($StagePath).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $maxFileRelative = 0
+    $maxDirectoryRelative = 0
+    foreach ($file in Get-ChildItem -LiteralPath $StagePath -Recurse -Force -File) {
+        $relativeLength = $file.FullName.Substring($stageFull.Length + 1).Length
+        if ($relativeLength -gt $maxFileRelative) { $maxFileRelative = $relativeLength }
+    }
+    foreach ($directory in Get-ChildItem -LiteralPath $StagePath -Recurse -Force -Directory) {
+        $relativeLength = $directory.FullName.Substring($stageFull.Length + 1).Length
+        if ($relativeLength -gt $maxDirectoryRelative) { $maxDirectoryRelative = $relativeLength }
+    }
+
+    $guidSuffix = '.install-' + ('0' * 32)
+    $defaultInstall = Join-Path $env:LOCALAPPDATA 'Programs\DesktopMCP'
+    foreach ($probe in @(
+        [pscustomobject]@{ Label='DEFAULT'; Root=($defaultInstall + $guidSuffix) },
+        [pscustomobject]@{ Label='SMOKE'; Root=([IO.Path]::GetFullPath($SmokeInstallPath) + $guidSuffix) }
+    )) {
+        $maxFilePath = $probe.Root.Length + 1 + $maxFileRelative
+        $maxDirectoryPath = $probe.Root.Length + 1 + $maxDirectoryRelative
+        Require ($maxFilePath -lt 260) ($probe.Label + ' installer temp file path budget exceeds legacy MAX_PATH: ' + $maxFilePath)
+        Require ($maxDirectoryPath -lt 248) ($probe.Label + ' installer temp directory path budget exceeds legacy directory limit: ' + $maxDirectoryPath)
+        Write-Output ('INSTALL_PATH_BUDGET_' + $probe.Label + '=OK file=' + $maxFilePath + ' dir=' + $maxDirectoryPath)
+    }
 }
 function Assert-StageNotRunning([string]$StagePath) {
     if (-not (Test-Path -LiteralPath $StagePath)) { return }
@@ -101,6 +131,9 @@ if (-not $SkipStage) {
     Write-Output 'STEP=release-stage-skip'
     Require (Test-Path -LiteralPath $StageRoot) 'Release stage is missing.'
 }
+
+Write-Output 'STEP=installer-path-budget'
+Assert-InstallerPathBudget $StageRoot $SmokeRoot
 
 $cscCandidates = @(
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
