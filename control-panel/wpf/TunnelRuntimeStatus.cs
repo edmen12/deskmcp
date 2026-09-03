@@ -151,7 +151,7 @@ internal static class TunnelRuntimeStatusEvaluator
 
     public static int RunSelfTest()
     {
-        const string id = "tunnel_0123456789abcdef0123456789abcdef";
+        string id = "tunnel_" + new string('0', 32);
         DateTimeOffset now = DateTimeOffset.FromUnixTimeSeconds(2000);
         string goodStatus = "{\"control_plane_tunnel_id\":\"" + id + "\",\"mcp_server_url\":\"http://127.0.0.1:8765/mcp\",\"tunnel_metadata\":{\"ID\":\"" + id + "\"}}";
         string goodMetrics = "commands_poll_last_successful_timestamp_seconds 1995";
