@@ -15,8 +15,8 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("DeskMCP Setup")]
 [assembly: AssemblyProduct("DeskMCP")]
-[assembly: AssemblyVersion("0.9.3.0")]
-[assembly: AssemblyFileVersion("0.9.3.0")]
+[assembly: AssemblyVersion("0.9.4.0")]
+[assembly: AssemblyFileVersion("0.9.4.0")]
 
 internal sealed class InstallOptions
 {
@@ -30,7 +30,7 @@ internal sealed class InstallOptions
 
 internal static class InstallerEngine
 {
-    public const string Version = "0.9.3";
+    public const string Version = "0.9.4";
     private const string ProductKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DesktopMCP";
     private const string PayloadResource = "DesktopMCP.Payload.zip";
     private const string HashResource = "DesktopMCP.Payload.sha256";

@@ -50,10 +50,12 @@ export const DEFAULT_PROCESS_HOST_ENTRY = defaultProcessHostEntry;
 function buildProcessHostCommand(
   processHostEntry: string,
   shell: 'powershell.exe' | 'cmd.exe',
-  command: string
+  command: string,
+  windowMode: 'hidden' | 'visible' = 'hidden',
+  elevation: 'standard' | 'admin' = 'standard'
 ): string {
   const command64 = Buffer.from(command, 'utf8').toString('base64');
-  return `"${processHostEntry}" --shell ${shell} --command64 ${command64}`;
+  return `"${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation}`;
 }
 
 function elapsedMs(startedAt: number): number {
@@ -117,7 +119,7 @@ export class DesktopCommanderBridge {
     });
 
     const client = new Client(
-      { name: 'deskmcp-gateway', version: '0.9.3' },
+      { name: 'deskmcp-gateway', version: '0.9.4' },
       { versionNegotiation: { mode: 'legacy' } }
     );
     let closed = false;
@@ -274,13 +276,17 @@ export class DesktopCommanderBridge {
   async startProcess(
     command: string,
     timeoutMs: number,
-    shell?: 'powershell.exe' | 'cmd.exe'
+    shell?: 'powershell.exe' | 'cmd.exe',
+    windowMode: 'hidden' | 'visible' = 'hidden',
+    elevation: 'standard' | 'admin' = 'standard'
   ): Promise<DesktopCommanderToolResult> {
     if (process.platform !== 'win32') {
       return this.callTextTool('start_process', {
         command,
         timeout_ms: timeoutMs,
-        ...(shell ? { shell } : {})
+        ...(shell ? { shell } : {}),
+        ...(windowMode === 'visible' ? { window_mode: windowMode } : {}),
+        ...(elevation === 'admin' ? { elevation } : {})
       });
     }
 
@@ -288,7 +294,9 @@ export class DesktopCommanderBridge {
     const ownedCommand = buildProcessHostCommand(
       this.processHostEntry,
       shell ?? 'cmd.exe',
-      command
+      command,
+      windowMode,
+      elevation
     );
     return this.callTextTool('start_process', {
       command: ownedCommand,

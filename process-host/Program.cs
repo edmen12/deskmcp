@@ -1,5 +1,7 @@
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -10,6 +12,7 @@ internal static class Program
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
     private const uint SYNCHRONIZE = 0x00100000;
     private const uint CREATE_SUSPENDED = 0x00000004;
+    private const uint CREATE_NEW_CONSOLE = 0x00000010;
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
@@ -28,15 +31,18 @@ internal static class Program
         IntPtr childProcessHandle = IntPtr.Zero;
         IntPtr childThreadHandle = IntPtr.Zero;
         IntPtr jobInfoBuffer = IntPtr.Zero;
+        bool elevatedChild = false;
+        string? errorFile = null;
 
         try
         {
-            ParseArguments(args, out string shell, out string command);
-            int parentPid = GetParentProcessId(Environment.ProcessId);
-            if (parentPid <= 0)
+            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out elevatedChild, out int ownerPid, out errorFile);
+            if (elevation == "admin" && !elevatedChild) return RunElevatedHost(shell, command, windowMode);
+            int owningPid = ownerPid > 0 ? ownerPid : GetParentProcessId(Environment.ProcessId);
+            if (owningPid <= 0)
                 throw new InvalidOperationException("Could not resolve the owning terminal process.");
 
-            parentHandle = OpenProcess(SYNCHRONIZE, false, parentPid);
+            parentHandle = OpenProcess(SYNCHRONIZE, false, owningPid);
             if (parentHandle == IntPtr.Zero)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the owning terminal process.");
 
@@ -54,14 +60,20 @@ internal static class Program
 
             string applicationPath = ResolveShellPath(shell);
             string commandLine = BuildShellCommandLine(applicationPath, shell, command);
-            STARTUPINFO startup = new STARTUPINFO
+            STARTUPINFO startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+            uint creationFlags = CREATE_SUSPENDED;
+            if (windowMode == "visible")
             {
-                cb = Marshal.SizeOf<STARTUPINFO>(),
-                dwFlags = STARTF_USESTDHANDLES,
-                hStdInput = GetStdHandle(STD_INPUT_HANDLE),
-                hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE),
-                hStdError = GetStdHandle(STD_ERROR_HANDLE)
-            };
+                creationFlags |= CREATE_NEW_CONSOLE;
+            }
+            else
+            {
+                creationFlags |= CREATE_NO_WINDOW;
+                startup.dwFlags = STARTF_USESTDHANDLES;
+                startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+                startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+                startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+            }
 
             if (!CreateProcessW(
                 applicationPath,
@@ -69,7 +81,7 @@ internal static class Program
                 IntPtr.Zero,
                 IntPtr.Zero,
                 true,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                creationFlags,
                 IntPtr.Zero,
                 null,
                 ref startup,
@@ -127,6 +139,7 @@ internal static class Program
         }
         catch (Exception error)
         {
+            if (elevatedChild && !String.IsNullOrWhiteSpace(errorFile)) TryWriteElevationError(errorFile, error);
             try { Console.Error.WriteLine("DeskMCP process host failed: " + error.Message); } catch { }
             return 1;
         }
@@ -140,14 +153,24 @@ internal static class Program
         }
     }
 
-    private static void ParseArguments(string[] args, out string shell, out string command)
+    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out bool elevatedChild, out int ownerPid, out string? errorFile)
     {
         string? shellValue = null;
         string? command64 = null;
+        string? windowModeValue = null;
+        string? elevationValue = null;
+        string? ownerPidValue = null;
+        string? errorFile64 = null;
+        elevatedChild = false;
         for (int index = 0; index < args.Length; index++)
         {
             if (args[index] == "--shell" && index + 1 < args.Length) shellValue = args[++index];
             else if (args[index] == "--command64" && index + 1 < args.Length) command64 = args[++index];
+            else if (args[index] == "--window-mode" && index + 1 < args.Length) windowModeValue = args[++index];
+            else if (args[index] == "--elevation" && index + 1 < args.Length) elevationValue = args[++index];
+            else if (args[index] == "--owner-pid" && index + 1 < args.Length) ownerPidValue = args[++index];
+            else if (args[index] == "--elevated-child") elevatedChild = true;
+            else if (args[index] == "--error-file64" && index + 1 < args.Length) errorFile64 = args[++index];
             else throw new ArgumentException("Unknown or incomplete process-host argument.");
         }
 
@@ -156,10 +179,79 @@ internal static class Program
             throw new ArgumentException("Unsupported process shell.");
         if (String.IsNullOrWhiteSpace(command64))
             throw new ArgumentException("Missing encoded process command.");
+        windowMode = (windowModeValue ?? "hidden").ToLowerInvariant();
+        if (windowMode != "hidden" && windowMode != "visible")
+            throw new ArgumentException("Unsupported process window mode.");
+        elevation = (elevationValue ?? "standard").ToLowerInvariant();
+        if (elevation != "standard" && elevation != "admin")
+            throw new ArgumentException("Unsupported process elevation mode.");
+        if (elevation == "admin" && windowMode != "visible")
+            throw new ArgumentException("Admin elevation requires visible window mode.");
+        errorFile = null;
+        if (!String.IsNullOrWhiteSpace(errorFile64))
+        {
+            try { errorFile = Encoding.UTF8.GetString(Convert.FromBase64String(errorFile64)); }
+            catch (FormatException) { throw new ArgumentException("Invalid elevation error path."); }
+        }
+        ownerPid = 0;
+        if (!String.IsNullOrWhiteSpace(ownerPidValue) && (!Int32.TryParse(ownerPidValue, out ownerPid) || ownerPid <= 0))
+            throw new ArgumentException("Invalid owner process id.");
 
         try { command = Encoding.UTF8.GetString(Convert.FromBase64String(command64)); }
         catch (FormatException) { throw new ArgumentException("Invalid encoded process command."); }
         if (String.IsNullOrWhiteSpace(command)) throw new ArgumentException("Process command is empty.");
+    }
+
+    private static int RunElevatedHost(string shell, string command, string windowMode)
+    {
+        string executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Could not resolve the DeskMCP process host path.");
+        string command64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
+        string errorFile = Path.Combine(Path.GetTempPath(), "deskmcp-elevation-" + Guid.NewGuid().ToString("N") + ".txt");
+        string errorFile64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(errorFile));
+        string arguments = "--elevated-child --owner-pid " + Environment.ProcessId
+            + " --shell " + shell
+            + " --command64 " + command64
+            + " --window-mode " + windowMode
+            + " --elevation admin"
+            + " --error-file64 " + errorFile64;
+        ProcessStartInfo start = new ProcessStartInfo
+        {
+            FileName = executable,
+            Arguments = arguments,
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden,
+            WorkingDirectory = AppContext.BaseDirectory
+        };
+        try
+        {
+            using Process elevated = Process.Start(start)
+                ?? throw new InvalidOperationException("Windows did not start the elevated DeskMCP process host.");
+            elevated.WaitForExit();
+            if (elevated.ExitCode != 0)
+            {
+                string detail = File.Exists(errorFile) ? File.ReadAllText(errorFile).Trim() : String.Empty;
+                throw new InvalidOperationException(String.IsNullOrWhiteSpace(detail)
+                    ? "Elevated DeskMCP process host failed with exit code " + elevated.ExitCode + "."
+                    : detail);
+            }
+            return 0;
+        }
+        catch (Win32Exception error) when (error.NativeErrorCode == 1223)
+        {
+            throw new InvalidOperationException("UAC elevation was canceled or denied.");
+        }
+        finally
+        {
+            try { if (File.Exists(errorFile)) File.Delete(errorFile); } catch { }
+        }
+    }
+
+    private static void TryWriteElevationError(string path, Exception error)
+    {
+        try { File.WriteAllText(path, "Elevated DeskMCP process host failed: " + error.Message, Encoding.UTF8); }
+        catch { }
     }
 
     private static string ResolveShellPath(string shell)

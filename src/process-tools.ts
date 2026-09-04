@@ -139,7 +139,9 @@ export function registerProcessTools(
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
-        shell: z.enum(['powershell.exe', 'cmd.exe']).optional()
+        shell: z.enum(['powershell.exe', 'cmd.exe']).optional(),
+        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden'),
+        elevation: z.enum(['standard', 'admin']).optional().default('standard')
       }),
       annotations: {
         readOnlyHint: false,
@@ -148,7 +150,7 @@ export function registerProcessTools(
         openWorldHint: true
       }
     },
-    async ({ command, timeout_ms, shell }) => auditedProcessCall(
+    async ({ command, timeout_ms, shell, window_mode, elevation }) => auditedProcessCall(
       audit,
       policy,
       'desktop_start_process',
@@ -162,14 +164,23 @@ export function registerProcessTools(
         const reservationId = sessions.reserveStart();
         let pid: number | undefined;
         try {
-          const result = await bridge.startProcess(command, timeout_ms, shell);
+          if ((window_mode === 'visible' || elevation === 'admin') && process.platform !== 'win32') {
+            throw new PolicyDeniedError('Visible console and admin elevation modes are supported on Windows only.');
+          }
+          if (elevation === 'admin' && window_mode !== 'visible') {
+            throw new PolicyDeniedError('Admin elevation requires window_mode=visible so Windows can surface UAC and the user can interact.');
+          }
+          const result = await bridge.startProcess(command, timeout_ms, shell, window_mode, elevation);
           if (result.isError) {
             sessions.releaseStart(reservationId);
             return result;
           }
           pid = extractStartedPid(result.text);
-          const sessionId = sessions.registerReserved(reservationId, pid);
-          return sanitizeProcessResult(result, pid, sessionId);
+          const sessionId = sessions.registerReserved(reservationId, pid, window_mode);
+          const sanitized = sanitizeProcessResult(result, pid, sessionId);
+          return window_mode === 'visible'
+            ? { ...sanitized, text: sanitized.text + '\\nVisible console opened. Use the console window for interactive input.' }
+            : sanitized;
         } catch (error) {
           sessions.releaseStart(reservationId);
           if (pid !== undefined) {
@@ -244,6 +255,9 @@ export function registerProcessTools(
       async () => {
         requireFullControl(policy);
         const pid = sessions.resolve(session_id);
+        if (sessions.windowMode(session_id) === 'visible') {
+          throw new PolicyDeniedError('Visible console sessions accept input from their Windows console, not desktop_interact_process.');
+        }
         const raw = await bridge.interactWithProcess(pid, input, timeout_ms, wait_for_prompt);
         if (resultShowsMissingActiveProcess(raw)) sessions.markInactive(session_id);
         return sanitizeProcessResult(raw, pid, session_id);
