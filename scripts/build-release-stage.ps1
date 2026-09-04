@@ -23,30 +23,29 @@ function Assert-StageNotRunning([string]$StagePath) {
     if ($running.Count -gt 0) { throw ('Release stage is running: ' + (($running | ForEach-Object { $_.ProcessName + ':' + $_.Id }) -join ', ')) }
 }
 function Invoke-Native([string]$Exe,[string[]]$Arguments) { & $Exe @Arguments; if ($LASTEXITCODE -ne 0) { throw "$Exe failed with exit code $LASTEXITCODE" } }
-function Invoke-ProductionNpmAudit([int]$MaxAttempts = 3) {
-    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        $token = [Guid]::NewGuid().ToString('N')
-        $stdout = Join-Path $env:TEMP ('deskmcp-audit-' + $token + '.out')
-        $stderr = Join-Path $env:TEMP ('deskmcp-audit-' + $token + '.err')
-        $commandLine = 'npm.cmd audit --omit=dev --json --fetch-timeout=60000 --fetch-retries=0 1>"' + $stdout + '" 2>"' + $stderr + '"'
-        & cmd.exe /d /c $commandLine
-        $auditExit = $LASTEXITCODE
-        $auditText = if (Test-Path -LiteralPath $stdout) { [IO.File]::ReadAllText($stdout) } else { '' }
-        $audit = $null
-        try { if (-not [string]::IsNullOrWhiteSpace($auditText)) { $audit = $auditText | ConvertFrom-Json -ErrorAction Stop } } catch {}
-        if ($null -ne $audit -and $null -ne $audit.metadata -and $null -ne $audit.metadata.vulnerabilities) {
-            $total = [int]$audit.metadata.vulnerabilities.total
-            Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
-            if ($auditExit -eq 0 -and $total -eq 0) { Write-Output ('NPM_AUDIT_OK attempt=' + $attempt); return }
-            throw ('Production npm audit failed: total=' + $total + ', exit=' + $auditExit)
-        }
-        $detail = if (Test-Path -LiteralPath $stderr) { ([IO.File]::ReadAllText($stderr) -replace '\r?\n',' ').Trim() } else { '' }
-        Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
-        if ($attempt -eq $MaxAttempts) { throw ('Production npm audit unavailable after ' + $MaxAttempts + ' attempts. Last exit=' + $auditExit + ' detail=' + $detail) }
-        Write-Warning ('npm audit did not return valid JSON on attempt ' + $attempt + '; retrying.')
-        Start-Sleep -Seconds (2 * $attempt)
+function Invoke-ProductionNpmCi([string[]]$Arguments) {
+    $token = [Guid]::NewGuid().ToString('N')
+    $stdout = Join-Path $env:TEMP ('deskmcp-npm-ci-' + $token + '.out')
+    $stderr = Join-Path $env:TEMP ('deskmcp-npm-ci-' + $token + '.err')
+    $commandLine = 'npm.cmd ci ' + ($Arguments -join ' ') + ' --audit=true 1>"' + $stdout + '" 2>"' + $stderr + '"'
+    & cmd.exe /d /c $commandLine
+    $ciExit = $LASTEXITCODE
+    $stdoutText = if (Test-Path -LiteralPath $stdout) { [IO.File]::ReadAllText($stdout) } else { '' }
+    $stderrText = if (Test-Path -LiteralPath $stderr) { [IO.File]::ReadAllText($stderr) } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($stdoutText)) { Write-Output $stdoutText.TrimEnd() }
+    if (-not [string]::IsNullOrWhiteSpace($stderrText)) { Write-Warning $stderrText.TrimEnd() }
+    $combined = $stdoutText + [Environment]::NewLine + $stderrText
+    Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
+    if ($ciExit -ne 0) { throw ('Production npm ci failed: exit=' + $ciExit) }
+    if ([regex]::IsMatch($combined, '(?im)^\s*npm\s+(warn|error)\s+audit\b') -or $combined -match '(?i)audit endpoint returned an error') {
+        throw 'Production npm ci audit was unavailable; refusing release.'
     }
+    if (-not [regex]::IsMatch($combined, '(?im)^\s*found\s+0\s+vulnerabilities\s*$')) {
+        throw 'Production npm ci did not prove zero vulnerabilities; refusing release.'
+    }
+    Write-Output 'NPM_AUDIT_OK source=npm-ci'
 }
+
 function Get-Sha256([string]$Path) { return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 function Get-VerifiedDownload([string]$Url,[string]$Path,[string]$ExpectedSha256) {
     if (Test-Path -LiteralPath $Path) {
@@ -145,7 +144,7 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'dist') -Destination $gatewayDest
 foreach ($file in @('package.json','package-lock.json','.npmrc')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $file) -Destination $gatewayDest -Force }
 Push-Location $gatewayDest
 try {
-    Invoke-Native 'npm.cmd' @('ci','--omit=dev','--ignore-scripts',('--os=' + $TargetConfig.NpmOs),('--cpu=' + $TargetConfig.NpmCpu))
+    Invoke-ProductionNpmCi @('--omit=dev','--ignore-scripts',('--os=' + $TargetConfig.NpmOs),('--cpu=' + $TargetConfig.NpmCpu))
 
     # npm can materialize optional binaries for multiple platforms even with --os/--cpu.
     # Physically prune non-target native packages so the release closure matches its target.
@@ -168,7 +167,6 @@ try {
     Write-Output ('PRUNED_FOREIGN_SHARP=' + $foreignSharp.Count)
     Write-Output ('PRUNED_FOREIGN_RIPGREP=' + $foreignRipgrep.Count)
 
-    Invoke-ProductionNpmAudit
 } finally { Pop-Location }
 $sharpPath = Join-Path $gatewayDest ('node_modules\@img\' + $TargetConfig.SharpPackage + '\package.json')
 $ripgrepPath = Join-Path $gatewayDest ('node_modules\@vscode\' + $TargetConfig.RipgrepPackage + '\package.json')
