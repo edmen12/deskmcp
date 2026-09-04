@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#05070b" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src https://api.github.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
-  <meta name="description" content="DeskMCP is an open-source local-first MCP gateway that gives ChatGPT controlled access to your Windows desktop, files and terminal sessions." />
+  <meta name="description" content="DeskMCP is an open-source local-first MCP gateway that gives ChatGPT controlled access to Windows files, background terminals and opt-in visible consoles." />
   <meta property="og:title" content="DeskMCP — Your desktop. Connected to AI." />
   <meta property="og:description" content="A local-first bridge between ChatGPT and your Windows desktop. Powerful access, explicit control." />
   <meta property="og:type" content="website" />
@@ -39,7 +39,7 @@
       <div class="hero-copy">
         <div class="hero-label">LOCAL-FIRST · OPEN SOURCE · WINDOWS</div>
         <h1>Your desktop.<br /><span>Connected to AI.</span></h1>
-        <p>DeskMCP gives ChatGPT a controlled path to your Windows files and terminal sessions — while permission decisions stay on your machine.</p>
+        <p>DeskMCP gives ChatGPT a controlled path to Windows files, background terminal sessions and opt-in visible CMD or PowerShell consoles — while permission decisions and UAC approval stay on your machine.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="#download">Download for Windows <span>↗</span></a>
           <a class="button button-ghost" href="#start">Read the quick start</a>
@@ -127,13 +127,13 @@
         <article class="permission-row permission-full" role="listitem">
           <div class="permission-number">03</div>
           <div class="permission-name"><strong>Full</strong><small>Session only</small></div>
-          <p>Enable Gateway-owned terminal sessions while retaining DeskMCP's Workspace boundary.</p>
+          <p>Enable Gateway-owned terminal sessions, including opt-in visible consoles, while retaining DeskMCP's Workspace boundary.</p>
           <span class="risk risk-full">Elevated</span>
         </article>
         <article class="permission-row permission-unlock" role="listitem">
           <div class="permission-number">04</div>
           <div class="permission-name"><strong>Unlock</strong><small>Session only</small></div>
-          <p>Remove DeskMCP's filesystem sandbox. Windows account permissions and UAC still apply.</p>
+          <p>Remove DeskMCP's filesystem sandbox for the session. Windows account permissions still apply, and administrator consoles still require local UAC approval.</p>
           <span class="risk risk-unlock">Highest access</span>
         </article>
       </div>
@@ -148,10 +148,13 @@
           <p>One glance tells you whether the bridge is alive, which profile is active, what Workspace is in scope, and whether your Tunnel is ready.</p>
           <ul>
             <li><span></span> Live Gateway and Tunnel status</li>
-            <li><span></span> Session-only Full and Unlock modes</li>
+            <li><span></span> Hidden background terminals remain the default</li>
+            <li><span></span> Opt-in visible CMD / PowerShell with <code>window_mode: "visible"</code></li>
+            <li><span></span> Administrator consoles use Windows <code>runas</code> + UAC</li>
+            <li><span></span> Visible and elevated process trees remain DeskMCP-owned</li>
             <li><span></span> Local DPAPI protection for runtime secrets</li>
-            <li><span></span> One-click restart, refresh and settings</li>
           </ul>
+          <p>Visible consoles receive keyboard input directly from their Windows window. <code>desktop_interact_process</code> remains for hidden DeskMCP-managed terminal sessions.</p>
         </div>
         <div class="product-story-visual">
           <div class="story-glow" aria-hidden="true"></div>
@@ -176,8 +179,9 @@
         <div class="security-list">
           <article><span>01</span><div><strong>Loopback first</strong><p>The Gateway HTTP service binds to <code>127.0.0.1</code>.</p></div></article>
           <article><span>02</span><div><strong>Workspace scoped</strong><p>Read, Write and Full enforce canonical path boundaries before forwarding work.</p></div></article>
-          <article><span>03</span><div><strong>Owned process sessions</strong><p>Opaque Gateway-owned sessions instead of arbitrary Windows PID control.</p></div></article>
-          <article><span>04</span><div><strong>Metadata-only audit</strong><p>No file contents, secrets, terminal I/O or real PIDs in audit logs.</p></div></article>
+          <article><span>03</span><div><strong>Owned process sessions</strong><p>Hidden, visible and elevated consoles stay attached to DeskMCP-owned process trees instead of arbitrary Windows PID control.</p></div></article>
+          <article><span>04</span><div><strong>Native UAC boundary</strong><p>Administrator consoles use Windows <code>runas</code> and still require local approval. DeskMCP does not bypass UAC.</p></div></article>
+          <article><span>05</span><div><strong>Metadata-only audit</strong><p>No file contents, secrets, terminal I/O or real PIDs in audit logs.</p></div></article>
         </div>
       </div>
     </section>
