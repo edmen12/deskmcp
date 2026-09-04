@@ -140,7 +140,8 @@ export function registerProcessTools(
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
         shell: z.enum(['powershell.exe', 'cmd.exe']).optional(),
-        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden')
+        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden'),
+        elevation: z.enum(['standard', 'admin']).optional().default('standard')
       }),
       annotations: {
         readOnlyHint: false,
@@ -149,7 +150,7 @@ export function registerProcessTools(
         openWorldHint: true
       }
     },
-    async ({ command, timeout_ms, shell, window_mode }) => auditedProcessCall(
+    async ({ command, timeout_ms, shell, window_mode, elevation }) => auditedProcessCall(
       audit,
       policy,
       'desktop_start_process',
@@ -163,10 +164,13 @@ export function registerProcessTools(
         const reservationId = sessions.reserveStart();
         let pid: number | undefined;
         try {
-          if (window_mode === 'visible' && process.platform !== 'win32') {
-            throw new PolicyDeniedError('Visible console mode is supported on Windows only.');
+          if ((window_mode === 'visible' || elevation === 'admin') && process.platform !== 'win32') {
+            throw new PolicyDeniedError('Visible console and admin elevation modes are supported on Windows only.');
           }
-          const result = await bridge.startProcess(command, timeout_ms, shell, window_mode);
+          if (elevation === 'admin' && window_mode !== 'visible') {
+            throw new PolicyDeniedError('Admin elevation requires window_mode=visible so Windows can surface UAC and the user can interact.');
+          }
+          const result = await bridge.startProcess(command, timeout_ms, shell, window_mode, elevation);
           if (result.isError) {
             sessions.releaseStart(reservationId);
             return result;
