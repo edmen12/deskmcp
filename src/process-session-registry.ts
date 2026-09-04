@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { PolicyDeniedError } from './desktop-policy.js';
 
+export type ProcessWindowMode = 'hidden' | 'visible';
+
 interface ProcessSession {
   readonly id: string;
   readonly pid: number;
   readonly createdAt: number;
+  readonly windowMode: ProcessWindowMode;
   active: boolean;
 }
 
@@ -80,7 +83,7 @@ export class ProcessSessionRegistry {
     this.startReservations.delete(reservationId);
   }
 
-  registerReserved(reservationId: string, pid: number): string {
+  registerReserved(reservationId: string, pid: number, windowMode: ProcessWindowMode = 'hidden'): string {
     if (!this.startReservations.has(reservationId)) {
       throw new Error('Unknown process start reservation.');
     }
@@ -99,14 +102,14 @@ export class ProcessSessionRegistry {
     }
 
     const id = randomUUID();
-    this.sessions.set(id, { id, pid, createdAt: Date.now(), active: true });
+    this.sessions.set(id, { id, pid, createdAt: Date.now(), windowMode, active: true });
     this.pruneInactiveHistory();
     return id;
   }
 
-  register(pid: number): string {
+  register(pid: number, windowMode: ProcessWindowMode = 'hidden'): string {
     const reservationId = this.reserveStart();
-    return this.registerReserved(reservationId, pid);
+    return this.registerReserved(reservationId, pid, windowMode);
   }
 
   resolve(sessionId: string): number {
@@ -115,6 +118,12 @@ export class ProcessSessionRegistry {
       throw new PolicyDeniedError('Unknown or unowned process session.');
     }
     return session.pid;
+  }
+
+  windowMode(sessionId: string): ProcessWindowMode {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new PolicyDeniedError('Unknown or unowned process session.');
+    return session.windowMode;
   }
 
   markInactive(sessionId: string): void {

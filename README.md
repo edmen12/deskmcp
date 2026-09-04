@@ -98,6 +98,10 @@ desktop_terminate_process
 
 The schemas stay discoverable across profiles so the remote connection remains stable. **Discoverable does not mean permitted**: every invocation is still checked by the local DeskMCP policy before it can execute.
 
+On Windows, `desktop_start_process` defaults to `window_mode: "hidden"` for background agent work. Use `window_mode: "visible"` to open a real user-visible CMD or PowerShell console. Visible sessions take interactive keyboard input from their Windows console instead of `desktop_interact_process`.
+
+For an administrator console, set `window_mode: "visible"` with `elevation: "admin"`. DeskMCP uses the Windows `runas` broker, so the normal UAC secure-desktop prompt must still be approved by the local user. UAC cancellation or denial is returned as an error; DeskMCP does not bypass UAC.
+
 ## Security model
 
 - Gateway HTTP binds only to `127.0.0.1:8765`.

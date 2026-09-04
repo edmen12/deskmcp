@@ -23,6 +23,29 @@ CONTENTS="$APP/Contents"
 RESOURCES="$CONTENTS/Resources"
 mkdir -p "$DOWNLOADS"
 
+npm_audit_fail_closed() {
+  local attempt stdout stderr status parse_status total detail
+  for attempt in 1 2 3; do
+    stdout="$(mktemp)"; stderr="$(mktemp)"
+    set +e
+    npm audit --omit=dev --json --fetch-timeout=60000 --fetch-retries=0 >"$stdout" 2>"$stderr"
+    status=$?
+    total="$(node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const v=j&&j.metadata&&j.metadata.vulnerabilities;const n=Number(v&&v.total);if(!Number.isFinite(n))process.exit(2);process.stdout.write(String(n));}catch{process.exit(2)}' "$stdout")"
+    parse_status=$?
+    set -e
+    if [[ $parse_status -eq 0 ]]; then
+      if [[ $status -eq 0 && "$total" -eq 0 ]]; then rm -f "$stdout" "$stderr"; echo "NPM_AUDIT_OK attempt=$attempt"; return 0; fi
+      cat "$stderr" >&2; cat "$stdout" >&2; rm -f "$stdout" "$stderr"
+      echo "Production npm audit failed: total=$total exit=$status" >&2; return 1
+    fi
+    detail="$(tail -c 800 "$stderr" 2>/dev/null | tr '\n' ' ')"
+    rm -f "$stdout" "$stderr"
+    if [[ $attempt -eq 3 ]]; then echo "Production npm audit unavailable after 3 attempts. Last exit=$status detail=$detail" >&2; return 1; fi
+    echo "npm audit did not return valid JSON on attempt $attempt; retrying." >&2
+    sleep $((attempt * 2))
+  done
+}
+
 verified_download() {
   local url="$1" path="$2" sha="$3"
   if [[ -f "$path" ]] && echo "$sha  $path" | shasum -a 256 -c - >/dev/null 2>&1; then return; fi
@@ -64,7 +87,7 @@ cp -R dist "$RESOURCES/gateway/dist"
 cp package.json package-lock.json .npmrc "$RESOURCES/gateway/"
 pushd "$RESOURCES/gateway" >/dev/null
 npm ci --omit=dev --ignore-scripts --os=darwin --cpu=arm64
-npm audit --omit=dev
+npm_audit_fail_closed
 popd >/dev/null
 
 test -f "$RESOURCES/gateway/node_modules/@img/sharp-darwin-arm64/package.json"
