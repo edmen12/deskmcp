@@ -545,7 +545,16 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
         }
       });
       assert.equal(interacted.isError, undefined);
-      assert.match(JSON.stringify(interacted.content), /ECHO:HELLO_PROCESS/);
+      let interactionText = JSON.stringify(interacted.content);
+      if (!/ECHO:HELLO_PROCESS/.test(interactionText)) {
+        const delayed = await fullControlClient.callTool({
+          name: 'desktop_read_process',
+          arguments: { session_id: sessionId, timeout_ms: 5000, offset: 0, length: 100 }
+        });
+        assert.equal(delayed.isError, undefined);
+        interactionText += JSON.stringify(delayed.content);
+      }
+      assert.match(interactionText, /ECHO:HELLO_PROCESS/);
 
       const fakeSession = await fullControlClient.callTool({
         name: 'desktop_read_process',
