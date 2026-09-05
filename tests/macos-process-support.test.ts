@@ -104,3 +104,67 @@ test('macOS owned process termination kills descendants in the same process grou
     await bridge.close();
   }
 });
+
+test('macOS ProcessHost removes background descendants when the command root exits', {
+  skip: process.platform !== 'darwin'
+}, async () => {
+  const fixture = path.join(PROJECT_ROOT, 'tests', 'fixtures', 'macos-background-orphan.mjs');
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`;
+  const bridge = new DesktopCommanderBridge();
+
+  try {
+    await bridge.start();
+    const started = await bridge.startProcess(command, 1500, 'auto');
+    assert.equal(started.isError, false, started.text);
+    const childMatch = started.text.match(/DESCENDANT_PID=(\d+)/);
+    assert.ok(childMatch?.[1], `Missing descendant PID in: ${started.text}`);
+    const childPid = Number.parseInt(childMatch[1], 10);
+    await waitUntilProcessGone(childPid);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('macOS ProcessHost tears down descendants when its Desktop Commander owner disappears', {
+  skip: process.platform !== 'darwin'
+}, async () => {
+  const fixture = path.join(PROJECT_ROOT, 'tests', 'fixtures', 'macos-process-tree.mjs');
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`;
+  const bridge = new DesktopCommanderBridge();
+  let rootPid: number | undefined;
+  let childPid: number | undefined;
+  let bridgeClosed = false;
+
+  try {
+    await bridge.start();
+    const started = await bridge.startProcess(command, 1500, 'auto');
+    assert.equal(started.isError, false, started.text);
+
+    const rootMatch = started.text.match(/Process started with PID\s+(\d+)/i);
+    assert.ok(rootMatch?.[1], `Missing root PID in: ${started.text}`);
+    rootPid = Number.parseInt(rootMatch[1], 10);
+
+    let output = started.text;
+    if (!/DESCENDANT_PID=\d+/.test(output)) {
+      const read = await bridge.readProcessOutput(rootPid, 1500, 0, 200);
+      assert.equal(read.isError, false, read.text);
+      output += `\n${read.text}`;
+    }
+    const childMatch = output.match(/DESCENDANT_PID=(\d+)/);
+    assert.ok(childMatch?.[1], `Missing descendant PID in: ${output}`);
+    childPid = Number.parseInt(childMatch[1], 10);
+
+    await bridge.close();
+    bridgeClosed = true;
+    await waitUntilProcessGone(childPid, 3500);
+  } finally {
+    if (!bridgeClosed) await bridge.close().catch(() => undefined);
+    if (rootPid !== undefined) {
+      try {
+        process.kill(-rootPid, 'SIGKILL');
+      } catch (error) {
+        if (!isMissingProcess(error)) throw error;
+      }
+    }
+  }
+});
