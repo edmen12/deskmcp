@@ -15,6 +15,14 @@ if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 const target = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
+const disclosure = spawnSync(
+  `runtime\\process-host\\${target}\\DeskMCP.ProcessHost.exe`,
+  ['--elevation-disclosure-self-test'],
+  { stdio: 'inherit', windowsHide: true }
+);
+if (disclosure.error) throw disclosure.error;
+if (disclosure.status !== 0) process.exit(disclosure.status ?? 1);
+
 const smoke = spawnSync(
   'powershell.exe',
   [
