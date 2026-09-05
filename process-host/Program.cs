@@ -185,8 +185,6 @@ internal static class Program
         elevation = (elevationValue ?? "standard").ToLowerInvariant();
         if (elevation != "standard" && elevation != "admin")
             throw new ArgumentException("Unsupported process elevation mode.");
-        if (elevation == "admin" && windowMode != "visible")
-            throw new ArgumentException("Admin elevation requires visible window mode.");
         errorFile = null;
         if (!String.IsNullOrWhiteSpace(errorFile64))
         {
