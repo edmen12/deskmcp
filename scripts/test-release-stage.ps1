@@ -33,6 +33,7 @@ $PreviousPort = $env:DESKTOP_MCP_PORT
 $PreviousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
 $PreviousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
 $PreviousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
+$PreviousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $SmokeInstanceNamespace = 'release-smoke-' + $Target + '-' + [Guid]::NewGuid().ToString('N')
 if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
 if (-not (Test-Path -LiteralPath $ProcessHostExe)) { throw 'Release-stage ProcessHost is missing.' }
@@ -40,7 +41,7 @@ if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missi
 $StageContractPath = Join-Path $StageRoot 'release-target.json'
 if (-not (Test-Path -LiteralPath $StageContractPath)) { throw 'Release-stage target contract is missing.' }
 $StageContract = Get-Content -LiteralPath $StageContractPath -Raw | ConvertFrom-Json
-if ([int]$StageContract.agentSafeIsolationContract -lt 1) { throw 'Release-stage predates the agent-safe isolation contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.agentSafeIsolationContract -lt 2) { throw 'Release-stage predates the tunnel-isolated agent-safe contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processJobObjectContract -lt 1) { throw 'Release-stage predates the owned-process Job Object contract; rebuild the stage before smoke testing.' }
 function Get-FreeLoopbackPort {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -104,11 +105,13 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $SmokeInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $SmokeStartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $SmokeTunnelProfile
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = '1'
     Write-Output 'SMOKE_SETTINGS=ISOLATED_TEMPORARY'
     Write-Output ('SMOKE_PORT=' + $SmokePort)
     Write-Output 'SMOKE_INSTANCE_NAMESPACE=ISOLATED'
     Write-Output 'SMOKE_STARTUP_LINK=ISOLATED'
     Write-Output 'SMOKE_TUNNEL_PROFILE=ISOLATED'
+    Write-Output 'SMOKE_TUNNEL_RUNTIME=DISABLED'
     $isolationProbe = Start-Process -FilePath $PanelExe -ArgumentList '--agent-safe-isolation-self-test' -WorkingDirectory $StageRoot -Wait -PassThru
     if ($isolationProbe.ExitCode -ne 0) { throw 'Release-stage Panel failed the agent-safe isolation self-test.' }
     Write-Output 'AGENT_SAFE_ISOLATION_CONTRACT=OK'
@@ -144,6 +147,9 @@ try {
     })
     if ($desktopCommanderProcess.Count -ne 1) { throw "Expected one Desktop Commander child for the smoke Gateway, found $($desktopCommanderProcess.Count)." }
     $OwnedStageNodePids = @([int]$gatewayProcess[0].ProcessId, [int]$desktopCommanderProcess[0].ProcessId)
+    $stageTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($StageRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
+    if ($stageTunnelCount -ne 0) { throw "Release-stage smoke started a tunnel-client despite tunnel isolation: count=$stageTunnelCount" }
+    Write-Output 'SMOKE_TUNNEL_PROCESS_COUNT=0'
     $clientEntry = (Join-Path $GatewayRoot 'node_modules\@modelcontextprotocol\client\dist\index.mjs').Replace('\','/')
     $smokeSource = @'
 import { pathToFileURL } from 'node:url';
@@ -192,6 +198,7 @@ try {
         $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $PreviousInstanceNamespace
         $env:DESKTOP_MCP_STARTUP_LINK_PATH = $PreviousStartupLinkPath
         $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $PreviousTunnelProfilePath
+        $env:DESKTOP_MCP_DISABLE_TUNNEL = $PreviousDisableTunnel
         if (Test-Path -LiteralPath $SmokeStateRoot) { Remove-Item -LiteralPath $SmokeStateRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }

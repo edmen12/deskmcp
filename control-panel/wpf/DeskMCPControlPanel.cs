@@ -51,6 +51,7 @@ internal sealed class PanelSettings
     public string workspace { get; set; }
     public string[] recentWorkspaces { get; set; }
     public bool autoStartTunnel { get; set; }
+    public bool? showAdminRequestDetails { get; set; }
     public string profile { get; set; }
     public string tunnelId { get; set; }
     public bool? onboardingCompleted { get; set; }
@@ -104,6 +105,7 @@ internal sealed partial class ControlPanelRuntime
     private int onboardingStep;
     private bool pageTransitioning;
     private bool autoStartTunnel;
+    private bool showAdminRequestDetails = true;
     private string tunnelId;
     private Process tunnelProcess;
     private int tunnelRetryIndex;
@@ -205,6 +207,13 @@ internal sealed partial class ControlPanelRuntime
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tunnel-client", "desktop-mcp.yaml");
     }
 
+    private static bool TunnelDisabledByEnvironment()
+    {
+        string raw = Environment.GetEnvironmentVariable("DESKTOP_MCP_DISABLE_TUNNEL");
+        return String.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
+               String.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static int RunAgentSafeIsolationSelfTest()
     {
         try
@@ -213,6 +222,8 @@ internal sealed partial class ControlPanelRuntime
             string expectedTunnelProfile = Environment.GetEnvironmentVariable("DESKTOP_MCP_TUNNEL_PROFILE_PATH");
             if (String.IsNullOrWhiteSpace(expectedStartup) || String.IsNullOrWhiteSpace(expectedTunnelProfile))
                 throw new InvalidOperationException("Agent-safe isolation overrides are not configured.");
+            if (!TunnelDisabledByEnvironment())
+                throw new InvalidOperationException("Tunnel isolation kill switch is not enabled.");
             if (!String.Equals(ResolveStartupLinkPath(), Path.GetFullPath(expectedStartup), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Startup shortcut isolation override was not honored.");
             if (!String.Equals(ResolveTunnelProfilePath(), Path.GetFullPath(expectedTunnelProfile), StringComparison.OrdinalIgnoreCase))
@@ -268,7 +279,7 @@ internal sealed partial class ControlPanelRuntime
         LoadSettings();
         InitializePendingUpdateVerification();
         CleanupStaleUpdateDownloads();
-        if (!IsValidTunnelId(tunnelId))
+        if (!TunnelDisabledByEnvironment() && !IsValidTunnelId(tunnelId))
         {
             string migratedTunnelId = TryLoadTunnelIdFromProfile();
             if (IsValidTunnelId(migratedTunnelId)) { tunnelId = migratedTunnelId; SaveSettings(); }
@@ -409,6 +420,7 @@ internal sealed partial class ControlPanelRuntime
 
     private string TryLoadTunnelIdFromProfile()
     {
+        if (TunnelDisabledByEnvironment()) return null;
         try
         {
             if (!File.Exists(tunnelProfilePath)) return null;
@@ -426,9 +438,10 @@ internal sealed partial class ControlPanelRuntime
 
     private void ConfigureTunnelProfile(string id)
     {
+        if (TunnelDisabledByEnvironment()) throw new InvalidOperationException("Tunnel operations are disabled for this isolated runtime.");
         if (!IsValidTunnelId(id)) throw new InvalidOperationException("Tunnel ID is invalid.");
         if (!File.Exists(tunnelClientPath)) throw new FileNotFoundException("tunnel-client.exe is not installed.", tunnelClientPath);
-        ProcessStartInfo psi = NewHiddenProcess(tunnelClientPath, "init --sample sample_mcp_remote_no_auth --profile desktop-mcp --tunnel-id " + id + " --mcp-server-url http://127.0.0.1:8765/mcp --force");
+        ProcessStartInfo psi = NewHiddenProcess(tunnelClientPath, "init --sample sample_mcp_remote_no_auth --profile desktop-mcp --tunnel-id " + id + " --mcp-server-url http://127.0.0.1:" + gatewayPort + "/mcp --force");
         Process p = Process.Start(psi);
         if (p == null) throw new InvalidOperationException("Could not initialize the Tunnel profile.");
         try
@@ -503,6 +516,7 @@ internal sealed partial class ControlPanelRuntime
         if (!String.IsNullOrWhiteSpace(settings.workspace) && Directory.Exists(settings.workspace)) currentWorkspace = settings.workspace;
         if (settings.recentWorkspaces != null) recentWorkspaces = settings.recentWorkspaces;
         autoStartTunnel = settings.autoStartTunnel;
+        showAdminRequestDetails = settings.showAdminRequestDetails ?? true;
         bool downgradePersistedFull = settings.profile == "full-control" || settings.profile == "fully-unlocked";
         persistentProfile = settings.profile == "workspace-write" ? "workspace-write" : "read-only";
         selectedProfile = persistentProfile;
@@ -527,6 +541,7 @@ internal sealed partial class ControlPanelRuntime
             settings.workspace = currentWorkspace;
             settings.recentWorkspaces = recentWorkspaces;
             settings.autoStartTunnel = autoStartTunnel;
+            settings.showAdminRequestDetails = showAdminRequestDetails;
             settings.profile = persistentProfile;
             settings.tunnelId = tunnelId;
             settings.onboardingCompleted = onboardingCompleted;
@@ -646,7 +661,7 @@ internal sealed partial class ControlPanelRuntime
             Find<TextBlock>("SettingsTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Button>("SettingsBackButton").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
             Find<Button>("SettingsBackButton").Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
-            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard", "UpdateCard", "UpdateCard" })
+            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "TunnelSettingsCard", "UpdateCard" })
                 Find<Border>(cardName).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
             Find<TextBlock>("WorkspaceLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("WorkspacePathText").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
@@ -656,6 +671,8 @@ internal sealed partial class ControlPanelRuntime
             Find<TextBlock>("ShortcutHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("StartupLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("StartupHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+            Find<TextBlock>("AdminRequestLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+            Find<TextBlock>("AdminRequestHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("TunnelSettingsLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("TunnelConfigStatus").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("UpdateLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
@@ -684,6 +701,7 @@ internal sealed partial class ControlPanelRuntime
             power.Background = (Brush)window.FindResource("BrandGradient");
             power.Foreground = Brushes.White;
             UpdateStartupUi();
+            UpdateAdminRequestUi();
             UpdateTunnelSettingsUi();
             SetProfileVisual(selectedProfile, false);
         }
@@ -756,6 +774,7 @@ internal sealed partial class ControlPanelRuntime
 
     private TunnelRuntimeStatus GetTunnelStatus()
     {
+        if (TunnelDisabledByEnvironment()) return new TunnelRuntimeStatus { Detail = "Tunnel disabled for isolated runtime." };
         bool readyOk = false;
         string readyBody = null;
         string statusJson = null;
@@ -1461,11 +1480,28 @@ internal sealed partial class ControlPanelRuntime
         }
     }
 
+    private void UpdateAdminRequestUi()
+    {
+        Button button = Find<Button>("AdminRequestDetailsButton");
+        if (button == null) return;
+        button.Content = showAdminRequestDetails ? "On" : "Off";
+        button.Background = BrushFrom(showAdminRequestDetails ? (isDarkTheme ? "#FF214A30" : "#FFEAF7ED") : (isDarkTheme ? "#FF343439" : "#FFEFEFF2"));
+        button.Foreground = BrushFrom(showAdminRequestDetails ? (isDarkTheme ? "#FFD9FFE3" : "#FF2E7D32") : (isDarkTheme ? "#FFA8A8AE" : "#FF71717A"));
+    }
+
+    private void ToggleAdminRequestDetails()
+    {
+        showAdminRequestDetails = !showAdminRequestDetails;
+        SaveSettings();
+        UpdateAdminRequestUi();
+        ShowToast(showAdminRequestDetails ? "Administrator request details enabled" : "Administrator request details disabled", false);
+    }
+
     private static readonly byte[] TunnelEntropy = Encoding.UTF8.GetBytes("DesktopMcpTunnelRuntimeKey:v1");
 
     private bool HasTunnelKey()
     {
-        return !tunnelCredentialInvalid && File.Exists(tunnelSecretPath);
+        return !TunnelDisabledByEnvironment() && !tunnelCredentialInvalid && File.Exists(tunnelSecretPath);
     }
 
     private void SaveTunnelKey(string key)
@@ -1694,6 +1730,7 @@ internal sealed partial class ControlPanelRuntime
 
     private void StartManagedTunnel()
     {
+        if (TunnelDisabledByEnvironment()) throw new InvalidOperationException("Tunnel operations are disabled for this isolated runtime.");
         if (!IsValidTunnelId(tunnelId) || !HasTunnelKey() || tunnelCredentialRejected || OwnedTunnelRunning()) return;
         if (!File.Exists(tunnelClientPath)) throw new FileNotFoundException("tunnel-client.exe not found.", tunnelClientPath);
         TunnelRuntimeStatus existing = GetTunnelStatus();
@@ -1842,6 +1879,8 @@ internal sealed partial class ControlPanelRuntime
         gatewayRetryIndex = 0;
         nextGatewayRetry = DateTime.MinValue;
 
+        if (TunnelDisabledByEnvironment()) return;
+
         if (tunnelStatus != null && tunnelStatus.CredentialRejected && OwnedTunnelRunning())
         {
             tunnelCredentialRejected = true;
@@ -1937,6 +1976,7 @@ internal sealed partial class ControlPanelRuntime
         WireButtonMotion(Find<Button>("ThemeDarkButton"), 1.006);
         WireButtonMotion(Find<Button>("ShortcutButton"), 1.012);
         WireButtonMotion(Find<Button>("StartupButton"), 1.012);
+        WireButtonMotion(Find<Button>("AdminRequestDetailsButton"), 1.012);
         WireButtonMotion(Find<Button>("TunnelAutoButton"), 1.012);
         WireButtonMotion(Find<Button>("TunnelConfigureButton"), 1.012);
         WireButtonMotion(Find<Button>("TunnelReconnectButton"), 1.012);
@@ -2320,6 +2360,7 @@ internal sealed partial class ControlPanelRuntime
         Find<Button>("ThemeDarkButton").Click += delegate { SetThemeMode("dark"); };
         Find<Button>("ShortcutButton").Click += delegate { EditShortcut(); };
         Find<Button>("StartupButton").Click += delegate { ToggleStartWithWindows(); };
+        Find<Button>("AdminRequestDetailsButton").Click += delegate { ToggleAdminRequestDetails(); };
         Find<Button>("TunnelAutoButton").Click += delegate { ToggleTunnelAutoStart(); };
         Find<Button>("TunnelConfigureButton").Click += delegate { ConfigureTunnel(); };
         Find<Button>("TunnelSetupCancelButton").Click += delegate { HideTunnelSetupOverlay(); };
@@ -2513,14 +2554,14 @@ internal sealed partial class ControlPanelRuntime
         ((Border)preview.FindName("LocalOnlyPill")).BorderBrush = BrushFrom(dark ? "#FF24532F" : "#142E7D32");
         ((TextBlock)preview.FindName("LocalOnlyText")).Foreground = BrushFrom(dark ? "#FF8FE6A8" : "#FF2E7D32");
         ((TextBlock)preview.FindName("SettingsTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "TunnelSettingsLabel", "TunnelIdValue", "UpdateLabel", "UpdateLabel" })
+        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "AdminRequestLabel", "TunnelSettingsLabel", "TunnelIdValue", "UpdateLabel" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "TunnelConfigStatus", "UpdateStatus", "UpdateStatus" })
+        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "AdminRequestHint", "TunnelConfigStatus", "UpdateStatus" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
         ((Border)preview.FindName("ThemeShell")).Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
         ((Border)preview.FindName("ThemeIndicator")).Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
 
-        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "TunnelSettingsCard", "UpdateCard" })
+        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "TunnelSettingsCard", "UpdateCard" })
             ((Border)preview.FindName(cardName)).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
 
         foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
@@ -2532,6 +2573,9 @@ internal sealed partial class ControlPanelRuntime
         Button startup = (Button)preview.FindName("StartupButton");
         startup.Background = BrushFrom(dark ? "#FF214A30" : "#FFEAF7ED");
         startup.Foreground = BrushFrom(dark ? "#FFD9FFE3" : "#FF2E7D32");
+        Button adminDetails = (Button)preview.FindName("AdminRequestDetailsButton");
+        adminDetails.Background = BrushFrom(dark ? "#FF214A30" : "#FFEAF7ED");
+        adminDetails.Foreground = BrushFrom(dark ? "#FFD9FFE3" : "#FF2E7D32");
         Button tunnelAuto = (Button)preview.FindName("TunnelAutoButton");
         tunnelAuto.Background = BrushFrom(dark ? "#FF343439" : "#FFEFEFF2");
         tunnelAuto.Foreground = BrushFrom(dark ? "#FFA8A8AE" : "#FF71717A");

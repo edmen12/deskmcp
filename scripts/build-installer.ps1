@@ -152,7 +152,7 @@ Require (Test-Path -LiteralPath $UninstallerExe) 'Uninstaller build output is mi
 Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskMCPUninstaller.exe') -Force
 Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
-Require ([int]$targetContract.agentSafeIsolationContract -ge 1) 'Release stage predates the agent-safe isolation contract; rebuild it before packaging.'
+Require ([int]$targetContract.agentSafeIsolationContract -ge 2) 'Release stage predates the tunnel-isolated agent-safe contract; rebuild it before packaging.'
 Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
@@ -330,6 +330,7 @@ $previousPort = $env:DESKTOP_MCP_PORT
 $previousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
 $previousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
 $previousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
+$previousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $installerSmokePort = Get-FreeLoopbackPort
 $installerSmokeBaseUrl = 'http://127.0.0.1:' + $installerSmokePort
 $installerSmokeInstanceNamespace = 'installer-smoke-' + $Target + '-' + [guid]::NewGuid().ToString('N')
@@ -345,11 +346,13 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $installerSmokeInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $installerSmokeStartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $installerSmokeTunnelProfile
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = '1'
     Write-Output 'INSTALLER_SMOKE_SETTINGS=ISOLATED_TEMPORARY'
     Write-Output ('INSTALLER_SMOKE_PORT=' + $installerSmokePort)
     Write-Output 'INSTALLER_SMOKE_INSTANCE_NAMESPACE=ISOLATED'
     Write-Output 'INSTALLER_SMOKE_STARTUP_LINK=ISOLATED'
     Write-Output 'INSTALLER_SMOKE_TUNNEL_PROFILE=ISOLATED'
+    Write-Output 'INSTALLER_SMOKE_TUNNEL_RUNTIME=DISABLED'
 
     Write-Output 'STEP=installer-smoke-runtime'
     $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
@@ -371,6 +374,9 @@ try {
     Require ($null -ne $health) 'Installed Gateway did not become healthy within 45 seconds.'
     Require ($health.policy.profile -eq 'read-only') "Unexpected installed profile: $($health.policy.profile)"
     Require ($health.version -eq $version) "Unexpected installed Gateway version: $($health.version); expected $version"
+    $installerSmokeTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($SmokeRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
+    Require ($installerSmokeTunnelCount -eq 0) "Installer smoke started a tunnel-client despite tunnel isolation: count=$installerSmokeTunnelCount"
+    Write-Output 'INSTALLER_SMOKE_TUNNEL_PROCESS_COUNT=0'
 
     Write-Output 'STEP=installer-smoke-uninstall'
     $installedUninstaller = Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
@@ -387,6 +393,7 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $previousInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $previousStartupLinkPath
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $previousTunnelProfilePath
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = $previousDisableTunnel
     if (Test-Path -LiteralPath $installerSmokeStateRoot) { try { [IO.Directory]::Delete($installerSmokeStateRoot, $true) } catch { } }
 }
 $realStartupExistsAfter = Test-Path -LiteralPath $realStartupLink

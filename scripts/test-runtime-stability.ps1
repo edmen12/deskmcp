@@ -10,6 +10,10 @@ foreach ($value in @($GatewaySpacedLoops,$GatewayStormLoops,$DesktopCommanderLoo
 
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
+. (Join-Path $PSScriptRoot 'release-targets.ps1')
+$Target = if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'win-arm64'}else{'win-x64'}
+$TargetConfig = Get-DeskMcpReleaseTarget $Target
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $RunRoot = Join-Path $RuntimeRoot ('agent-safe-stability\' + [guid]::NewGuid().ToString('N'))
 $PrivateSourceRoot = Join-Path $RunRoot 'source'
 $PrivateWpfRoot = Join-Path $PrivateSourceRoot 'control-panel\wpf'
@@ -25,11 +29,12 @@ $StartupLink = Join-Path $StartupDir 'DeskMCP Control Panel.lnk'
 $TunnelProfileDir = Join-Path $RunRoot 'tunnel-profile'
 $TunnelProfile = Join-Path $TunnelProfileDir 'desktop-mcp.yaml'
 $ProbeScript = Join-Path $RunRoot 'mcp-probe.mjs'
-$NodeExe = Join-Path $ProjectRoot 'runtime\downloads\node-v24.19.0\node-v24.19.0-win-x64\node.exe'
-$DotnetExe = Join-Path $ProjectRoot 'runtime\dotnet-sdk\dotnet.exe'
+$NodeExe = Join-Path $RuntimeRoot ('downloads\node-' + $Target + '\' + $TargetConfig.NodeDirectory + '\node.exe')
+$localDotnet = Join-Path $RuntimeRoot 'dotnet-sdk\dotnet.exe'
+$DotnetExe = if(Test-Path -LiteralPath $localDotnet){$localDotnet}else{(Get-Command dotnet.exe -ErrorAction Stop).Source}
 $TscCmd = Join-Path $ProjectRoot 'node_modules\.bin\tsc.cmd'
 $DcEntry = Join-Path $ProjectRoot 'node_modules\@wonderwhy-er\desktop-commander\dist\index.js'
-$TunnelExe = Join-Path $ProjectRoot 'tools\tunnel-client\v0.0.13\bin\tunnel-client.exe'
+$TunnelExe = Join-Path $StageRoot ('tunnel-client\' + $TargetConfig.TunnelVersion + '\bin\tunnel-client.exe')
 $SourceNodeModules = Join-Path $ProjectRoot 'node_modules'
 $panel = $null
 
@@ -107,7 +112,7 @@ $old = @{
     Data=$env:DESKTOP_MCP_DATA_ROOT; Settings=$env:DESKTOP_MCP_SETTINGS_DIR; Port=$env:DESKTOP_MCP_PORT;
     Namespace=$env:DESKTOP_MCP_INSTANCE_NAMESPACE; Gateway=$env:DESKTOP_MCP_GATEWAY_ROOT;
     Node=$env:DESKTOP_MCP_NODE_PATH; Dc=$env:DESKTOP_COMMANDER_ENTRY; Tunnel=$env:DESKTOP_MCP_TUNNEL_PATH;
-    Startup=$env:DESKTOP_MCP_STARTUP_LINK_PATH; TunnelProfile=$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
+    Startup=$env:DESKTOP_MCP_STARTUP_LINK_PATH; TunnelProfile=$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH; DisableTunnel=$env:DESKTOP_MCP_DISABLE_TUNNEL
 }
 
 try {
@@ -153,6 +158,7 @@ try {
     $env:DESKTOP_MCP_TUNNEL_PATH=$TunnelExe
     $env:DESKTOP_MCP_STARTUP_LINK_PATH=$StartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH=$TunnelProfile
+    $env:DESKTOP_MCP_DISABLE_TUNNEL='1'
 
     $panelExe = Join-Path $PanelRoot 'DeskMCP.exe'
     $isolationProbe = Start-Process -FilePath $panelExe -ArgumentList '--agent-safe-isolation-self-test' -WorkingDirectory $PanelRoot -Wait -PassThru
@@ -163,6 +169,9 @@ try {
     $gateway=$initial[1]; $dc=$initial[2]
     Require ((ProbeTool $port) -eq 0) 'Initial private MCP tool probe failed.'
     Write-Output ("STABILITY_INITIAL=OK panel={0} gateway={1} dc={2} port={3}" -f $panel.Id,$gateway.ProcessId,$dc.ProcessId,$port)
+    $privateTunnelCount = @(Get-CimInstance Win32_Process -Filter "Name='tunnel-client.exe'" -ErrorAction SilentlyContinue | Where-Object { [int]$_.ParentProcessId -eq [int]$panel.Id }).Count
+    Require ($privateTunnelCount -eq 0) "Private stability runtime started a tunnel-client despite tunnel isolation: count=$privateTunnelCount"
+    Write-Output 'AGENT_SAFE_TUNNEL_PROCESS_COUNT=0'
 
     for($i=1;$i -le $GatewaySpacedLoops;$i++) {
         $oldGatewayPid=[int]$gateway.ProcessId
@@ -221,7 +230,7 @@ finally {
     } finally {
         $env:DESKTOP_MCP_DATA_ROOT=$old.Data;$env:DESKTOP_MCP_SETTINGS_DIR=$old.Settings;$env:DESKTOP_MCP_PORT=$old.Port
         $env:DESKTOP_MCP_INSTANCE_NAMESPACE=$old.Namespace;$env:DESKTOP_MCP_GATEWAY_ROOT=$old.Gateway;$env:DESKTOP_MCP_NODE_PATH=$old.Node
-        $env:DESKTOP_COMMANDER_ENTRY=$old.Dc;$env:DESKTOP_MCP_TUNNEL_PATH=$old.Tunnel;$env:DESKTOP_MCP_STARTUP_LINK_PATH=$old.Startup;$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH=$old.TunnelProfile
+        $env:DESKTOP_COMMANDER_ENTRY=$old.Dc;$env:DESKTOP_MCP_TUNNEL_PATH=$old.Tunnel;$env:DESKTOP_MCP_STARTUP_LINK_PATH=$old.Startup;$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH=$old.TunnelProfile;$env:DESKTOP_MCP_DISABLE_TUNNEL=$old.DisableTunnel
         try{if(Test-Path -LiteralPath $RunRoot){Remove-Item -LiteralPath $RunRoot -Recurse -Force}}catch{}
     }
 }

@@ -188,7 +188,7 @@ Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\@emn
 $noticeGenerator = Join-Path $ProjectRoot 'scripts\generate-third-party-notices.mjs'
 Require (Test-Path -LiteralPath $noticeGenerator) 'Third-party notice generator is missing.'
 Invoke-Native $hostNode @($noticeGenerator,$ProjectRoot,$StageRoot,$Target,$TargetConfig.NodeVersion)
-$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; agentSafeIsolationContract=1; processJobObjectContract=1; panelPeMachine=('0x{0:X4}' -f $panelMachine); processHostPeMachine=('0x{0:X4}' -f $processHostMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine) }
+$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; agentSafeIsolationContract=2; processJobObjectContract=1; panelPeMachine=('0x{0:X4}' -f $panelMachine); processHostPeMachine=('0x{0:X4}' -f $processHostMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine) }
 $stageInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Encoding UTF8
 $files = Get-ChildItem -LiteralPath $StageRoot -Recurse -File
 $bytes = ($files | Measure-Object Length -Sum).Sum

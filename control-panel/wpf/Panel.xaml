@@ -330,6 +330,16 @@
                   <Button Grid.Column="1" x:Name="StartupButton" Style="{StaticResource MiniButton}" Content="On" Padding="14,7"/>
                 </Grid>
               </Border>
+              <Border x:Name="AdminRequestCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock x:Name="AdminRequestLabel" Text="Administrator requests" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="AdminRequestHint" Text="Show the real target before Windows UAC opens" Foreground="#8E8E93" FontSize="10" Margin="0,2,10,0" TextWrapping="Wrap" MaxWidth="240"/>
+                  </StackPanel>
+                  <Button Grid.Column="1" x:Name="AdminRequestDetailsButton" Style="{StaticResource MiniButton}" Content="On" Padding="14,7"/>
+                </Grid>
+              </Border>
               <Border x:Name="TunnelSettingsCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>
                   <Grid>

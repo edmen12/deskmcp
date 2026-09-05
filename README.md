@@ -98,9 +98,9 @@ desktop_terminate_process
 
 The schemas stay discoverable across profiles so the remote connection remains stable. **Discoverable does not mean permitted**: every invocation is still checked by the local DeskMCP policy before it can execute.
 
-On Windows, `desktop_start_process` defaults to `window_mode: "hidden"` for background agent work. Use `window_mode: "visible"` to open a real user-visible CMD or PowerShell console. Visible sessions take interactive keyboard input from their Windows console instead of `desktop_interact_process`.
+On Windows, `window_mode` controls only whether the CMD/PowerShell console itself is hidden or visible. It is independent from privilege elevation. `window_mode: "hidden"` remains the default for background agent work; use `window_mode: "visible"` only when the local user should see and interact with the console window. Visible sessions take interactive keyboard input from their Windows console instead of `desktop_interact_process`.
 
-For an administrator console, set `window_mode: "visible"` with `elevation: "admin"`. DeskMCP uses the Windows `runas` broker, so the normal UAC secure-desktop prompt must still be approved by the local user. UAC cancellation or denial is returned as an error; DeskMCP does not bypass UAC.
+`elevation: "admin"` uses the Windows `runas` broker and always relies on the normal local UAC approval flow. It is valid with either window mode: `hidden + admin` shows the standard UAC prompt and, after approval, runs the administrator process without an extra CMD/PowerShell window; `visible + admin` shows UAC and then opens the visible administrator console. UAC cancellation or denial is returned as an error; DeskMCP does not bypass UAC.
 
 ## Security model
 

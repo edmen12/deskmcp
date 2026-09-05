@@ -52,6 +52,7 @@ $PreviousPort = $env:DESKTOP_MCP_PORT
 $PreviousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
 $PreviousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
 $PreviousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
+$PreviousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $PreviousInstallerMutexNamespace = $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE
 $TestPort = Get-FreeLoopbackPort
 $TestBaseUrl = 'http://127.0.0.1:' + $TestPort
@@ -71,9 +72,11 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = 'installer-release-' + $RunId
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $StartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $TunnelProfile
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = '1'
     $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = 'installer-release-' + $RunId
     Write-Output 'INSTALLER_RELEASE_STATE=ISOLATED'
     Write-Output ('INSTALLER_RELEASE_PORT=' + $TestPort)
+    Write-Output 'INSTALLER_RELEASE_TUNNEL_RUNTIME=DISABLED'
 
     Write-Output 'TEST=install'
     $p=Start-Process -FilePath $Setup -ArgumentList @('--install-test',('"'+$SmokeRoot+'"')) -Wait -PassThru
@@ -89,7 +92,7 @@ try {
     $installedContractPath = Join-Path $SmokeRoot 'release-target.json'
     Require (Test-Path -LiteralPath $installedContractPath) 'Installed agent-safe release contract is missing.'
     $installedContract = Get-Content -LiteralPath $installedContractPath -Raw | ConvertFrom-Json
-    Require ([int]$installedContract.agentSafeIsolationContract -ge 1) 'Setup predates the agent-safe isolation contract; refusing to start its runtime or uninstaller.'
+    Require ([int]$installedContract.agentSafeIsolationContract -ge 2) 'Setup predates the tunnel-isolated agent-safe contract; refusing to start its runtime or uninstaller.'
     Write-Output 'INSTALLER_AGENT_SAFE_ISOLATION_CONTRACT=OK'
 
     $rollbackMarker=Join-Path $SmokeRoot 'ROLLBACK_MARKER.txt'
@@ -136,6 +139,9 @@ try {
     $nodePath=[IO.Path]::GetFullPath((Join-Path $SmokeRoot 'node\node.exe'))
     $nodes=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
     Require ($nodes.Count -eq 2) "Installed node count=$($nodes.Count)"
+    $runtimeTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($SmokeRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
+    Require ($runtimeTunnelCount -eq 0) "Installer release runtime started a tunnel-client despite tunnel isolation: count=$runtimeTunnelCount"
+    Write-Output 'INSTALLER_RELEASE_TUNNEL_PROCESS_COUNT=0'
 
     Write-Output 'TEST=uninstall'
     $uninstaller=Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
@@ -153,6 +159,7 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $PreviousInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $PreviousStartupLinkPath
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $PreviousTunnelProfilePath
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = $PreviousDisableTunnel
     $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = $PreviousInstallerMutexNamespace
     if (Test-Path -LiteralPath $StateRoot) { Remove-Item -LiteralPath $StateRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $SmokeParent) { Remove-Item -LiteralPath $SmokeParent -Recurse -Force -ErrorAction SilentlyContinue }
