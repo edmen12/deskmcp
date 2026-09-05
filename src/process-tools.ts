@@ -1,7 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
-import type { DesktopCommanderBridge, DesktopCommanderToolResult } from './desktop-commander-bridge.js';
+import type {
+  DesktopCommanderBridge,
+  DesktopCommanderToolResult,
+  ProcessShell
+} from './desktop-commander-bridge.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import {
   extractListedProcessPids,
@@ -64,6 +68,21 @@ function requireFullControl(policy: DesktopPolicy): void {
   }
 }
 
+function requireSupportedShell(shell: ProcessShell): void {
+  const windowsShells: ReadonlySet<ProcessShell> = new Set([
+    'auto', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe'
+  ]);
+  const posixShells: ReadonlySet<ProcessShell> = new Set([
+    'auto', 'bash', 'zsh', 'sh', 'fish'
+  ]);
+  const supported = process.platform === 'win32' ? windowsShells : posixShells;
+  if (!supported.has(shell)) {
+    throw new PolicyDeniedError(
+      `Shell '${shell}' is not supported on ${process.platform === 'win32' ? 'Windows' : 'this POSIX platform'}.`
+    );
+  }
+}
+
 async function reconcileActiveProcessSessions(
   bridge: DesktopCommanderBridge,
   sessions: ProcessSessionRegistry
@@ -89,10 +108,10 @@ async function terminateVerifiedOwnedProcess(
   const terminated = await bridge.forceTerminateProcess(pid);
   if (!terminated.isError) return terminated;
 
-  // force_terminate can race a process exiting naturally. If Desktop Commander
+  // Termination can race a process exiting naturally. If Desktop Commander
   // confirms the owned root is gone after the attempt, termination is complete.
-  // Descendants are owned by DeskMCP.ProcessHost's Windows Job Object and are
-  // killed by the kernel when that host/root session closes.
+  // Descendants use an OS-native ownership boundary: Windows Job Objects on
+  // Windows and a dedicated POSIX process group on macOS.
   const after = await bridge.listProcessSessions();
   if (!after.isError) {
     const afterPids = extractListedProcessPids(after.text);
@@ -135,13 +154,24 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in full-control or fully-unlocked mode and return an opaque Gateway-owned session ID instead of a Windows PID.',
+      description: 'Start an owned terminal process in full-control or fully-unlocked mode and return an opaque Gateway-owned session ID instead of an OS PID. Prefer shell=auto unless a specific shell is required.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
-        shell: z.enum(['powershell.exe', 'cmd.exe']).optional(),
-        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden'),
-        elevation: z.enum(['standard', 'admin']).optional().default('standard')
+        shell: z.enum([
+          'auto',
+          'cmd', 'cmd.exe',
+          'powershell', 'powershell.exe',
+          'bash', 'zsh', 'sh', 'fish'
+        ]).optional().default('auto').describe(
+          'Cross-platform shell selector. Use auto by default. Windows supports cmd/powershell aliases; macOS/POSIX supports bash/zsh/sh/fish.'
+        ),
+        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden').describe(
+          'Process window mode. visible is currently supported on Windows only.'
+        ),
+        elevation: z.enum(['standard', 'admin']).optional().default('standard').describe(
+          'Privilege mode. admin is currently supported on Windows only and requires window_mode=visible.'
+        )
       }),
       annotations: {
         readOnlyHint: false,
@@ -158,6 +188,7 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        requireSupportedShell(shell);
         if (sessions.atCapacity()) {
           await reconcileActiveProcessSessions(bridge, sessions);
         }

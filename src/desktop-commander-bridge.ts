@@ -30,6 +30,59 @@ export interface DesktopCommanderToolResult {
   readonly isError: boolean;
 }
 
+export type ProcessShell =
+  | 'auto'
+  | 'cmd'
+  | 'cmd.exe'
+  | 'powershell'
+  | 'powershell.exe'
+  | 'bash'
+  | 'zsh'
+  | 'sh'
+  | 'fish';
+
+type WindowsProcessShell = 'cmd.exe' | 'powershell.exe';
+type PosixProcessShell = 'auto' | 'bash' | 'zsh' | 'sh' | 'fish';
+
+export function buildDarwinPath(
+  inheritedPath = '',
+  home = process.env.HOME ?? ''
+): string {
+  const delimiter = ':';
+  const preferred = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    ...(home ? [
+      path.posix.join(home, '.local', 'bin'),
+      path.posix.join(home, 'bin'),
+      path.posix.join(home, '.cargo', 'bin'),
+      path.posix.join(home, '.bun', 'bin')
+    ] : []),
+    ...inheritedPath.split(delimiter),
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin'
+  ].filter(Boolean);
+  return [...new Set(preferred)].join(delimiter);
+}
+
+export function buildDesktopCommanderEnvironment(
+  baseEnvironment: Record<string, string> = getDefaultEnvironment(),
+  platform = process.platform
+): Record<string, string> {
+  if (platform !== 'darwin') return { ...baseEnvironment };
+  const environment = { ...baseEnvironment };
+  environment.PATH = buildDarwinPath(
+    environment.PATH ?? process.env.PATH ?? '',
+    environment.HOME ?? process.env.HOME ?? ''
+  );
+  if (!environment.SHELL) environment.SHELL = process.env.SHELL ?? '/bin/zsh';
+  return environment;
+}
+
 const installedDesktopCommanderEntry = path.join(
   PROJECT_ROOT, 'node_modules', '@wonderwhy-er',
   'desktop-commander', 'dist', 'index.js'
@@ -46,6 +99,63 @@ const defaultProcessHostEntry = path.basename(PROJECT_ROOT).toLowerCase() === 'g
       'DeskMCP.ProcessHost.exe'
     );
 export const DEFAULT_PROCESS_HOST_ENTRY = defaultProcessHostEntry;
+
+const defaultPosixProcessHostEntry = path.basename(PROJECT_ROOT).toLowerCase() === 'gateway'
+  ? path.resolve(PROJECT_ROOT, '..', 'process-host', 'bin', 'DeskMCPProcessHost')
+  : path.join(
+      PROJECT_ROOT,
+      'runtime',
+      'process-host',
+      process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64',
+      'DeskMCPProcessHost'
+    );
+export const DEFAULT_POSIX_PROCESS_HOST_ENTRY = defaultPosixProcessHostEntry;
+
+function normalizeWindowsShell(shell: ProcessShell): WindowsProcessShell {
+  switch (shell) {
+    case 'auto':
+    case 'cmd':
+    case 'cmd.exe':
+      return 'cmd.exe';
+    case 'powershell':
+    case 'powershell.exe':
+      return 'powershell.exe';
+    default:
+      throw new Error(`Shell '${shell}' is not supported by the Windows ProcessHost.`);
+  }
+}
+
+function normalizePosixShell(shell: ProcessShell): PosixProcessShell {
+  switch (shell) {
+    case 'auto':
+    case 'bash':
+    case 'zsh':
+    case 'sh':
+    case 'fish':
+      return shell;
+    default:
+      throw new Error(`Shell '${shell}' is not supported on macOS.`);
+  }
+}
+
+function posixProcessHostShellEntry(
+  processHostEntry: string,
+  shell: PosixProcessShell
+): string {
+  return `${processHostEntry}-${shell}`;
+}
+
+function shellDisplayName(shell: PosixProcessShell): string {
+  return shell === 'auto' ? 'system shell' : shell;
+}
+
+function isMissingProcess(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ESRCH';
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function buildProcessHostCommand(
   processHostEntry: string,
@@ -75,7 +185,9 @@ export class DesktopCommanderBridge {
     readonly entry = process.env.DESKTOP_COMMANDER_ENTRY
       ?? DEFAULT_DESKTOP_COMMANDER_ENTRY,
     readonly processHostEntry = process.env.DESKTOP_MCP_PROCESS_HOST
-      ?? DEFAULT_PROCESS_HOST_ENTRY
+      ?? DEFAULT_PROCESS_HOST_ENTRY,
+    readonly posixProcessHostEntry = process.env.DESKTOP_MCP_POSIX_PROCESS_HOST
+      ?? DEFAULT_POSIX_PROCESS_HOST_ENTRY
   ) {}
 
   private invalidateConnection(
@@ -113,7 +225,7 @@ export class DesktopCommanderBridge {
       cwd: path.dirname(this.entry),
       stderr: 'pipe',
       env: {
-        ...getDefaultEnvironment(),
+        ...buildDesktopCommanderEnvironment(),
         DC_REMOTE_DEVICE: 'true'
       }
     });
@@ -276,32 +388,48 @@ export class DesktopCommanderBridge {
   async startProcess(
     command: string,
     timeoutMs: number,
-    shell?: 'powershell.exe' | 'cmd.exe',
+    shell: ProcessShell = 'auto',
     windowMode: 'hidden' | 'visible' = 'hidden',
     elevation: 'standard' | 'admin' = 'standard'
   ): Promise<DesktopCommanderToolResult> {
-    if (process.platform !== 'win32') {
-      return this.callTextTool('start_process', {
+    if (process.platform === 'win32') {
+      await access(this.processHostEntry);
+      const ownedCommand = buildProcessHostCommand(
+        this.processHostEntry,
+        normalizeWindowsShell(shell),
         command,
+        windowMode,
+        elevation
+      );
+      return this.callTextTool('start_process', {
+        command: ownedCommand,
         timeout_ms: timeoutMs,
-        ...(shell ? { shell } : {}),
-        ...(windowMode === 'visible' ? { window_mode: windowMode } : {}),
-        ...(elevation === 'admin' ? { elevation } : {})
+        shell: 'cmd.exe'
       });
     }
 
-    await access(this.processHostEntry);
-    const ownedCommand = buildProcessHostCommand(
-      this.processHostEntry,
-      shell ?? 'cmd.exe',
-      command,
-      windowMode,
-      elevation
-    );
+    const posixShell = normalizePosixShell(shell);
+    if (process.platform === 'darwin') {
+      if (windowMode !== 'hidden' || elevation !== 'standard') {
+        throw new Error('Visible console and privilege elevation modes are not available on macOS yet.');
+      }
+      const shellEntry = posixProcessHostShellEntry(this.posixProcessHostEntry, posixShell);
+      await access(shellEntry);
+      const result = await this.callTextTool('start_process', {
+        command,
+        timeout_ms: timeoutMs,
+        shell: shellEntry
+      });
+      return {
+        ...result,
+        text: result.text.split(shellEntry).join(shellDisplayName(posixShell))
+      };
+    }
+
     return this.callTextTool('start_process', {
-      command: ownedCommand,
+      command,
       timeout_ms: timeoutMs,
-      shell: 'cmd.exe'
+      ...(posixShell === 'auto' ? {} : { shell: posixShell })
     });
   }
 
@@ -338,7 +466,37 @@ export class DesktopCommanderBridge {
   }
 
   async forceTerminateProcess(pid: number): Promise<DesktopCommanderToolResult> {
-    return this.callTextTool('force_terminate', { pid });
+    if (process.platform !== 'darwin') {
+      return this.callTextTool('force_terminate', { pid });
+    }
+
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch (error) {
+      if (isMissingProcess(error)) {
+        return { text: 'Owned macOS process group already exited.', isError: false };
+      }
+      throw error;
+    }
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await delay(50);
+      try {
+        process.kill(-pid, 0);
+      } catch (error) {
+        if (isMissingProcess(error)) {
+          return { text: 'Owned macOS process group terminated.', isError: false };
+        }
+        throw error;
+      }
+    }
+
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+    return { text: 'Owned macOS process group force-terminated.', isError: false };
   }
 
   async close(): Promise<void> {

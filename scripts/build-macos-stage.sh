@@ -58,7 +58,7 @@ verified_download() {
   echo "$sha  $path" | shasum -a 256 -c -
 }
 rm -rf "$STAGE"
-mkdir -p "$CONTENTS/MacOS" "$RESOURCES/node/bin" "$RESOURCES/tunnel-client/bin" "$RESOURCES/gateway"
+mkdir -p "$CONTENTS/MacOS" "$RESOURCES/node/bin" "$RESOURCES/tunnel-client/bin" "$RESOURCES/gateway" "$RESOURCES/process-host/bin"
 
 swift test -c release --package-path control-panel/macos
 swift build -c release --package-path control-panel/macos
@@ -66,6 +66,9 @@ SWIFT_BIN="$(swift build -c release --package-path control-panel/macos --show-bi
 cp "$SWIFT_BIN" "$CONTENTS/MacOS/DeskMCP"
 chmod +x "$CONTENTS/MacOS/DeskMCP"
 file "$CONTENTS/MacOS/DeskMCP" | grep -q 'arm64'
+
+bash scripts/build-macos-process-host.sh "$RESOURCES/process-host/bin/DeskMCPProcessHost"
+file "$RESOURCES/process-host/bin/DeskMCPProcessHost" | grep -q 'arm64'
 
 verified_download "$NODE_URL" "$DOWNLOADS/$NODE_ARCHIVE" "$NODE_SHA"
 NODE_EXTRACT="$RUNTIME/downloads/node-darwin-arm64"

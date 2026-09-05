@@ -504,6 +504,12 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       const startTool = fullControlTools.tools.find(tool => tool.name === 'desktop_start_process');
       assert.ok(startTool);
       const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[] }> }).properties;
+      assert.deepEqual(startProperties?.shell?.enum, [
+        'auto',
+        'cmd', 'cmd.exe',
+        'powershell', 'powershell.exe',
+        'bash', 'zsh', 'sh', 'fish'
+      ]);
       assert.deepEqual(startProperties?.window_mode?.enum, ['hidden', 'visible']);
       assert.deepEqual(startProperties?.elevation?.enum, ['standard', 'admin']);
 
@@ -515,6 +521,16 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
         assert.equal(invalidAdminHidden.isError, true);
         assert.match(JSON.stringify(invalidAdminHidden.content), /requires window_mode=visible/);
       }
+
+      const invalidShell = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: {
+          command: 'echo SHOULD_NOT_RUN',
+          shell: process.platform === 'win32' ? 'zsh' : 'cmd'
+        }
+      });
+      assert.equal(invalidShell.isError, true);
+      assert.match(JSON.stringify(invalidShell.content), /Shell.*not supported/i);
 
       const processCommand = 'node -i';
       const started = await fullControlClient.callTool({

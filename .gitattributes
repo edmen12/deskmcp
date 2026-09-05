@@ -4,6 +4,8 @@
 *.json text eol=lf
 *.ts text eol=lf
 *.mjs text eol=lf
+*.sh text eol=lf
+*.c text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 .editorconfig text eol=lf
