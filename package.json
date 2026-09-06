@@ -1,6 +1,6 @@
 {
   "name": "deskmcp-gateway",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "DeskMCP — open-source local-first desktop bridge for ChatGPT",
   "license": "Apache-2.0",
   "repository": {
@@ -15,7 +15,7 @@
   "main": "dist/src/index.js",
   "scripts": {
     "test": "node scripts/prepare-tests.mjs && npm run build && node --test dist/tests/*.test.js",
-    "build": "node scripts/check-version-consistency.mjs && tsc -p tsconfig.json",
+    "build": "node scripts/check-version-consistency.mjs && node scripts/clean-dist.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/src/index.js",
     "stop": "node dist/src/stop.js"

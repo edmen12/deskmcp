@@ -15,8 +15,8 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("DeskMCP Setup")]
 [assembly: AssemblyProduct("DeskMCP")]
-[assembly: AssemblyVersion("0.9.4.0")]
-[assembly: AssemblyFileVersion("0.9.4.0")]
+[assembly: AssemblyVersion("0.9.5.0")]
+[assembly: AssemblyFileVersion("0.9.5.0")]
 
 internal sealed class InstallOptions
 {
@@ -30,7 +30,7 @@ internal sealed class InstallOptions
 
 internal static class InstallerEngine
 {
-    public const string Version = "0.9.4";
+    public const string Version = "0.9.5";
     private const string ProductKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DesktopMCP";
     private const string PayloadResource = "DesktopMCP.Payload.zip";
     private const string HashResource = "DesktopMCP.Payload.sha256";
@@ -793,6 +793,21 @@ internal static class InstallerProgram
                 {
                     try { InstallerEngine.RecoverInterruptedInstall(Path.GetFullPath(args[1])); return 0; }
                     catch (Exception ex) { WriteTestFailure("RECOVER_TEST_ERROR", ex); return 12; }
+                }
+                if (args.Length == 1 && args[0] == "--install-current-user")
+                {
+                    try
+                    {
+                        InstallOptions unattended = new InstallOptions();
+                        unattended.InstallDir = InstallerEngine.DefaultInstallDir();
+                        unattended.AutoStart = InstallerEngine.DefaultAutoStart();
+                        unattended.RegisterUninstall = true;
+                        unattended.CreateShortcuts = true;
+                        unattended.LaunchAfterInstall = true;
+                        InstallerEngine.Install(unattended, delegate { });
+                        return 0;
+                    }
+                    catch (Exception ex) { WriteTestFailure("INSTALL_CURRENT_USER_ERROR", ex); return 14; }
                 }
                 if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup"))
                 {

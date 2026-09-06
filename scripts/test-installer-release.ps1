@@ -52,6 +52,7 @@ $PreviousPort = $env:DESKTOP_MCP_PORT
 $PreviousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
 $PreviousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
 $PreviousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
+$PreviousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $PreviousInstallerMutexNamespace = $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE
 $TestPort = Get-FreeLoopbackPort
 $TestBaseUrl = 'http://127.0.0.1:' + $TestPort
@@ -71,9 +72,11 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = 'installer-release-' + $RunId
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $StartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $TunnelProfile
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = '1'
     $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = 'installer-release-' + $RunId
     Write-Output 'INSTALLER_RELEASE_STATE=ISOLATED'
     Write-Output ('INSTALLER_RELEASE_PORT=' + $TestPort)
+    Write-Output 'INSTALLER_RELEASE_TUNNEL_RUNTIME=DISABLED'
 
     Write-Output 'TEST=install'
     $p=Start-Process -FilePath $Setup -ArgumentList @('--install-test',('"'+$SmokeRoot+'"')) -Wait -PassThru
@@ -86,11 +89,20 @@ try {
     Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-packages.csv')) 'Production Node license inventory missing.'
     Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) '.NET distribution license missing.'
     Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) '.NET third-party notices missing.'
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\winapp.exe')) 'Installed WinApp CLI executable missing.'
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\libSkiaSharp.dll')) 'Installed WinApp CLI SkiaSharp runtime missing.'
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\SHA256SUMS.txt')) 'Installed WinApp checksum manifest missing.'
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt')) 'Installed WinApp upstream provenance missing.'
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\VERSION.txt')) 'Installed WinApp version marker missing.'
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\winappcli\LICENSE.txt')) 'Installed WinApp MIT license missing.'
     $installedContractPath = Join-Path $SmokeRoot 'release-target.json'
     Require (Test-Path -LiteralPath $installedContractPath) 'Installed agent-safe release contract is missing.'
     $installedContract = Get-Content -LiteralPath $installedContractPath -Raw | ConvertFrom-Json
-    Require ([int]$installedContract.agentSafeIsolationContract -ge 1) 'Setup predates the agent-safe isolation contract; refusing to start its runtime or uninstaller.'
+    Require ([int]$installedContract.agentSafeIsolationContract -ge 2) 'Setup predates the tunnel-isolated agent-safe contract; refusing to start its runtime or uninstaller.'
+    Require ([int]$installedContract.computerUseContract -ge 1) 'Setup predates the computer-use payload contract.'
+    Require ([string]$installedContract.winAppVersion -eq [string]$TargetConfig.WinAppVersion) 'Installed WinApp release target mismatch.'
     Write-Output 'INSTALLER_AGENT_SAFE_ISOLATION_CONTRACT=OK'
+    Write-Output 'INSTALLER_COMPUTER_USE_CONTRACT=OK'
 
     $rollbackMarker=Join-Path $SmokeRoot 'ROLLBACK_MARKER.txt'
     Set-Content -LiteralPath $rollbackMarker -Value 'old-install-must-survive' -Encoding ASCII
@@ -133,9 +145,16 @@ try {
     Require ($null -ne $health) 'Installed Gateway did not become healthy.'
     Require ($health.version -eq $Version) "Version=$($health.version); expected=$Version"
     Require ($health.policy.profile -eq 'read-only') "Profile=$($health.policy.profile)"
+    Require ($health.computerUse.available -eq $true) 'Installed computer-use backend is unavailable.'
+    Require ($health.computerUse.backendVersion -eq $TargetConfig.WinAppVersion) ('Installed computer-use backend version mismatch: ' + $health.computerUse.backendVersion)
+    Require ($health.computerUse.globalSerialization -eq $true -and $health.computerUse.freshObservationRequired -eq $true) 'Installed computer-use safety contract is incomplete.'
+    Write-Output 'INSTALLER_COMPUTER_USE_RUNTIME=OK'
     $nodePath=[IO.Path]::GetFullPath((Join-Path $SmokeRoot 'node\node.exe'))
     $nodes=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
     Require ($nodes.Count -eq 2) "Installed node count=$($nodes.Count)"
+    $runtimeTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($SmokeRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
+    Require ($runtimeTunnelCount -eq 0) "Installer release runtime started a tunnel-client despite tunnel isolation: count=$runtimeTunnelCount"
+    Write-Output 'INSTALLER_RELEASE_TUNNEL_PROCESS_COUNT=0'
 
     Write-Output 'TEST=uninstall'
     $uninstaller=Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
@@ -153,6 +172,7 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $PreviousInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $PreviousStartupLinkPath
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $PreviousTunnelProfilePath
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = $PreviousDisableTunnel
     $env:DESKTOP_MCP_INSTALLER_MUTEX_NAMESPACE = $PreviousInstallerMutexNamespace
     if (Test-Path -LiteralPath $StateRoot) { Remove-Item -LiteralPath $StateRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $SmokeParent) { Remove-Item -LiteralPath $SmokeParent -Recurse -Force -ErrorAction SilentlyContinue }

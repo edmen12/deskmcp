@@ -64,6 +64,16 @@ function requireFullControl(policy: DesktopPolicy): void {
   }
 }
 
+export function requireSupportedProcessPresentation(
+  windowMode: 'hidden' | 'visible',
+  elevation: 'standard' | 'admin',
+  platform = process.platform
+): void {
+  if ((windowMode === 'visible' || elevation === 'admin') && platform !== 'win32') {
+    throw new PolicyDeniedError('Visible console and admin elevation modes are supported on Windows only.');
+  }
+}
+
 async function reconcileActiveProcessSessions(
   bridge: DesktopCommanderBridge,
   sessions: ProcessSessionRegistry
@@ -140,8 +150,12 @@ export function registerProcessTools(
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
         shell: z.enum(['powershell.exe', 'cmd.exe']).optional(),
-        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden'),
-        elevation: z.enum(['standard', 'admin']).optional().default('standard')
+        window_mode: z.enum(['hidden', 'visible']).optional().default('hidden').describe(
+          'Controls whether the CMD/PowerShell console itself is hidden or visible. It does not control UAC.'
+        ),
+        elevation: z.enum(['standard', 'admin']).optional().default('standard').describe(
+          'Controls process privilege. admin uses the standard Windows UAC prompt and is valid with either hidden or visible window mode.'
+        )
       }),
       annotations: {
         readOnlyHint: false,
@@ -164,12 +178,7 @@ export function registerProcessTools(
         const reservationId = sessions.reserveStart();
         let pid: number | undefined;
         try {
-          if ((window_mode === 'visible' || elevation === 'admin') && process.platform !== 'win32') {
-            throw new PolicyDeniedError('Visible console and admin elevation modes are supported on Windows only.');
-          }
-          if (elevation === 'admin' && window_mode !== 'visible') {
-            throw new PolicyDeniedError('Admin elevation requires window_mode=visible so Windows can surface UAC and the user can interact.');
-          }
+          requireSupportedProcessPresentation(window_mode, elevation);
           const result = await bridge.startProcess(command, timeout_ms, shell, window_mode, elevation);
           if (result.isError) {
             sessions.releaseStart(reservationId);

@@ -51,11 +51,41 @@ foreach ($item in @(
     @('licenses\dotnet\LICENSE.txt','.NET Windows distribution license'),
     @('licenses\dotnet\ThirdPartyNotices.txt','.NET third-party notices'),
     @('node\LICENSE','Node.js license/notices'),
+    @('gateway\winapp\winapp.exe','Microsoft WinApp CLI executable'),
+    @('gateway\winapp\libSkiaSharp.dll','Microsoft WinApp CLI SkiaSharp runtime'),
+    @('gateway\winapp\SHA256SUMS.txt','Microsoft WinApp CLI extracted-file checksums'),
+    @('gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt','Microsoft WinApp CLI upstream archive provenance'),
+    @('gateway\winapp\VERSION.txt','Microsoft WinApp CLI version marker'),
+    @('licenses\winappcli\LICENSE.txt','Microsoft WinApp CLI MIT license'),
     @('tunnel-client\v0.0.13\bin\LICENSE','tunnel-client Apache-2.0 license'),
     @('tunnel-client\v0.0.13\bin\NOTICE','tunnel-client NOTICE'),
     @(('tunnel-client\v0.0.13\bin\tunnel-client-v0.0.13-' + $TargetConfig.TunnelTriple + '.spdx.json'),'tunnel-client SPDX')
 )) {
     [void](Require-File (Join-Path $StageRoot $item[0]) $item[1])
+}
+
+$stageContractPath = Join-Path $StageRoot 'release-target.json'
+if (Require-File $stageContractPath 'Release-stage target contract') {
+    $stageContract = Get-Content -LiteralPath $stageContractPath -Raw | ConvertFrom-Json
+    if ([int]$stageContract.computerUseContract -ge 1) { Pass 'Computer-use release contract' } else { Block 'Release stage predates the computer-use payload contract' }
+    if ([string]$stageContract.winAppVersion -eq [string]$TargetConfig.WinAppVersion) { Pass ('WinApp release target: ' + $TargetConfig.WinAppVersion) } else { Block ('WinApp release target mismatch: ' + $stageContract.winAppVersion) }
+}
+$winAppRoot = Join-Path $StageRoot 'gateway\winapp'
+$winAppExe = Join-Path $winAppRoot 'winapp.exe'
+$winAppSkia = Join-Path $winAppRoot 'libSkiaSharp.dll'
+$winAppSums = Join-Path $winAppRoot 'SHA256SUMS.txt'
+$winAppArchiveSum = Join-Path $winAppRoot 'UPSTREAM_ARCHIVE_SHA256.txt'
+$winAppVersionFile = Join-Path $winAppRoot 'VERSION.txt'
+$winAppLicense = Join-Path $StageRoot 'licenses\winappcli\LICENSE.txt'
+if ((Test-Path -LiteralPath $winAppExe) -and (Test-Path -LiteralPath $winAppSkia) -and (Test-Path -LiteralPath $winAppSums) -and (Test-Path -LiteralPath $winAppArchiveSum) -and (Test-Path -LiteralPath $winAppVersionFile) -and (Test-Path -LiteralPath $winAppLicense)) {
+    $winAppExeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $winAppExe).Hash.ToLowerInvariant()
+    $winAppSkiaHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $winAppSkia).Hash.ToLowerInvariant()
+    $winAppSumsText = Get-Content -LiteralPath $winAppSums -Raw
+    if ($winAppSumsText -match [regex]::Escape($winAppExeHash + '  winapp.exe') -and $winAppSumsText -match [regex]::Escape($winAppSkiaHash + '  libSkiaSharp.dll')) { Pass 'WinApp extracted-file checksums' } else { Block 'WinApp extracted-file checksums do not match payload' }
+    $archiveExpected = $TargetConfig.WinAppSha256 + '  ' + $TargetConfig.WinAppAsset
+    if ((Get-Content -LiteralPath $winAppArchiveSum -Raw).Trim() -eq $archiveExpected) { Pass 'WinApp upstream archive SHA256 provenance' } else { Block 'WinApp upstream archive SHA256 provenance mismatch' }
+    if ((Get-Content -LiteralPath $winAppVersionFile -Raw).Trim() -eq $TargetConfig.WinAppVersion) { Pass 'WinApp version marker' } else { Block 'WinApp version marker mismatch' }
+    if ((Get-Content -LiteralPath $winAppLicense -Raw) -match 'MIT License') { Pass 'WinApp MIT license text' } else { Block 'WinApp MIT license text is invalid' }
 }
 
 $sharpReadme = Join-Path $StageRoot ('gateway\node_modules\@img\' + $TargetConfig.SharpPackage + '\README.md')

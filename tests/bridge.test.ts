@@ -87,6 +87,9 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
         'desktop_search',
         'desktop_start_process',
         'desktop_terminate_process',
+        'desktop_ui_action',
+        'desktop_ui_snapshot',
+        'desktop_ui_windows',
         'desktop_write_file'
       ]
     );
@@ -414,6 +417,9 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
           'desktop_search',
           'desktop_start_process',
           'desktop_terminate_process',
+          'desktop_ui_action',
+          'desktop_ui_snapshot',
+          'desktop_ui_windows',
           'desktop_write_file'
         ]
       );
@@ -506,15 +512,6 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
       const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[] }> }).properties;
       assert.deepEqual(startProperties?.window_mode?.enum, ['hidden', 'visible']);
       assert.deepEqual(startProperties?.elevation?.enum, ['standard', 'admin']);
-
-      if (process.platform === 'win32') {
-        const invalidAdminHidden = await fullControlClient.callTool({
-          name: 'desktop_start_process',
-          arguments: { command: 'echo SHOULD_NOT_RUN', window_mode: 'hidden', elevation: 'admin' }
-        });
-        assert.equal(invalidAdminHidden.isError, true);
-        assert.match(JSON.stringify(invalidAdminHidden.content), /requires window_mode=visible/);
-      }
 
       const processCommand = 'node -i';
       const started = await fullControlClient.callTool({

@@ -26,6 +26,9 @@ internal static class Program
 
     public static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--elevation-disclosure-self-test")
+            return ElevationDisclosure.RunSelfTest();
+
         IntPtr parentHandle = IntPtr.Zero;
         IntPtr jobHandle = IntPtr.Zero;
         IntPtr childProcessHandle = IntPtr.Zero;
@@ -37,7 +40,11 @@ internal static class Program
         try
         {
             ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out elevatedChild, out int ownerPid, out errorFile);
-            if (elevation == "admin" && !elevatedChild) return RunElevatedHost(shell, command, windowMode);
+            if (elevation == "admin" && !elevatedChild)
+            {
+                ElevationDisclosure.ShowIfEnabled(shell, command);
+                return RunElevatedHost(shell, command, windowMode);
+            }
             int owningPid = ownerPid > 0 ? ownerPid : GetParentProcessId(Environment.ProcessId);
             if (owningPid <= 0)
                 throw new InvalidOperationException("Could not resolve the owning terminal process.");
@@ -185,8 +192,6 @@ internal static class Program
         elevation = (elevationValue ?? "standard").ToLowerInvariant();
         if (elevation != "standard" && elevation != "admin")
             throw new ArgumentException("Unsupported process elevation mode.");
-        if (elevation == "admin" && windowMode != "visible")
-            throw new ArgumentException("Admin elevation requires visible window mode.");
         errorFile = null;
         if (!String.IsNullOrWhiteSpace(errorFile64))
         {

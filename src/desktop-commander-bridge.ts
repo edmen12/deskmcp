@@ -119,7 +119,7 @@ export class DesktopCommanderBridge {
     });
 
     const client = new Client(
-      { name: 'deskmcp-gateway', version: '0.9.4' },
+      { name: 'deskmcp-gateway', version: '0.9.5' },
       { versionNegotiation: { mode: 'legacy' } }
     );
     let closed = false;

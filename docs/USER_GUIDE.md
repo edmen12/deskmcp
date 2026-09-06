@@ -45,7 +45,7 @@ In ChatGPT:
 6. Check **I understand and want to continue**.
 7. Run **Scan tools**.
 
-Expected result: **13 DeskMCP tools**.
+Expected result: **16 DeskMCP tools**.
 ## 3. Control Panel
 
 <p align="center"><img src="images/control-panel.png" alt="DeskMCP Control Panel" width="430" /></p>
@@ -56,7 +56,7 @@ The Control Panel shows Gateway and Tunnel health, the current Workspace, permis
 
 - **Read** — recommended default. Read/list/metadata/search only.
 - **Write** — adds guarded filesystem changes inside the selected Workspace.
-- **Full** — adds Gateway-owned process and terminal sessions for the current session only.
+- **Full** — adds Gateway-owned process/terminal sessions plus Windows Computer Use for the current session only.
 
 Full Control is deliberately not persisted. After DeskMCP restarts, it returns to the last safe persisted Read or Write profile.
 

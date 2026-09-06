@@ -330,6 +330,16 @@
                   <Button Grid.Column="1" x:Name="StartupButton" Style="{StaticResource MiniButton}" Content="On" Padding="14,7"/>
                 </Grid>
               </Border>
+              <Border x:Name="AdminRequestCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+                <Grid>
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock x:Name="AdminRequestLabel" Text="Administrator requests" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="AdminRequestHint" Text="Show the real target before Windows UAC opens" Foreground="#8E8E93" FontSize="10" Margin="0,2,10,0" TextWrapping="Wrap" MaxWidth="240"/>
+                  </StackPanel>
+                  <Button Grid.Column="1" x:Name="AdminRequestDetailsButton" Style="{StaticResource MiniButton}" Content="On" Padding="14,7"/>
+                </Grid>
+              </Border>
               <Border x:Name="TunnelSettingsCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>
                   <Grid>
@@ -432,7 +442,7 @@
                   </StackPanel>
                 </Border>
                 <Border x:Name="FirstRunExpectedCard" Background="{DynamicResource UiAccentSoft}" CornerRadius="13" Padding="11,9" Margin="0,12,0,0">
-                  <TextBlock Text="Expected result: 13 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
+                  <TextBlock Text="Expected result: 16 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
                 </Border>
                 <Button x:Name="FirstRunFinishButton" Style="{StaticResource ActionButton}" Content="Finish Setup" Margin="0,16,0,0"/>
               </StackPanel>
@@ -473,10 +483,10 @@
               <TextBlock x:Name="FullControlDangerText" Text="FULL CONTROL" Foreground="{DynamicResource UiDangerText}" FontSize="10" FontWeight="Bold"/>
             </Border>
             <TextBlock x:Name="FullControlTitle" Text="Enable Full Control?" Foreground="{DynamicResource UiTextPrimary}" FontSize="20" FontWeight="SemiBold" Margin="0,14,0,0"/>
-            <TextBlock x:Name="FullControlBody" Text="Gateway-owned terminal sessions will run with your current Windows user permissions."
+            <TextBlock x:Name="FullControlBody" Text="Gateway-owned terminal sessions and Windows Computer Use will run with your current Windows user permissions."
                        Foreground="{DynamicResource UiTextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="17" Margin="0,8,0,0"/>
             <Border x:Name="FullControlNote" Background="{DynamicResource UiSurfaceMuted}" BorderBrush="{DynamicResource UiInputBorder}" BorderThickness="1" CornerRadius="14" Padding="12,10" Margin="0,13,0,0">
-              <TextBlock x:Name="FullControlNoteText" Text="Filesystem tools stay inside the selected Workspace. Terminal sessions are not filesystem-sandboxed by that Workspace boundary. This mode is session-only."
+              <TextBlock x:Name="FullControlNoteText" Text="Filesystem tools stay inside the selected Workspace. Terminal sessions and Computer Use are not constrained by that filesystem boundary and GUI actions may trigger external side effects. UAC and Secure Desktop are not bypassed. This mode is session-only."
                          Foreground="{DynamicResource UiTextSecondary}" FontSize="10" TextWrapping="Wrap" LineHeight="15"/>
             </Border>
             <Grid Margin="0,18,0,0">

@@ -4,9 +4,13 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DeskMCP.ProcessHost</AssemblyName>
     <RootNamespace>DeskMCP.ProcessHost</RootNamespace>
-    <Version>0.9.4</Version>
-    <AssemblyVersion>0.9.4.0</AssemblyVersion>
-    <FileVersion>0.9.4.0</FileVersion>
+    <Version>0.9.5</Version>
+    <AssemblyVersion>0.9.5.0</AssemblyVersion>
+    <FileVersion>0.9.5.0</FileVersion>
+    <Product>DeskMCP</Product>
+    <AssemblyTitle>DeskMCP Elevated Command Host</AssemblyTitle>
+    <Description>DeskMCP secure host for user-approved elevated commands</Description>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>

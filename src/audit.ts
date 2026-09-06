@@ -6,7 +6,7 @@ import { PROJECT_ROOT } from './paths.js';
 import type { PermissionProfile } from './desktop-policy.js';
 
 export type AuditOutcome = 'allow' | 'deny' | 'fail';
-export type AuditRisk = 'read' | 'write' | 'process';
+export type AuditRisk = 'read' | 'write' | 'process' | 'computer';
 
 interface AuditBase {
   readonly timestamp: string;

@@ -6,6 +6,8 @@ import {
 } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
+import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
+import { createComputerUseRuntime, type ComputerUseRuntime } from './computer-use-runtime.js';
 import { createDesktopMcpServer, SERVER_NAME, SERVER_VERSION } from './mcp-server.js';
 import type { DesktopCommanderBridge } from './desktop-commander-bridge.js';
 import type { DesktopPolicy } from './desktop-policy.js';
@@ -37,12 +39,32 @@ function publicPolicyInfo(policy?: DesktopPolicy) {
   return {
     profile: info.profile,
     processToolsEnabled: info.processToolsEnabled,
+    computerUseEnabled: info.computerUseEnabled,
     writeEnabled: info.writeEnabled,
     allowSensitivePaths: info.allowSensitivePaths,
     workspaceBoundaryEnforced: info.workspaceBoundaryEnforced,
     observationGuardsEnabled: info.observationGuardsEnabled
   };
 }
+
+function publicComputerUseInfo(runtime?: ComputerUseRuntime) {
+  if (!runtime) return null;
+  let available = false;
+  try {
+    resolveWinAppPath();
+    available = process.platform === 'win32';
+  } catch {
+    available = false;
+  }
+  return {
+    available,
+    backend: 'microsoft-winappcli',
+    backendVersion: WINAPP_VERSION,
+    globalSerialization: true,
+    freshObservationRequired: true
+  };
+}
+
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -52,6 +74,7 @@ function writeJson(res: http.ServerResponse, status: number, body: unknown): voi
   });
   res.end(payload);
 }
+
 export async function startHttpServer(
   host = '127.0.0.1',
   port = 8765,
@@ -59,7 +82,8 @@ export async function startHttpServer(
   policy?: DesktopPolicy,
   audit?: AuditLogger,
   observations?: ObservationStore,
-  processSessions?: ProcessSessionRegistry
+  processSessions?: ProcessSessionRegistry,
+  computerUse?: ComputerUseRuntime
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -67,9 +91,10 @@ export async function startHttpServer(
   if (bridge && (!policy || !audit || !observations || !processSessions)) {
     throw new Error('Desktop policy, audit logger, observation store, and process registry are required when Desktop Commander is enabled.');
   }
+  const effectiveComputerUse = computerUse ?? (bridge ? createComputerUseRuntime() : undefined);
 
   const mcpHandler = createMcpHandler(() =>
-    createDesktopMcpServer(bridge, policy, audit, observations, processSessions)
+    createDesktopMcpServer(bridge, policy, audit, observations, processSessions, effectiveComputerUse)
   );
   const nodeHandler = toNodeHandler(mcpHandler, {
     onerror(error) {
@@ -94,6 +119,7 @@ export async function startHttpServer(
         mode: bridge ? 'desktop-commander' : 'safe-test',
         desktopCommander: publicDesktopCommanderInfo(bridge),
         policy: publicPolicyInfo(policy),
+        computerUse: publicComputerUseInfo(effectiveComputerUse),
         auditEnabled: Boolean(audit),
         observationStoreEnabled: Boolean(observations)
       });

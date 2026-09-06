@@ -152,8 +152,9 @@ Require (Test-Path -LiteralPath $UninstallerExe) 'Uninstaller build output is mi
 Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskMCPUninstaller.exe') -Force
 Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
-Require ([int]$targetContract.agentSafeIsolationContract -ge 1) 'Release stage predates the agent-safe isolation contract; rebuild it before packaging.'
+Require ([int]$targetContract.agentSafeIsolationContract -ge 2) 'Release stage predates the tunnel-isolated agent-safe contract; rebuild it before packaging.'
 Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
+Require ([int]$targetContract.computerUseContract -ge 1) 'Release stage predates the computer-use payload contract; rebuild it before packaging.'
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
     'DeskMCP.exe',
@@ -164,6 +165,12 @@ $integrityRelatives = @(
     'Panel.xaml',
     'node\node.exe',
     'gateway\dist\src\index.js',
+    'gateway\winapp\winapp.exe',
+    'gateway\winapp\libSkiaSharp.dll',
+    'gateway\winapp\SHA256SUMS.txt',
+    'gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt',
+    'gateway\winapp\VERSION.txt',
+    'licenses\winappcli\LICENSE.txt',
     'release-target.json',
     'DeskMCPUninstaller.exe',
     $tunnelRelative
@@ -267,7 +274,18 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET third-party notices are missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) 'Installed .NET license is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET notices are missing.'
-Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'install-integrity.sha256')) 'Installed integrity manifest is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\winapp.exe')) 'Installed WinApp CLI executable is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\libSkiaSharp.dll')) 'Installed WinApp CLI SkiaSharp runtime is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\SHA256SUMS.txt')) 'Installed WinApp CLI checksum manifest is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt')) 'Installed WinApp CLI upstream provenance hash is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\VERSION.txt')) 'Installed WinApp CLI version marker is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\winappcli\LICENSE.txt')) 'Installed WinApp CLI MIT license is missing.'
+$installedIntegrityPath = Join-Path $SmokeRoot 'install-integrity.sha256'
+Require (Test-Path -LiteralPath $installedIntegrityPath) 'Installed integrity manifest is missing.'
+$installedIntegrityText = Get-Content -LiteralPath $installedIntegrityPath -Raw
+foreach ($protectedWinAppPath in @('gateway/winapp/winapp.exe','gateway/winapp/libSkiaSharp.dll','gateway/winapp/SHA256SUMS.txt','gateway/winapp/UPSTREAM_ARCHIVE_SHA256.txt','gateway/winapp/VERSION.txt','licenses/winappcli/LICENSE.txt')) {
+    Require ($installedIntegrityText -match [regex]::Escape('  ' + $protectedWinAppPath)) ('Installed integrity manifest does not protect ' + $protectedWinAppPath)
+}
 
 $rollbackMarker = Join-Path $SmokeRoot 'ROLLBACK_OLD_MARKER.txt'
 [IO.File]::WriteAllText($rollbackMarker, 'old-install-must-survive', [Text.Encoding]::ASCII)
@@ -330,6 +348,7 @@ $previousPort = $env:DESKTOP_MCP_PORT
 $previousInstanceNamespace = $env:DESKTOP_MCP_INSTANCE_NAMESPACE
 $previousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
 $previousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
+$previousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $installerSmokePort = Get-FreeLoopbackPort
 $installerSmokeBaseUrl = 'http://127.0.0.1:' + $installerSmokePort
 $installerSmokeInstanceNamespace = 'installer-smoke-' + $Target + '-' + [guid]::NewGuid().ToString('N')
@@ -345,11 +364,13 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $installerSmokeInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $installerSmokeStartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $installerSmokeTunnelProfile
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = '1'
     Write-Output 'INSTALLER_SMOKE_SETTINGS=ISOLATED_TEMPORARY'
     Write-Output ('INSTALLER_SMOKE_PORT=' + $installerSmokePort)
     Write-Output 'INSTALLER_SMOKE_INSTANCE_NAMESPACE=ISOLATED'
     Write-Output 'INSTALLER_SMOKE_STARTUP_LINK=ISOLATED'
     Write-Output 'INSTALLER_SMOKE_TUNNEL_PROFILE=ISOLATED'
+    Write-Output 'INSTALLER_SMOKE_TUNNEL_RUNTIME=DISABLED'
 
     Write-Output 'STEP=installer-smoke-runtime'
     $installedPanel = Join-Path $SmokeRoot 'DeskMCP.exe'
@@ -371,6 +392,9 @@ try {
     Require ($null -ne $health) 'Installed Gateway did not become healthy within 45 seconds.'
     Require ($health.policy.profile -eq 'read-only') "Unexpected installed profile: $($health.policy.profile)"
     Require ($health.version -eq $version) "Unexpected installed Gateway version: $($health.version); expected $version"
+    $installerSmokeTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($SmokeRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
+    Require ($installerSmokeTunnelCount -eq 0) "Installer smoke started a tunnel-client despite tunnel isolation: count=$installerSmokeTunnelCount"
+    Write-Output 'INSTALLER_SMOKE_TUNNEL_PROCESS_COUNT=0'
 
     Write-Output 'STEP=installer-smoke-uninstall'
     $installedUninstaller = Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
@@ -387,6 +411,7 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE = $previousInstanceNamespace
     $env:DESKTOP_MCP_STARTUP_LINK_PATH = $previousStartupLinkPath
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH = $previousTunnelProfilePath
+    $env:DESKTOP_MCP_DISABLE_TUNNEL = $previousDisableTunnel
     if (Test-Path -LiteralPath $installerSmokeStateRoot) { try { [IO.Directory]::Delete($installerSmokeStateRoot, $true) } catch { } }
 }
 $realStartupExistsAfter = Test-Path -LiteralPath $realStartupLink
