@@ -56,8 +56,15 @@ if ([int]$StageContract.processJobObjectContract -lt 1) { throw 'Release-stage p
 if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predates the computer-use payload contract; rebuild the stage before smoke testing.' }
 if ([string]$StageContract.winAppVersion -ne [string]$TargetConfig.WinAppVersion) { throw ('Unexpected WinApp version in release-target.json: ' + $StageContract.winAppVersion) }
 $expectedWinAppVersion = $TargetConfig.WinAppVersion.TrimStart('v')
-$actualWinAppVersion = (& $WinAppExe --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $actualWinAppVersion -ne $expectedWinAppVersion) { throw ('WinApp CLI version smoke failed: actual=' + $actualWinAppVersion + ' expected=' + $expectedWinAppVersion) }
+$env:WINAPP_CLI_TELEMETRY_OPTOUT = '1'
+$winAppVersionOutput = (& $WinAppExe --version 2>&1 | Out-String).Trim()
+$winAppVersionExit = $LASTEXITCODE
+$winAppVersionMatches = [regex]::Matches($winAppVersionOutput, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)')
+$actualWinAppVersion = if ($winAppVersionMatches.Count -gt 0) { $winAppVersionMatches[$winAppVersionMatches.Count - 1].Groups[1].Value } else { '' }
+if ($winAppVersionExit -ne 0 -or $actualWinAppVersion -ne $expectedWinAppVersion) {
+    $versionDetail = if ($winAppVersionOutput.Length -gt 800) { $winAppVersionOutput.Substring($winAppVersionOutput.Length - 800) } else { $winAppVersionOutput }
+    throw ('WinApp CLI version smoke failed: actual=' + $actualWinAppVersion + ' expected=' + $expectedWinAppVersion + ' output=' + $versionDetail)
+}
 if ((Get-Content -LiteralPath $WinAppVersionFile -Raw).Trim() -ne $TargetConfig.WinAppVersion) { throw 'WinApp VERSION.txt does not match release target.' }
 $winAppSumsText = Get-Content -LiteralPath $WinAppSums -Raw
 $winAppExeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $WinAppExe).Hash.ToLowerInvariant()
