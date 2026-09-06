@@ -4,14 +4,8 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
-### Added
-
-- Added Windows Computer Use with `desktop_ui_windows`, `desktop_ui_snapshot`, and `desktop_ui_action`. The MCP contract is UI Automation first, uses opaque window capabilities plus one-time 30-second `computer_observation_id` guards, serializes GUI mutations across clients, and returns screenshots only when requested.
-- Added pinned Microsoft WinApp CLI v0.5.0 x64/ARM64 release packaging with upstream SHA-256 provenance, PE architecture checks, extracted-file hashes, MIT notice preservation, installer integrity coverage, and release/runtime smoke gates.
-
 ### Changed
 
-- Windows builds now clean `dist` before TypeScript compilation and release staging packages only `dist/src`, preventing stale compiled tests from surviving source deletion or entering production installers.
 - Simplified the Windows updater to a one-click **Update Now** flow: DeskMCP downloads the fixed-repository immutable release asset, verifies size and SHA-256, then launches Setup without a second install confirmation inside DeskMCP.
 - Decoupled updater availability from Authenticode. Unsigned artifacts that pass the source/integrity gates are eligible for user-initiated execution; valid signatures add publisher verification, while invalid signatures or configured publisher-pin mismatches are blocked.
 - Removed unsigned/publisher-signature status from the normal update UI; signing state remains an internal security/logging concern and Windows may still show its own SmartScreen or publisher UI.
@@ -20,6 +14,35 @@ All notable changes to DeskMCP are documented here.
 - Hardened Full Control process ownership for concurrent agents: active state now follows Desktop Commander's session registry rather than OS PID liveness guesses, completed sessions remain readable in bounded history, start reservations enforce the 32-session ceiling before spawn, and stress coverage now includes 40-way start bursts, read/terminate races, Desktop Commander crash recovery, and Gateway-owned shutdown cleanup.
 - Added `DeskMCP.ProcessHost` with a Windows Job Object (`KILL_ON_JOB_CLOSE`) for Full Control commands, so owned child/grandchild processes are kernel-cleaned when the root session, Desktop Commander, or Gateway disappears without exposing direct PID-tree termination to MCP callers.
 - Prevented a verified update from launching Setup after the user has already begun quitting DeskMCP; shutdown now gates every update entry/continuation, discards a just-finished verified download, and avoids touching closing UI state.
+
+## 0.9.5 — 2026-09-06
+
+### Added
+
+- Added Windows Computer Use with `desktop_ui_windows`, `desktop_ui_snapshot`, and `desktop_ui_action`, expanding the Windows MCP surface from 13 to 16 tools.
+- Added pinned Microsoft WinApp CLI v0.5.0 x64/ARM64 packaging with upstream SHA-256 provenance, PE architecture checks, extracted-file integrity, MIT notice preservation, and installed-runtime validation.
+- Added an optional administrator-request disclosure HUD before Windows UAC, with sensitive command values redacted and a Settings toggle that defaults to On.
+- Added a reliable current-user installer path for unattended per-user installation while retaining normal shortcuts, uninstall registration, startup preference, rollback and recovery behavior.
+
+### Changed
+
+- Decoupled Windows console visibility from privilege elevation so `hidden + admin`, `visible + admin`, `hidden + standard`, and `visible + standard` are all supported combinations on Windows.
+- Windows Computer Use is UI Automation first, uses opaque window capabilities and short-lived one-time `computer_observation_id` guards, and serializes GUI operations across MCP clients.
+- Windows builds now clean `dist` before TypeScript compilation and release staging packages only `dist/src`, preventing stale compiled tests from entering production installers.
+- Release-stage, installer and stability smoke runtimes now hard-disable Tunnel access and use isolated state/ports so validation cannot alter the user's live Remote MCP route.
+
+### Security
+
+- Computer Use requires session-only Full Control or Fully Unlocked, does not bypass Windows ACLs/UAC/Secure Desktop, and does not expose WinApp's cross-integrity `post-message` keyboard transport.
+- Computer Use backend-internal fields are projected through a DeskMCP-owned allowlist; public window capabilities do not expose HWND/PID targets.
+- WinApp executable, companion SkiaSharp runtime, version/provenance markers and license are covered by release-stage and installer integrity validation.
+
+### Fixed
+
+- Fixed administrator elevation being incorrectly coupled to visible console mode.
+- Fixed release smoke paths that could observe or interfere with a real Tunnel runtime or hard-coded Gateway port.
+- Fixed runtime stability scripts using stale hard-coded Node/Tunnel paths instead of canonical release-target configuration.
+- Fixed stale compiled test artifacts surviving source deletion by cleaning `dist` before builds.
 
 ## 0.9.2 — 2026-09-01
 
