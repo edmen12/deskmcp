@@ -1278,8 +1278,8 @@ internal sealed partial class ControlPanelRuntime
         scope.Text = currentWorkspace;
         if (selectedProfile == "read-only") hint.Text = "Read-only in selected workspace";
         else if (selectedProfile == "workspace-write") hint.Text = "Guarded filesystem writes in workspace";
-        else if (selectedProfile == "full-control") hint.Text = "Workspace files + terminal with Windows user permissions";
-        else hint.Text = "No DeskMCP filesystem sandbox · Windows account permissions";
+        else if (selectedProfile == "full-control") hint.Text = "Workspace files + terminal + Windows Computer Use";
+        else hint.Text = "No DeskMCP filesystem sandbox · terminal + Windows Computer Use";
         UpdateWorkspaceUi();
 
         Ellipse liveDot = Find<Ellipse>("LiveDot");
@@ -1341,11 +1341,11 @@ internal sealed partial class ControlPanelRuntime
         Find<TextBlock>("FullControlDangerText").Text = fullyUnlocked ? "FULLY UNLOCKED" : "FULL CONTROL";
         Find<TextBlock>("FullControlTitle").Text = fullyUnlocked ? "Fully unlock DeskMCP?" : "Enable Full Control?";
         Find<TextBlock>("FullControlBody").Text = fullyUnlocked
-            ? "DeskMCP will stop enforcing Workspace and sensitive-path boundaries. Terminal commands run with your current Windows user permissions."
-            : "Gateway-owned terminal sessions will run with your current Windows user permissions.";
+            ? "DeskMCP will stop enforcing Workspace and sensitive-path boundaries. Terminal commands and Windows Computer Use run with your current Windows user permissions."
+            : "Gateway-owned terminal sessions and Windows Computer Use will run with your current Windows user permissions.";
         Find<TextBlock>("FullControlNoteText").Text = fullyUnlocked
-            ? "Filesystem tools may access any path your Windows account can access, including sensitive files. Fresh-observation write guards are disabled. This mode is session-only."
-            : "Filesystem tools stay inside the selected Workspace. Terminal sessions are not filesystem-sandboxed by that Workspace boundary. This mode is session-only.";
+            ? "Filesystem tools may access any path your Windows account can access, including sensitive files. Computer Use can interact with the visible desktop and explicitly requested system-wide keys. UAC and Secure Desktop are not bypassed. This mode is session-only."
+            : "Filesystem tools stay inside the selected Workspace. Terminal sessions and Computer Use are not constrained by that filesystem boundary and GUI actions may trigger external side effects. UAC and Secure Desktop are not bypassed. This mode is session-only.";
         Find<Button>("FullControlEnableButton").Content = fullyUnlocked ? "Unlock session" : "Enable session";
         suppressAutoHide = true;
         Grid overlay = Find<Grid>("FullControlOverlay");

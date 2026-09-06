@@ -87,6 +87,9 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
         'desktop_search',
         'desktop_start_process',
         'desktop_terminate_process',
+        'desktop_ui_action',
+        'desktop_ui_snapshot',
+        'desktop_ui_windows',
         'desktop_write_file'
       ]
     );
@@ -414,6 +417,9 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
           'desktop_search',
           'desktop_start_process',
           'desktop_terminate_process',
+          'desktop_ui_action',
+          'desktop_ui_snapshot',
+          'desktop_ui_windows',
           'desktop_write_file'
         ]
       );

@@ -12,6 +12,8 @@ $NodeZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.NodeArchive)
 $NodeUrl = 'https://nodejs.org/dist/v' + $TargetConfig.NodeVersion + '/' + $TargetConfig.NodeArchive
 $TunnelZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.TunnelAsset)
 $TunnelUrl = 'https://github.com/openai/tunnel-client/releases/download/' + $TargetConfig.TunnelVersion + '/' + $TargetConfig.TunnelAsset
+$WinAppZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.WinAppAsset)
+$WinAppUrl = 'https://github.com/microsoft/winappCli/releases/download/' + $TargetConfig.WinAppVersion + '/' + $TargetConfig.WinAppAsset
 
 function Require([bool]$Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
 function Assert-StageNotRunning([string]$StagePath) {
@@ -140,7 +142,42 @@ Require ($tunnelMachine -eq $TargetConfig.PeMachine) ('Tunnel PE architecture mi
 [IO.File]::WriteAllText((Join-Path $tunnelDest 'SHA256SUMS.txt'), ($actualTunnelHash + '  ' + $TargetConfig.TunnelAsset + [Environment]::NewLine), [Text.Encoding]::ASCII)
 $gatewayDest = Join-Path $StageRoot 'gateway'
 New-Item -ItemType Directory -Force -Path $gatewayDest | Out-Null
-Copy-Item -LiteralPath (Join-Path $ProjectRoot 'dist') -Destination $gatewayDest -Recurse -Force
+
+Get-VerifiedDownload $WinAppUrl $WinAppZip $TargetConfig.WinAppSha256
+$actualWinAppHash = Get-Sha256 $WinAppZip
+$winAppExtract = Join-Path $RuntimeRoot ('downloads\winapp-' + $Target)
+if (Test-Path -LiteralPath $winAppExtract) { Remove-Item -LiteralPath $winAppExtract -Recurse -Force }
+Expand-Archive -LiteralPath $WinAppZip -DestinationPath $winAppExtract -Force
+$winAppSourceExe = Join-Path $winAppExtract 'winapp.exe'
+$winAppSourceSkia = Join-Path $winAppExtract 'libSkiaSharp.dll'
+Require (Test-Path -LiteralPath $winAppSourceExe) 'WinApp CLI executable is missing from the verified release archive.'
+Require (Test-Path -LiteralPath $winAppSourceSkia) 'WinApp CLI SkiaSharp runtime is missing from the verified release archive.'
+$winAppDest = Join-Path $gatewayDest 'winapp'
+New-Item -ItemType Directory -Force -Path $winAppDest | Out-Null
+$winAppExe = Join-Path $winAppDest 'winapp.exe'
+$winAppSkia = Join-Path $winAppDest 'libSkiaSharp.dll'
+Copy-Item -LiteralPath $winAppSourceExe -Destination $winAppExe -Force
+Copy-Item -LiteralPath $winAppSourceSkia -Destination $winAppSkia -Force
+$winAppMachine = Get-PeMachine $winAppExe
+$winAppSkiaMachine = Get-PeMachine $winAppSkia
+Require ($winAppMachine -eq $TargetConfig.PeMachine) ('WinApp CLI PE architecture mismatch: 0x{0:X4}' -f $winAppMachine)
+Require ($winAppSkiaMachine -eq $TargetConfig.PeMachine) ('WinApp CLI SkiaSharp PE architecture mismatch: 0x{0:X4}' -f $winAppSkiaMachine)
+$winAppExeHash = Get-Sha256 $winAppExe
+$winAppSkiaHash = Get-Sha256 $winAppSkia
+$winAppSumText = $winAppExeHash + '  winapp.exe' + [Environment]::NewLine + $winAppSkiaHash + '  libSkiaSharp.dll' + [Environment]::NewLine
+[IO.File]::WriteAllText((Join-Path $winAppDest 'SHA256SUMS.txt'), $winAppSumText, [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText((Join-Path $winAppDest 'UPSTREAM_ARCHIVE_SHA256.txt'), ($actualWinAppHash + '  ' + $TargetConfig.WinAppAsset + [Environment]::NewLine), [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText((Join-Path $winAppDest 'VERSION.txt'), ($TargetConfig.WinAppVersion + [Environment]::NewLine), [Text.Encoding]::ASCII)
+$winAppLicenseSource = Join-Path $ProjectRoot 'licenses\winappcli-MIT.txt'
+Require (Test-Path -LiteralPath $winAppLicenseSource) 'WinApp CLI MIT license is missing.'
+$winAppLicenseDest = Join-Path $StageRoot 'licenses\winappcli'
+New-Item -ItemType Directory -Force -Path $winAppLicenseDest | Out-Null
+Copy-Item -LiteralPath $winAppLicenseSource -Destination (Join-Path $winAppLicenseDest 'LICENSE.txt') -Force
+
+$gatewayDist = Join-Path $gatewayDest 'dist'
+New-Item -ItemType Directory -Force -Path $gatewayDist | Out-Null
+Copy-Item -LiteralPath (Join-Path $ProjectRoot 'dist\src') -Destination $gatewayDist -Recurse -Force
+Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'dist\tests'))) 'Production release stage must not include compiled test files.'
 foreach ($file in @('package.json','package-lock.json','.npmrc')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $file) -Destination $gatewayDest -Force }
 Push-Location $gatewayDest
 try {
@@ -188,7 +225,7 @@ Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\@emn
 $noticeGenerator = Join-Path $ProjectRoot 'scripts\generate-third-party-notices.mjs'
 Require (Test-Path -LiteralPath $noticeGenerator) 'Third-party notice generator is missing.'
 Invoke-Native $hostNode @($noticeGenerator,$ProjectRoot,$StageRoot,$Target,$TargetConfig.NodeVersion)
-$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; agentSafeIsolationContract=2; processJobObjectContract=1; panelPeMachine=('0x{0:X4}' -f $panelMachine); processHostPeMachine=('0x{0:X4}' -f $processHostMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine) }
+$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; winAppVersion=$TargetConfig.WinAppVersion; agentSafeIsolationContract=2; processJobObjectContract=1; computerUseContract=1; panelPeMachine=('0x{0:X4}' -f $panelMachine); processHostPeMachine=('0x{0:X4}' -f $processHostMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine); winAppPeMachine=('0x{0:X4}' -f $winAppMachine); winAppSkiaPeMachine=('0x{0:X4}' -f $winAppSkiaMachine) }
 $stageInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Encoding UTF8
 $files = Get-ChildItem -LiteralPath $StageRoot -Recurse -File
 $bytes = ($files | Measure-Object Length -Sum).Sum

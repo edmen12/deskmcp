@@ -154,6 +154,7 @@ Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
 Require ([int]$targetContract.agentSafeIsolationContract -ge 2) 'Release stage predates the tunnel-isolated agent-safe contract; rebuild it before packaging.'
 Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
+Require ([int]$targetContract.computerUseContract -ge 1) 'Release stage predates the computer-use payload contract; rebuild it before packaging.'
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
     'DeskMCP.exe',
@@ -164,6 +165,12 @@ $integrityRelatives = @(
     'Panel.xaml',
     'node\node.exe',
     'gateway\dist\src\index.js',
+    'gateway\winapp\winapp.exe',
+    'gateway\winapp\libSkiaSharp.dll',
+    'gateway\winapp\SHA256SUMS.txt',
+    'gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt',
+    'gateway\winapp\VERSION.txt',
+    'licenses\winappcli\LICENSE.txt',
     'release-target.json',
     'DeskMCPUninstaller.exe',
     $tunnelRelative
@@ -267,7 +274,18 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\production-node-
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET third-party notices are missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\LICENSE.txt')) 'Installed .NET license is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\dotnet\ThirdPartyNotices.txt')) 'Installed .NET notices are missing.'
-Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'install-integrity.sha256')) 'Installed integrity manifest is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\winapp.exe')) 'Installed WinApp CLI executable is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\libSkiaSharp.dll')) 'Installed WinApp CLI SkiaSharp runtime is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\SHA256SUMS.txt')) 'Installed WinApp CLI checksum manifest is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt')) 'Installed WinApp CLI upstream provenance hash is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\VERSION.txt')) 'Installed WinApp CLI version marker is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\winappcli\LICENSE.txt')) 'Installed WinApp CLI MIT license is missing.'
+$installedIntegrityPath = Join-Path $SmokeRoot 'install-integrity.sha256'
+Require (Test-Path -LiteralPath $installedIntegrityPath) 'Installed integrity manifest is missing.'
+$installedIntegrityText = Get-Content -LiteralPath $installedIntegrityPath -Raw
+foreach ($protectedWinAppPath in @('gateway/winapp/winapp.exe','gateway/winapp/libSkiaSharp.dll','gateway/winapp/SHA256SUMS.txt','gateway/winapp/UPSTREAM_ARCHIVE_SHA256.txt','gateway/winapp/VERSION.txt','licenses/winappcli/LICENSE.txt')) {
+    Require ($installedIntegrityText -match [regex]::Escape('  ' + $protectedWinAppPath)) ('Installed integrity manifest does not protect ' + $protectedWinAppPath)
+}
 
 $rollbackMarker = Join-Path $SmokeRoot 'ROLLBACK_OLD_MARKER.txt'
 [IO.File]::WriteAllText($rollbackMarker, 'old-install-must-survive', [Text.Encoding]::ASCII)

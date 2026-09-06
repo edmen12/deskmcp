@@ -4,8 +4,14 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added Windows Computer Use with `desktop_ui_windows`, `desktop_ui_snapshot`, and `desktop_ui_action`. The MCP contract is UI Automation first, uses opaque window capabilities plus one-time 30-second `computer_observation_id` guards, serializes GUI mutations across clients, and returns screenshots only when requested.
+- Added pinned Microsoft WinApp CLI v0.5.0 x64/ARM64 release packaging with upstream SHA-256 provenance, PE architecture checks, extracted-file hashes, MIT notice preservation, installer integrity coverage, and release/runtime smoke gates.
+
 ### Changed
 
+- Windows builds now clean `dist` before TypeScript compilation and release staging packages only `dist/src`, preventing stale compiled tests from surviving source deletion or entering production installers.
 - Simplified the Windows updater to a one-click **Update Now** flow: DeskMCP downloads the fixed-repository immutable release asset, verifies size and SHA-256, then launches Setup without a second install confirmation inside DeskMCP.
 - Decoupled updater availability from Authenticode. Unsigned artifacts that pass the source/integrity gates are eligible for user-initiated execution; valid signatures add publisher verification, while invalid signatures or configured publisher-pin mismatches are blocked.
 - Removed unsigned/publisher-signature status from the normal update UI; signing state remains an internal security/logging concern and Windows may still show its own SmartScreen or publisher UI.

@@ -3,6 +3,7 @@ import {
   startControlServer,
   type RunningControlServer
 } from './control-server.js';
+import { createComputerUseRuntime } from './computer-use-runtime.js';
 import { DesktopCommanderBridge } from './desktop-commander-bridge.js';
 import { DesktopPolicy } from './desktop-policy.js';
 import { startHttpServer, type RunningHttpServer } from './http-server.js';
@@ -25,6 +26,7 @@ await audit.init();
 const policy = await DesktopPolicy.create();
 const observations = new ObservationStore();
 const processSessions = new ProcessSessionRegistry();
+const computerUse = createComputerUseRuntime();
 const bridge = new DesktopCommanderBridge();
 
 let running: RunningHttpServer | null = null;
@@ -115,7 +117,8 @@ try {
     policy,
     audit,
     observations,
-    processSessions
+    processSessions,
+    computerUse
   );
   control = await startControlServer(port, () => shutdown('LOCAL_CONTROL'));
   await bridge.start();

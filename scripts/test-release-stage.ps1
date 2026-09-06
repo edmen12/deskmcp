@@ -12,6 +12,13 @@ $PanelExe = Join-Path $StageRoot 'DeskMCP.exe'
 $ProcessHostExe = Join-Path $StageRoot 'DeskMCP.ProcessHost.exe'
 $NodeExe = Join-Path $StageRoot 'node\node.exe'
 $GatewayRoot = Join-Path $StageRoot 'gateway'
+$WinAppRoot = Join-Path $GatewayRoot 'winapp'
+$WinAppExe = Join-Path $WinAppRoot 'winapp.exe'
+$WinAppSkia = Join-Path $WinAppRoot 'libSkiaSharp.dll'
+$WinAppSums = Join-Path $WinAppRoot 'SHA256SUMS.txt'
+$WinAppArchiveSum = Join-Path $WinAppRoot 'UPSTREAM_ARCHIVE_SHA256.txt'
+$WinAppVersionFile = Join-Path $WinAppRoot 'VERSION.txt'
+$WinAppLicense = Join-Path $StageRoot 'licenses\winappcli\LICENSE.txt'
 $SmokeStateRoot = Join-Path $ProjectRoot ('runtime\release-smoke-state\' + $Target + '-' + [Guid]::NewGuid().ToString('N'))
 $SmokeFile = Join-Path $SmokeStateRoot 'release-smoke.mjs'
 $SmokeDataRoot = Join-Path $SmokeStateRoot 'local'
@@ -38,11 +45,30 @@ $SmokeInstanceNamespace = 'release-smoke-' + $Target + '-' + [Guid]::NewGuid().T
 if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
 if (-not (Test-Path -LiteralPath $ProcessHostExe)) { throw 'Release-stage ProcessHost is missing.' }
 if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missing.' }
+foreach ($requiredWinAppFile in @($WinAppExe,$WinAppSkia,$WinAppSums,$WinAppArchiveSum,$WinAppVersionFile,$WinAppLicense)) {
+    if (-not (Test-Path -LiteralPath $requiredWinAppFile)) { throw ('Release-stage computer-use payload is missing: ' + $requiredWinAppFile) }
+}
 $StageContractPath = Join-Path $StageRoot 'release-target.json'
 if (-not (Test-Path -LiteralPath $StageContractPath)) { throw 'Release-stage target contract is missing.' }
 $StageContract = Get-Content -LiteralPath $StageContractPath -Raw | ConvertFrom-Json
 if ([int]$StageContract.agentSafeIsolationContract -lt 2) { throw 'Release-stage predates the tunnel-isolated agent-safe contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processJobObjectContract -lt 1) { throw 'Release-stage predates the owned-process Job Object contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predates the computer-use payload contract; rebuild the stage before smoke testing.' }
+if ([string]$StageContract.winAppVersion -ne [string]$TargetConfig.WinAppVersion) { throw ('Unexpected WinApp version in release-target.json: ' + $StageContract.winAppVersion) }
+$expectedWinAppVersion = $TargetConfig.WinAppVersion.TrimStart('v')
+$actualWinAppVersion = (& $WinAppExe --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $actualWinAppVersion -ne $expectedWinAppVersion) { throw ('WinApp CLI version smoke failed: actual=' + $actualWinAppVersion + ' expected=' + $expectedWinAppVersion) }
+if ((Get-Content -LiteralPath $WinAppVersionFile -Raw).Trim() -ne $TargetConfig.WinAppVersion) { throw 'WinApp VERSION.txt does not match release target.' }
+$winAppSumsText = Get-Content -LiteralPath $WinAppSums -Raw
+$winAppExeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $WinAppExe).Hash.ToLowerInvariant()
+$winAppSkiaHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $WinAppSkia).Hash.ToLowerInvariant()
+if ($winAppSumsText -notmatch [regex]::Escape($winAppExeHash + '  winapp.exe')) { throw 'WinApp winapp.exe SHA256SUMS entry is missing or wrong.' }
+if ($winAppSumsText -notmatch [regex]::Escape($winAppSkiaHash + '  libSkiaSharp.dll')) { throw 'WinApp libSkiaSharp.dll SHA256SUMS entry is missing or wrong.' }
+$winAppArchiveText = (Get-Content -LiteralPath $WinAppArchiveSum -Raw).Trim()
+if ($winAppArchiveText -ne ($TargetConfig.WinAppSha256 + '  ' + $TargetConfig.WinAppAsset)) { throw 'WinApp upstream archive provenance hash is wrong.' }
+if ((Get-Content -LiteralPath $WinAppLicense -Raw) -notmatch 'MIT License') { throw 'WinApp MIT license payload is invalid.' }
+Write-Output ('WINAPP_VERSION=' + $actualWinAppVersion)
+Write-Output 'WINAPP_PAYLOAD_INTEGRITY=OK'
 function Get-FreeLoopbackPort {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     try {
@@ -137,6 +163,9 @@ try {
     }
     if ($health.policy.profile -ne 'read-only') { throw "Unexpected profile: $($health.policy.profile)" }
     if ($health.version -ne $Version) { throw "Unexpected Gateway version: $($health.version); expected $Version" }
+    if ($health.computerUse.available -ne $true) { throw 'Release-stage computer-use backend is not available in Gateway health.' }
+    if ($health.computerUse.backendVersion -ne $TargetConfig.WinAppVersion) { throw ('Unexpected computer-use backend version: ' + $health.computerUse.backendVersion) }
+    if ($health.computerUse.globalSerialization -ne $true -or $health.computerUse.freshObservationRequired -ne $true) { throw 'Computer-use safety contract is incomplete in Gateway health.' }
     $targetNode = [IO.Path]::GetFullPath($NodeExe)
     $gatewayProcess = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
         try { [int]$_.ParentProcessId -eq [int]$panel.Id -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode -and $_.CommandLine -match 'dist[\\/]src[\\/]index\.js' } catch { $false }
@@ -158,14 +187,18 @@ const client = new Client({ name: 'deskmcp-release-smoke', version: '1.0.0' });
 try {
   await client.connect(new StreamableHTTPClientTransport(new URL('__SMOKE_BASE_URL__/mcp')));
   const listed = await client.listTools();
+  const names = listed.tools.map(tool => tool.name);
   console.log('TOOLS=' + listed.tools.length);
+  console.log('COMPUTER_TOOLS=' + ['desktop_ui_windows','desktop_ui_snapshot','desktop_ui_action'].every(name => names.includes(name)));
   const status = await client.callTool({ name: 'desktop_policy_status', arguments: {} });
   console.log('POLICY_OK=' + (status.isError !== true));
+  const denied = await client.callTool({ name: 'desktop_ui_windows', arguments: {} });
+  console.log('COMPUTER_POLICY_DENY=' + (denied.isError === true));
 } finally { await client.close().catch(() => {}); }
 '@
     $smokeSource.Replace('__CLIENT_ENTRY__', $clientEntry).Replace('__SMOKE_BASE_URL__', $SmokeBaseUrl) | Set-Content -LiteralPath $SmokeFile -Encoding UTF8
     try { $smoke = (& $NodeExe $SmokeFile 2>&1 | Out-String); $smokeExit = $LASTEXITCODE } finally { }
-    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=13' -or $smoke -notmatch 'POLICY_OK=true') { throw "MCP smoke failed:`n$smoke" }
+    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=16' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
     $before = (Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $PanelExe }).Count
     $second = Start-Process -FilePath $PanelExe -WorkingDirectory $StageRoot -PassThru
     [void]$second.WaitForExit(5000)
@@ -177,7 +210,7 @@ try {
     Write-Output ('PROFILE=' + $health.policy.profile)
     Write-Output ('VERSION=' + $health.version)
     Write-Output ('STAGE_NODE_COUNT=' + $OwnedStageNodePids.Count)
-    Write-Output 'TOOLS=13'
+    Write-Output 'TOOLS=16'
     Write-Output 'SINGLE_INSTANCE=OK'
 } finally {
     try {

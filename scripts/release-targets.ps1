@@ -5,6 +5,7 @@ function Get-DeskMcpReleaseTarget {
         Name = $Target
         NodeVersion = '24.19.0'
         TunnelVersion = 'v0.0.13'
+        WinAppVersion = 'v0.5.0'
         NpmOs = 'win32'
     }
     if ($Target -eq 'win-x64') {
@@ -19,6 +20,8 @@ function Get-DeskMcpReleaseTarget {
             TunnelAsset = 'tunnel-client-v0.0.13-windows-amd64.zip'
             TunnelSha256 = '17113162b353906bbb884c3ed7620facba5cc72b5fdc94fd54fd7208c7166edb'
             TunnelTriple = 'windows-amd64'
+            WinAppAsset = 'winappcli-x64.zip'
+            WinAppSha256 = '88735ce6c2582ac5fac6200194bf62467fdd72b44b2d230f3a4ed059fa79ee7d'
             SharpPackage = 'sharp-win32-x64'
             RipgrepPackage = 'ripgrep-win32-x64'
             PeMachine = 0x8664
@@ -36,6 +39,8 @@ function Get-DeskMcpReleaseTarget {
         TunnelAsset = 'tunnel-client-v0.0.13-windows-arm64.zip'
         TunnelSha256 = 'ec7c33cb06fabbbc04aa4803304b647f8542922b8b1489c961b3ebfc283ddcb0'
         TunnelTriple = 'windows-arm64'
+        WinAppAsset = 'winappcli-arm64.zip'
+        WinAppSha256 = '90234eac6400bfac1895d48ba7d9bad7dd38a942a6070bef1cc8a5dee6f5bb8b'
         SharpPackage = 'sharp-win32-arm64'
         RipgrepPackage = 'ripgrep-win32-arm64'
         PeMachine = 0xAA64

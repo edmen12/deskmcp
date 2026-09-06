@@ -7,12 +7,12 @@
   <a href="https://github.com/edmen12/deskmcp/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/edmen12/deskmcp?display_name=tag" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-22B8FF" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20x64%20%2B%20ARM64-2563EB" />
-  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-13-2DE0D8" />
+  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-16-2DE0D8" />
 </p>
 
 # DeskMCP
 
-**DeskMCP is an open-source local-first MCP policy gateway that gives ChatGPT controlled access to local files and terminal sessions.** It runs policy enforcement on your computer, exposes a stable MCP tool surface, and connects through an OpenAI Tunnel while keeping the local MCP endpoint bound to `127.0.0.1`.
+**DeskMCP is an open-source local-first MCP policy gateway that gives ChatGPT controlled access to local files, terminal sessions, and Windows desktop UI.** It runs policy enforcement on your computer, exposes a stable MCP tool surface, and connects through an OpenAI Tunnel while keeping the local MCP endpoint bound to `127.0.0.1`.
 
 The default profile is **Read-only**. Filesystem access is scoped to a workspace you choose locally, sensitive paths are excluded before search, and elevated process capabilities are session-owned rather than arbitrary PID control.
 
@@ -47,7 +47,7 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
 5. Use **Name: DeskMCP**, **Connection: Tunnel**, **Auth: No auth**.
 6. Select the Tunnel, check **I understand and want to continue**, then **Scan tools**.
 
-Expected result: **13 DeskMCP tools**.
+Expected result: **16 DeskMCP tools**.
 
 The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. Secret writes are verified by immediate DPAPI readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
 ## Architecture
@@ -61,24 +61,26 @@ ChatGPT
   ↕ OpenAI Tunnel
 DeskMCP Gateway  (127.0.0.1:8765)
   ↕ local policy enforcement
-Desktop Commander
-  ↳ selected workspace
-  ↳ Gateway-owned process sessions
+  ├─ Desktop Commander
+  │   ↳ selected workspace
+  │   ↳ Gateway-owned process sessions
+  └─ Windows Computer Use backend
+      ↳ Microsoft WinApp CLI / UI Automation / screenshot / input
 ```
 
-The Tunnel provides the remote transport. The policy decision still happens locally before a filesystem or process action is forwarded to Desktop Commander.
+The Tunnel provides the remote transport. The local Gateway checks policy before every filesystem, process, or computer-use action. Windows Computer Use is packaged as a pinned backend behind DeskMCP's own stable MCP schema, so backend changes do not become remote API changes.
 
 ## Permission profiles
 
 - **Read** — default; read, list, metadata and bounded search only inside the selected Workspace.
 - **Write** — adds guarded create/edit/write/move operations inside the selected Workspace.
-- **Full** — session-only; keeps the Workspace filesystem boundary and adds terminal/process sessions that run with the current Windows user permissions.
-- **Unlock** (`fully-unlocked`) — session-only; disables DeskMCP Workspace, sensitive-path and fresh-observation write guards. Filesystem tools and terminal commands can reach anything the current Windows account is permitted to access.
+- **Full** — session-only; keeps the Workspace filesystem boundary and adds terminal/process sessions plus Windows Computer Use under the current Windows user permissions.
+- **Unlock** (`fully-unlocked`) — session-only; disables DeskMCP Workspace, sensitive-path and fresh-observation file guards and also permits explicitly requested system-wide key injection. Windows ACL/UAC and Secure Desktop remain host boundaries.
 
-`Full` and `Unlock` are never persisted. Restarting DeskMCP returns to the last safe persisted profile: **Read** or **Write**. Unlock does not bypass Windows ACL/UAC or any remote-client safety policy; it only removes DeskMCP's own local sandbox boundaries.
+`Full` and `Unlock` are never persisted. Restarting DeskMCP returns to the last safe persisted profile: **Read** or **Write**. Neither profile bypasses Windows ACL/UAC or any remote-client safety policy.
 ## Tool surface
 
-DeskMCP currently exposes a stable **13-tool** MCP surface:
+DeskMCP currently exposes a stable **16-tool** MCP surface:
 
 ```text
 desktop_policy_status
@@ -94,9 +96,14 @@ desktop_start_process
 desktop_read_process
 desktop_interact_process
 desktop_terminate_process
+desktop_ui_windows
+desktop_ui_snapshot
+desktop_ui_action
 ```
 
 The schemas stay discoverable across profiles so the remote connection remains stable. **Discoverable does not mean permitted**: every invocation is still checked by the local DeskMCP policy before it can execute.
+
+Windows Computer Use is **UI Automation first**. `desktop_ui_snapshot` returns a short-lived opaque `computer_observation_id`; every `desktop_ui_action` must consume a fresh observation, and any action invalidates sibling observations for that window so concurrent agents cannot keep acting from stale UI state. GUI mutations are serialized process-wide. Screenshot capture is optional and returned as MCP `image/png`; use it when visual context is needed instead of paying the image cost on every step. See [`docs/COMPUTER_USE.md`](docs/COMPUTER_USE.md).
 
 On Windows, `window_mode` controls only whether the CMD/PowerShell console itself is hidden or visible. It is independent from privilege elevation. `window_mode: "hidden"` remains the default for background agent work; use `window_mode: "visible"` only when the local user should see and interact with the console window. Visible sessions take interactive keyboard input from their Windows console instead of `desktop_interact_process`.
 
@@ -109,8 +116,11 @@ On Windows, `window_mode` controls only whether the CMD/PowerShell console itsel
 - Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default, and search excludes them before Desktop Commander/ripgrep reads candidates.
 - In Read/Write/Full, `desktop_read_file` issues a one-time opaque `observation_id`. Editing, moving, or overwriting an existing file must present the matching fresh capability; capabilities are path/version-bound, single-use, bounded to 1024 entries, and same-path mutations are serialized so concurrent agents cannot silently overwrite each other from the same observed version.
 - Unlock intentionally disables those three DeskMCP filesystem protections for the current session. Audit remains enabled and Windows account permissions remain the final local boundary.
-- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control. Capacity counts active sessions plus in-flight start reservations, so no more than 32 owned sessions can be active/starting at once. Desktop Commander's own `list_sessions` is the active-session source of truth (rather than OS PID liveness guesses); completed-session capabilities remain readable in a bounded history, any later reuse of the same OS PID invalidates older capabilities for that PID, and Gateway shutdown cleans up owned live sessions.
-- Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, or real process PIDs. Writes are serialized and rotate at 10 MB with four bounded backups.
+- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control. Capacity counts active sessions plus in-flight start reservations, so no more than 32 owned sessions can be active/starting at once. Desktop Commander's own `list_sessions` is the active-session source of truth (rather than OS PID liveness guesses); completed-session capabilities remain readable in bounded history, any later reuse of the same OS PID invalidates older capabilities for that PID, and Gateway shutdown cleans up owned live sessions.
+- Computer Use exposes opaque `window_id` capabilities rather than HWND/PID targets. A fresh `computer_observation_id` is required for every action, observations expire after 30 seconds and are one-time, and the first action on a window invalidates sibling observations from the same UI state.
+- Computer Use is available only in session-only Full Control or Fully Unlocked. It does not bypass Windows ACL/UAC, the lock screen, or UAC Secure Desktop. System-wide key injection requires Fully Unlocked; the MCP surface does not expose WinApp's cross-integrity `post-message` keyboard transport.
+- All GUI operations share one process-wide coordinator so multiple MCP clients cannot concurrently mutate the desktop. UI Automation actions are preferred over injected input; screenshots are optional and temporary PNG files are removed after capture.
+- Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, screenshot pixels, or real process/window IDs. Writes and GUI mutations are serialized within their respective safety domains, and audit logs rotate at 10 MB with four bounded backups.
 
 Security reports should use [GitHub Private vulnerability reporting](https://github.com/edmen12/deskmcp/security/advisories/new), not a public issue.
 
@@ -150,7 +160,7 @@ Build the complete Windows release with:
 scripts\build-installer.cmd
 ```
 
-The release pipeline performs Gateway build, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, stage smoke, 13-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
+The release pipeline performs Gateway build, clean `dist` generation, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, pinned WinApp CLI provenance/architecture checks, stage smoke, 16-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
 
 Generated artifacts live under ignored `runtime\release\` and should be attached to GitHub Releases instead of committed.
 
@@ -211,6 +221,7 @@ Start with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md). For reproducibl
 - [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) — release QA
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — bundled dependency licensing
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — illustrated installation and usage guide
+- [`docs/COMPUTER_USE.md`](docs/COMPUTER_USE.md) — Windows Computer Use flow, permissions, observation safety, and backend packaging
 - [`docs/MACOS_DEVELOPER_PREVIEW.md`](docs/MACOS_DEVELOPER_PREVIEW.md) — Apple Silicon Developer Preview download, checksum, and Gatekeeper guidance
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — common setup and recovery paths
 - [`docs/UPDATE_SECURITY.md`](docs/UPDATE_SECURITY.md) — update trust model, execution gates, and rollback/recovery contract

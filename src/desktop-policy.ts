@@ -15,6 +15,7 @@ export interface DesktopPolicyInfo {
   readonly profile: PermissionProfile;
   readonly allowedRoots: readonly string[];
   readonly processToolsEnabled: boolean;
+  readonly computerUseEnabled: boolean;
   readonly writeEnabled: boolean;
   readonly allowSensitivePaths: boolean;
   readonly workspaceBoundaryEnforced: boolean;
@@ -125,6 +126,7 @@ function isSensitivePath(candidate: string): boolean {
       profile: this.profile,
       allowedRoots: [...this.allowedRoots],
       processToolsEnabled: this.profile === 'full-control' || this.profile === 'fully-unlocked',
+      computerUseEnabled: this.profile === 'full-control' || this.profile === 'fully-unlocked',
       writeEnabled: this.profile !== 'read-only',
       allowSensitivePaths: this.allowsSensitivePaths(),
       workspaceBoundaryEnforced: !this.isFullyUnlocked(),
@@ -142,6 +144,16 @@ function isSensitivePath(candidate: string): boolean {
 
   canWrite(): boolean {
     return this.profile !== 'read-only';
+  }
+
+  canUseComputer(): boolean {
+    return this.profile === 'full-control' || this.profile === 'fully-unlocked';
+  }
+
+  assertCanUseComputer(): void {
+    if (!this.canUseComputer()) {
+      throw new PolicyDeniedError('Computer use requires the session-only Full Control or Fully Unlocked profile.');
+    }
   }
 
   assertCanWrite(): void {

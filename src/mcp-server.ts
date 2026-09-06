@@ -1,6 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
 import { registerDesktopCommanderBridgeTools } from './bridge-tools.js';
+import { registerComputerUseTools } from './computer-use-tools.js';
+import type { ComputerUseRuntime } from './computer-use-runtime.js';
 import type { DesktopCommanderBridge } from './desktop-commander-bridge.js';
 import type { DesktopPolicy } from './desktop-policy.js';
 import type { ObservationStore } from './observation-store.js';
@@ -16,16 +18,18 @@ export function createDesktopMcpServer(
   policy?: DesktopPolicy,
   audit?: AuditLogger,
   observations?: ObservationStore,
-  processSessions?: ProcessSessionRegistry
+  processSessions?: ProcessSessionRegistry,
+  computerUse?: ComputerUseRuntime
 ): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
   if (bridge) {
-    if (!policy || !audit || !observations || !processSessions) {
-      throw new Error('Desktop policy, audit logger, observation store, and process registry are required.');
+    if (!policy || !audit || !observations || !processSessions || !computerUse) {
+      throw new Error('Desktop policy, audit logger, observation store, process registry, and computer-use runtime are required.');
     }
     registerDesktopCommanderBridgeTools(server, bridge, policy, audit, observations);
     registerProcessTools(server, bridge, policy, audit, processSessions);
+    registerComputerUseTools(server, policy, audit, computerUse);
   } else {
     registerTestTools(server);
   }
