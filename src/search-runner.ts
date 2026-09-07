@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
-  DesktopCommanderBridge,
-  DesktopCommanderToolResult
-} from './desktop-commander-bridge.js';
+  DesktopBackendBridge,
+  DesktopBackendToolResult
+} from './desktop-backend-bridge.js';
 import type { DesktopPolicy } from './desktop-policy.js';
 
 export type DesktopSearchType = 'files' | 'content';
@@ -89,7 +89,7 @@ function dedupe(entries: readonly DesktopSearchEntry[]): DesktopSearchEntry[] {
 
 export class SafeSearchRunner {
   constructor(
-    private readonly bridge: DesktopCommanderBridge,
+    private readonly bridge: DesktopBackendBridge,
     private readonly policy: DesktopPolicy
   ) {}
 
@@ -114,7 +114,7 @@ export class SafeSearchRunner {
     return output;
   }
 
-  async run(options: SafeSearchOptions): Promise<DesktopCommanderToolResult> {
+  async run(options: SafeSearchOptions): Promise<DesktopBackendToolResult> {
     const prefilteredFilePattern = safeSearchFilePattern(
       options.filePattern,
       this.policy.allowsSensitivePaths()

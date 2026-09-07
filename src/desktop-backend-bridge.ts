@@ -8,7 +8,7 @@ import {
 } from '@modelcontextprotocol/client/stdio';
 import { PROJECT_ROOT } from './paths.js';
 
-export interface DesktopCommanderStartupTiming {
+export interface DesktopBackendStartupTiming {
   readonly accessMs: number;
   readonly connectMs: number;
   readonly listToolsMs: number;
@@ -16,25 +16,25 @@ export interface DesktopCommanderStartupTiming {
   readonly totalMs: number;
 }
 
-export interface DesktopCommanderInfo {
+export interface DesktopBackendInfo {
   readonly ready: boolean;
   readonly entry: string;
   readonly serverName?: string;
   readonly serverVersion?: string;
   readonly toolCount: number;
-  readonly startupTiming?: DesktopCommanderStartupTiming;
+  readonly startupTiming?: DesktopBackendStartupTiming;
 }
 
-export interface DesktopCommanderToolResult {
+export interface DesktopBackendToolResult {
   readonly text: string;
   readonly isError: boolean;
 }
 
-const installedDesktopCommanderEntry = path.join(
+const installedDesktopBackendEntry = path.join(
   PROJECT_ROOT, 'node_modules', '@wonderwhy-er',
   'desktop-commander', 'dist', 'index.js'
 );
-export const DEFAULT_DESKTOP_COMMANDER_ENTRY = installedDesktopCommanderEntry;
+export const DEFAULT_DESKMCP_BACKEND_ENTRY = installedDesktopBackendEntry;
 
 const defaultProcessHostEntry = path.basename(PROJECT_ROOT).toLowerCase() === 'gateway'
   ? path.resolve(PROJECT_ROOT, '..', 'DeskMCP.ProcessHost.exe')
@@ -62,18 +62,18 @@ function elapsedMs(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 100) / 100;
 }
 
-export class DesktopCommanderBridge {
+export class DesktopBackendBridge {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
   private startPromise: Promise<void> | null = null;
   private toolCount = 0;
   private serverName: string | undefined;
   private serverVersion: string | undefined;
-  private startupTiming: DesktopCommanderStartupTiming | undefined;
+  private startupTiming: DesktopBackendStartupTiming | undefined;
 
   constructor(
-    readonly entry = process.env.DESKTOP_COMMANDER_ENTRY
-      ?? DEFAULT_DESKTOP_COMMANDER_ENTRY,
+    readonly entry = process.env.DESKMCP_BACKEND_ENTRY
+      ?? DEFAULT_DESKMCP_BACKEND_ENTRY,
     readonly processHostEntry = process.env.DESKTOP_MCP_PROCESS_HOST
       ?? DEFAULT_PROCESS_HOST_ENTRY
   ) {}
@@ -139,11 +139,11 @@ export class DesktopCommanderBridge {
       const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'list_sessions', 'force_terminate'];
       for (const name of required) {
         if (!listed.tools.some(tool => tool.name === name)) {
-          throw new Error(`Desktop Commander required tool unavailable: ${name}`);
+          throw new Error(`DeskMCP backend required tool unavailable: ${name}`);
         }
       }
       const validationMs = elapsedMs(phaseStartedAt);
-      if (closed) throw new Error('Desktop Commander transport closed during startup.');
+      if (closed) throw new Error('DeskMCP backend transport closed during startup.');
 
       const version = client.getServerVersion();
       this.toolCount = listed.tools.length;
@@ -163,7 +163,7 @@ export class DesktopCommanderBridge {
       throw error;
     }
   }
-  info(): DesktopCommanderInfo {
+  info(): DesktopBackendInfo {
     return {
       ready: this.client !== null && this.transport !== null,
       entry: this.entry,
@@ -177,11 +177,11 @@ export class DesktopCommanderBridge {
   private async callTextTool(
     name: string,
     args: Record<string, unknown>
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     await this.start();
     const client = this.client;
     const transport = this.transport;
-    if (!client || !transport) throw new Error('Desktop Commander bridge is not started.');
+    if (!client || !transport) throw new Error('DeskMCP backend bridge is not started.');
     try {
       const result = await client.callTool({ name, arguments: args });
       const text = result.content
@@ -200,7 +200,7 @@ export class DesktopCommanderBridge {
     }
   }
 
-  async readFile(filePath: string, offset = 0, length = 1000): Promise<DesktopCommanderToolResult> {
+  async readFile(filePath: string, offset = 0, length = 1000): Promise<DesktopBackendToolResult> {
     return this.callTextTool('read_file', {
       path: filePath,
       isUrl: false,
@@ -208,14 +208,14 @@ export class DesktopCommanderBridge {
       length
     });
   }
-  async listDirectory(directoryPath: string, depth = 2): Promise<DesktopCommanderToolResult> {
+  async listDirectory(directoryPath: string, depth = 2): Promise<DesktopBackendToolResult> {
     return this.callTextTool('list_directory', {
       path: directoryPath,
       depth
     });
   }
 
-  async getFileInfo(filePath: string): Promise<DesktopCommanderToolResult> {
+  async getFileInfo(filePath: string): Promise<DesktopBackendToolResult> {
     return this.callTextTool('get_file_info', { path: filePath });
   }
 
@@ -223,7 +223,7 @@ export class DesktopCommanderBridge {
     filePath: string,
     content: string,
     mode: 'rewrite' | 'append'
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     return this.callTextTool('write_file', {
       path: filePath,
       content,
@@ -236,7 +236,7 @@ export class DesktopCommanderBridge {
     oldString: string,
     newString: string,
     expectedReplacements = 1
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     return this.callTextTool('edit_block', {
       file_path: filePath,
       old_string: oldString,
@@ -244,20 +244,20 @@ export class DesktopCommanderBridge {
       expected_replacements: expectedReplacements
     });
   }
-  async createDirectory(directoryPath: string): Promise<DesktopCommanderToolResult> {
+  async createDirectory(directoryPath: string): Promise<DesktopBackendToolResult> {
     return this.callTextTool('create_directory', { path: directoryPath });
   }
 
   async moveFile(
     sourcePath: string,
     destinationPath: string
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     return this.callTextTool('move_file', {
       source: sourcePath,
       destination: destinationPath
     });
   }
-  async startSearch(args: Record<string, unknown>): Promise<DesktopCommanderToolResult> {
+  async startSearch(args: Record<string, unknown>): Promise<DesktopBackendToolResult> {
     return this.callTextTool('start_search', args);
   }
 
@@ -265,11 +265,11 @@ export class DesktopCommanderBridge {
     sessionId: string,
     offset: number,
     length: number
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     return this.callTextTool('get_more_search_results', { sessionId, offset, length });
   }
 
-  async stopSearch(sessionId: string): Promise<DesktopCommanderToolResult> {
+  async stopSearch(sessionId: string): Promise<DesktopBackendToolResult> {
     return this.callTextTool('stop_search', { sessionId });
   }
 
@@ -279,7 +279,7 @@ export class DesktopCommanderBridge {
     shell?: 'powershell.exe' | 'cmd.exe',
     windowMode: 'hidden' | 'visible' = 'hidden',
     elevation: 'standard' | 'admin' = 'standard'
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     if (process.platform !== 'win32') {
       return this.callTextTool('start_process', {
         command,
@@ -310,7 +310,7 @@ export class DesktopCommanderBridge {
     timeoutMs: number,
     offset: number,
     length: number
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     return this.callTextTool('read_process_output', {
       pid,
       timeout_ms: timeoutMs,
@@ -324,7 +324,7 @@ export class DesktopCommanderBridge {
     input: string,
     timeoutMs: number,
     waitForPrompt: boolean
-  ): Promise<DesktopCommanderToolResult> {
+  ): Promise<DesktopBackendToolResult> {
     return this.callTextTool('interact_with_process', {
       pid,
       input,
@@ -333,11 +333,11 @@ export class DesktopCommanderBridge {
     });
   }
 
-  async listProcessSessions(): Promise<DesktopCommanderToolResult> {
+  async listProcessSessions(): Promise<DesktopBackendToolResult> {
     return this.callTextTool('list_sessions', {});
   }
 
-  async forceTerminateProcess(pid: number): Promise<DesktopCommanderToolResult> {
+  async forceTerminateProcess(pid: number): Promise<DesktopBackendToolResult> {
     return this.callTextTool('force_terminate', { pid });
   }
 

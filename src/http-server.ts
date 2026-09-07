@@ -9,7 +9,7 @@ import type { AuditLogger } from './audit.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
 import { createComputerUseRuntime, type ComputerUseRuntime } from './computer-use-runtime.js';
 import { createDesktopMcpServer, SERVER_NAME, SERVER_VERSION } from './mcp-server.js';
-import type { DesktopCommanderBridge } from './desktop-commander-bridge.js';
+import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import type { DesktopPolicy } from './desktop-policy.js';
 import type { ObservationStore } from './observation-store.js';
 import type { ProcessSessionRegistry } from './process-session-registry.js';
@@ -21,7 +21,7 @@ export interface RunningHttpServer {
   close(): Promise<void>;
 }
 
-function publicDesktopCommanderInfo(bridge?: DesktopCommanderBridge) {
+function publicDesktopRuntimeInfo(bridge?: DesktopBackendBridge) {
   if (!bridge) return null;
   const info = bridge.info();
   return {
@@ -78,7 +78,7 @@ function writeJson(res: http.ServerResponse, status: number, body: unknown): voi
 export async function startHttpServer(
   host = '127.0.0.1',
   port = 8765,
-  bridge?: DesktopCommanderBridge,
+  bridge?: DesktopBackendBridge,
   policy?: DesktopPolicy,
   audit?: AuditLogger,
   observations?: ObservationStore,
@@ -89,7 +89,7 @@ export async function startHttpServer(
     throw new Error('Gateway refuses non-loopback bind addresses.');
   }
   if (bridge && (!policy || !audit || !observations || !processSessions)) {
-    throw new Error('Desktop policy, audit logger, observation store, and process registry are required when Desktop Commander is enabled.');
+    throw new Error('Desktop policy, audit logger, observation store, and process registry are required when DeskMCP backend is enabled.');
   }
   const effectiveComputerUse = computerUse ?? (bridge ? createComputerUseRuntime() : undefined);
 
@@ -116,8 +116,8 @@ export async function startHttpServer(
         ok: true,
         name: SERVER_NAME,
         version: SERVER_VERSION,
-        mode: bridge ? 'desktop-commander' : 'safe-test',
-        desktopCommander: publicDesktopCommanderInfo(bridge),
+        mode: bridge ? 'desktop-runtime' : 'safe-test',
+        desktopRuntime: publicDesktopRuntimeInfo(bridge),
         policy: publicPolicyInfo(policy),
         computerUse: publicComputerUseInfo(effectiveComputerUse),
         auditEnabled: Boolean(audit),

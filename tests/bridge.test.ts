@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { AuditLogger, type AuditRecord } from '../src/audit.js';
-import { DesktopCommanderBridge } from '../src/desktop-commander-bridge.js';
+import { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { startHttpServer } from '../src/http-server.js';
 import { ObservationStore } from '../src/observation-store.js';
@@ -42,7 +42,7 @@ function observationIdFrom(result: { content: unknown[] }): string {
   return match[1];
 }
 
-test('workspace-write policy exposes guarded Desktop Commander filesystem tools', async () => {
+test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', async () => {
   await rm(bridgeWritePath, { force: true });
   await rm(auditPath, { force: true });
   await rm(bridgeWritePath, { force: true });
@@ -61,7 +61,7 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
   await audit.init();
   const observations = new ObservationStore();
   const processSessions = new ProcessSessionRegistry();
-  const bridge = new DesktopCommanderBridge();
+  const bridge = new DesktopBackendBridge();
   await bridge.start();
   const running = await startHttpServer('127.0.0.1', 0, bridge, policy, audit, observations, processSessions);
   const client = makeClient('0.9.0');
@@ -150,7 +150,7 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
 
 
 
-    const marker = `DC_POLICY_WRITE_${Date.now()}`;
+    const marker = `DESKMCP_POLICY_WRITE_${Date.now()}`;
     const write = await client.callTool({
       name: 'desktop_write_file',
       arguments: {
@@ -177,7 +177,7 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
 
     const health = await fetch(`${running.url}/health`);
     const healthBody = await health.json() as {
-      desktopCommander?: Record<string, unknown>;
+      desktopRuntime?: Record<string, unknown>;
       policy?: Record<string, unknown> & { profile?: string; writeEnabled?: boolean };
       auditEnabled?: boolean;
       observationStoreEnabled?: boolean;
@@ -186,8 +186,8 @@ test('workspace-write policy exposes guarded Desktop Commander filesystem tools'
     assert.equal(healthBody.policy?.writeEnabled, true);
     assert.equal(healthBody.auditEnabled, true);
     assert.equal(healthBody.observationStoreEnabled, true);
-    assert.equal('entry' in (healthBody.desktopCommander ?? {}), false);
-    const startupTiming = healthBody.desktopCommander?.startupTiming as
+    assert.equal('entry' in (healthBody.desktopRuntime ?? {}), false);
+    const startupTiming = healthBody.desktopRuntime?.startupTiming as
       | Record<string, unknown>
       | undefined;
     assert.ok(startupTiming);
@@ -609,7 +609,7 @@ test('observation capabilities isolate concurrent MCP clients and prevent lost u
   await audit.init();
   const observations = new ObservationStore();
   const processSessions = new ProcessSessionRegistry();
-  const bridge = new DesktopCommanderBridge();
+  const bridge = new DesktopBackendBridge();
   await bridge.start();
   const running = await startHttpServer('127.0.0.1', 0, bridge, policy, audit, observations, processSessions);
   const clientA = makeClient('multi-client-a');
@@ -670,8 +670,8 @@ test('observation capabilities isolate concurrent MCP clients and prevent lost u
   }
 });
 
-test('Desktop Commander bridge reconnects after its child process exits', async () => {
-  const bridge = new DesktopCommanderBridge();
+test('DeskMCP backend bridge reconnects after its child process exits', async () => {
+  const bridge = new DesktopBackendBridge();
   await bridge.start();
   try {
     const getTransportPid = (): number | null => {
@@ -682,7 +682,7 @@ test('Desktop Commander bridge reconnects after its child process exits', async 
     };
 
     const originalPid = getTransportPid();
-    assert.ok(originalPid && originalPid > 0, 'Desktop Commander child pid was unavailable');
+    assert.ok(originalPid && originalPid > 0, 'DeskMCP backend child pid was unavailable');
     process.kill(originalPid, 'SIGKILL');
 
     const deadline = Date.now() + 5000;

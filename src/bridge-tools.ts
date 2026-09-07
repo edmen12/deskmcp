@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { AuditLogger, AuditRisk } from './audit.js';
-import type { DesktopCommanderBridge } from './desktop-commander-bridge.js';
+import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { ObservationStore } from './observation-store.js';
 import { SafeSearchRunner } from './search-runner.js';
@@ -74,9 +74,9 @@ async function auditedCall(
   }
 }
 
-export function registerDesktopCommanderBridgeTools(
+export function registerDesktopBackendBridgeTools(
   server: McpServer,
-  bridge: DesktopCommanderBridge,
+  bridge: DesktopBackendBridge,
   policy: DesktopPolicy,
   audit: AuditLogger,
   observations: ObservationStore
@@ -111,7 +111,7 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_read_file',
     {
       title: 'Read Desktop File',
-      description: 'Read a local file through Desktop Commander after DeskMCP path-policy checks.',
+      description: 'Read a local file through DeskMCP backend after DeskMCP path-policy checks.',
       inputSchema: z.object({
         path: pathSchema,
         offset: z.number().int().optional().default(0),
@@ -146,7 +146,7 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_list_directory',
     {
       title: 'List Desktop Directory',
-      description: 'List a local directory through Desktop Commander after DeskMCP path-policy checks.',
+      description: 'List a local directory through DeskMCP backend after DeskMCP path-policy checks.',
       inputSchema: z.object({
         path: pathSchema,
         depth: z.number().int().min(1).max(4).optional().default(2)
@@ -260,7 +260,7 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_create_directory',
     {
       title: 'Create Desktop Directory',
-      description: 'Create a directory through Desktop Commander inside locally allowed roots.',
+      description: 'Create a directory through DeskMCP backend inside locally allowed roots.',
       inputSchema: z.object({ path: pathSchema }),
       annotations: {
         readOnlyHint: false,
@@ -322,7 +322,7 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_edit_file',
     {
       title: 'Edit Desktop Text File',
-      description: 'Replace exact text through Desktop Commander. Pass observation_id from a fresh desktop_read_file call.',
+      description: 'Replace exact text through DeskMCP backend. Pass observation_id from a fresh desktop_read_file call.',
       inputSchema: z.object({
         path: pathSchema,
         old_string: z.string().min(1).max(128 * 1024),
@@ -363,7 +363,7 @@ export function registerDesktopCommanderBridgeTools(
     'desktop_write_file',
     {
       title: 'Write Desktop File',
-      description: 'Write or append a local file through Desktop Commander after DeskMCP policy checks. Existing files require observation_id from desktop_read_file; new files do not.',
+      description: 'Write or append a local file through DeskMCP backend after DeskMCP policy checks. Existing files require observation_id from desktop_read_file; new files do not.',
       inputSchema: z.object({
         path: pathSchema,
         content: z.string().min(1).max(1024 * 1024),

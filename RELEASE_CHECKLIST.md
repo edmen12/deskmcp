@@ -65,7 +65,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 - [x] Windows ARM64 build/install/upgrade/runtime/uninstall validation passes on the native GitHub ARM64 runner; the current public v0.9.1 asset remains Windows x64 and is not mutated.
 - [x] Updater download/verify/install/post-install security-hold path is implemented and passes x64 + ARM64 self-tests. User-initiated execution is gated by fixed-repository immutable release metadata plus matching size/SHA-256; Authenticode adds publisher verification when present but is not required for the verified unsigned update path.
-- [ ] Upstream deprecated npm dependencies remain in Desktop Commander / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
+- [ ] Upstream deprecated npm dependencies remain in DeskMCP backend / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
 
 ## Current validated artifact
 

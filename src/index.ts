@@ -4,7 +4,7 @@ import {
   type RunningControlServer
 } from './control-server.js';
 import { createComputerUseRuntime } from './computer-use-runtime.js';
-import { DesktopCommanderBridge } from './desktop-commander-bridge.js';
+import { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import { DesktopPolicy } from './desktop-policy.js';
 import { startHttpServer, type RunningHttpServer } from './http-server.js';
 import { ObservationStore } from './observation-store.js';
@@ -27,7 +27,7 @@ const policy = await DesktopPolicy.create();
 const observations = new ObservationStore();
 const processSessions = new ProcessSessionRegistry();
 const computerUse = createComputerUseRuntime();
-const bridge = new DesktopCommanderBridge();
+const bridge = new DesktopBackendBridge();
 
 let running: RunningHttpServer | null = null;
 let control: RunningControlServer | null = null;
@@ -40,7 +40,7 @@ async function cleanupOwnedProcesses(): Promise<void> {
       processSessions.reconcileActivePids(extractListedProcessPids(listed.text));
     }
   } catch {
-    // Keep the registry's last known active state if Desktop Commander cannot list.
+    // Keep the registry's last known active state if DeskMCP backend cannot list.
   }
 
   for (const session of processSessions.ownedSessions()) {
@@ -104,7 +104,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     await bridge.close();
   } catch (error) {
-    console.error('[deskmcp] Desktop Commander shutdown failed:', error);
+    console.error('[deskmcp] DeskMCP backend shutdown failed:', error);
     process.exitCode = 1;
   }
 }
@@ -135,7 +135,7 @@ console.error(`[deskmcp] policy: ${JSON.stringify(policy.info())}`);
 console.error('[deskmcp] audit: enabled');
 console.error('[deskmcp] local control: enabled');
 console.error(
-  `[deskmcp] Desktop Commander connected: ${JSON.stringify(bridge.info())}`
+  `[deskmcp] DeskMCP backend connected: ${JSON.stringify(bridge.info())}`
 );
 
 process.once('SIGINT', () => void shutdown('SIGINT'));

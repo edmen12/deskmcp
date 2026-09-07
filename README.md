@@ -61,7 +61,7 @@ ChatGPT
   ↕ OpenAI Tunnel
 DeskMCP Gateway  (127.0.0.1:8765)
   ↕ local policy enforcement
-  ├─ Desktop Commander
+  ├─ DeskMCP backend
   │   ↳ selected workspace
   │   ↳ Gateway-owned process sessions
   └─ Windows Computer Use backend
@@ -113,10 +113,10 @@ On Windows, `window_mode` controls only whether the CMD/PowerShell console itsel
 
 - Gateway HTTP binds only to `127.0.0.1:8765`.
 - In Read, Write and Full, allowed filesystem access is restricted to the locally selected Workspace and lexical/canonical path checks block symlink/junction escapes.
-- Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default, and search excludes them before Desktop Commander/ripgrep reads candidates.
+- Sensitive paths such as `.env`, `.npmrc`, `.pypirc`, `.netrc`, `.ssh`, `.gnupg`, and `.aws/credentials` are denied by default, and search excludes them before DeskMCP backend/ripgrep reads candidates.
 - In Read/Write/Full, `desktop_read_file` issues a one-time opaque `observation_id`. Editing, moving, or overwriting an existing file must present the matching fresh capability; capabilities are path/version-bound, single-use, bounded to 1024 entries, and same-path mutations are serialized so concurrent agents cannot silently overwrite each other from the same observed version.
 - Unlock intentionally disables those three DeskMCP filesystem protections for the current session. Audit remains enabled and Windows account permissions remain the final local boundary.
-- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control. Capacity counts active sessions plus in-flight start reservations, so no more than 32 owned sessions can be active/starting at once. Desktop Commander's own `list_sessions` is the active-session source of truth (rather than OS PID liveness guesses); completed-session capabilities remain readable in bounded history, any later reuse of the same OS PID invalidates older capabilities for that PID, and Gateway shutdown cleans up owned live sessions.
+- Process tools use opaque Gateway-owned session IDs instead of exposing arbitrary Windows PID control. Capacity counts active sessions plus in-flight start reservations, so no more than 32 owned sessions can be active/starting at once. DeskMCP backend's own `list_sessions` is the active-session source of truth (rather than OS PID liveness guesses); completed-session capabilities remain readable in bounded history, any later reuse of the same OS PID invalidates older capabilities for that PID, and Gateway shutdown cleans up owned live sessions.
 - Computer Use exposes opaque `window_id` capabilities rather than HWND/PID targets. A fresh `computer_observation_id` is required for every action, observations expire after 30 seconds and are one-time, and the first action on a window invalidates sibling observations from the same UI state.
 - Computer Use is available only in session-only Full Control or Fully Unlocked. It does not bypass Windows ACL/UAC, the lock screen, or UAC Secure Desktop. System-wide key injection requires Fully Unlocked; the MCP surface does not expose WinApp's cross-integrity `post-message` keyboard transport.
 - All GUI operations share one process-wide coordinator so multiple MCP clients cannot concurrently mutate the desktop. UI Automation actions are preferred over injected input; screenshots are optional and temporary PNG files are removed after capture.
@@ -197,7 +197,7 @@ Current and post-0.9.2 work is tracked publicly with explicit acceptance criteri
 - 🚧 [#6 — Optional Authenticode signing](https://github.com/edmen12/deskmcp/issues/6) — SignPath Foundation approval, first signed artifact verification, and production publisher pin remain pending.
 - ✅ [#7 — Windows ARM64 packaging and validation](https://github.com/edmen12/deskmcp/issues/7) — target-aware runtime/installer pipeline and native Windows ARM64 full-chain validation pass on both the feature branch and merged main commit; issue closed.
 - ✅ [#8 — Safe update mechanism](https://github.com/edmen12/deskmcp/issues/8) — trust validation, verified download, rollback/recovery, profile preservation, failure handling, and manual fallback are implemented; issue closed. Production signing remains tracked by #6.
-- ✅ [#9 — Desktop Commander cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed to upstream initialization variance, surfaced with startup diagnostics, and closed.
+- ✅ [#9 — DeskMCP backend cold-start variance](https://github.com/edmen12/deskmcp/issues/9) — profiled, attributed to upstream initialization variance, surfaced with startup diagnostics, and closed.
 - 🚧 [#10 — User-controlled updater UI](https://github.com/edmen12/deskmcp/issues/10) — the one-click verified update path is implemented; production Authenticode remains an optional publisher-identity enhancement tracked separately from basic updater availability.
 
 ## Support DeskMCP

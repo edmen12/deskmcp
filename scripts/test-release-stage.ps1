@@ -154,7 +154,7 @@ try {
         if ($panel.HasExited) { Write-Output ('RELEASE_PANEL_EXIT=' + $panel.ExitCode); break }
         try {
             $candidateHealth = Invoke-RestMethod ($SmokeBaseUrl + '/health') -TimeoutSec 1
-            if ($candidateHealth.desktopCommander -and $candidateHealth.desktopCommander.ready -eq $true) { $health = $candidateHealth; break }
+            if ($candidateHealth.desktopRuntime -and $candidateHealth.desktopRuntime.ready -eq $true) { $health = $candidateHealth; break }
         }
         catch { }
         if ([DateTime]::UtcNow -lt $healthDeadline) { Start-Sleep -Milliseconds 250 }
@@ -166,7 +166,7 @@ try {
         Write-Output ('RELEASE_SMOKE_NODE_COUNT_ON_FAILURE=' + $stageNodeCount)
         $panelErrorLog = Join-Path $SmokeDataRoot 'logs\control-panel-error.log'
         if (Test-Path -LiteralPath $panelErrorLog) { Write-Output 'RELEASE_PANEL_ERROR_LOG_BEGIN'; Get-Content -LiteralPath $panelErrorLog -Tail 30; Write-Output 'RELEASE_PANEL_ERROR_LOG_END' }
-        throw 'Release-stage Gateway + Desktop Commander did not become ready within 90 seconds.'
+        throw 'Release-stage Gateway + DeskMCP backend did not become ready within 90 seconds.'
     }
     if ($health.policy.profile -ne 'read-only') { throw "Unexpected profile: $($health.policy.profile)" }
     if ($health.version -ne $Version) { throw "Unexpected Gateway version: $($health.version); expected $Version" }
@@ -178,11 +178,11 @@ try {
         try { [int]$_.ParentProcessId -eq [int]$panel.Id -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode -and $_.CommandLine -match 'dist[\\/]src[\\/]index\.js' } catch { $false }
     })
     if ($gatewayProcess.Count -ne 1) { throw "Expected one Gateway child for the smoke Panel, found $($gatewayProcess.Count)." }
-    $desktopCommanderProcess = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
-        try { [int]$_.ParentProcessId -eq [int]$gatewayProcess[0].ProcessId -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode -and $_.CommandLine -match 'desktop-commander' } catch { $false }
+    $desktopRuntimeProcess = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
+        try { [int]$_.ParentProcessId -eq [int]$gatewayProcess[0].ProcessId -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode -and $_.CommandLine -match 'dist[\\/]index\.js' } catch { $false }
     })
-    if ($desktopCommanderProcess.Count -ne 1) { throw "Expected one Desktop Commander child for the smoke Gateway, found $($desktopCommanderProcess.Count)." }
-    $OwnedStageNodePids = @([int]$gatewayProcess[0].ProcessId, [int]$desktopCommanderProcess[0].ProcessId)
+    if ($desktopRuntimeProcess.Count -ne 1) { throw "Expected one DeskMCP backend child for the smoke Gateway, found $($desktopRuntimeProcess.Count)." }
+    $OwnedStageNodePids = @([int]$gatewayProcess[0].ProcessId, [int]$desktopRuntimeProcess[0].ProcessId)
     $stageTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($StageRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
     if ($stageTunnelCount -ne 0) { throw "Release-stage smoke started a tunnel-client despite tunnel isolation: count=$stageTunnelCount" }
     Write-Output 'SMOKE_TUNNEL_PROCESS_COUNT=0'

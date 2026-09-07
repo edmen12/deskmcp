@@ -11,8 +11,8 @@ All notable changes to DeskMCP are documented here.
 - Removed unsigned/publisher-signature status from the normal update UI; signing state remains an internal security/logging concern and Windows may still show its own SmartScreen or publisher UI.
 - Hardened multi-agent file mutation safety: `desktop_read_file` now returns a one-time path/version-bound `observation_id`; edit, move, and existing-file writes consume that capability, and same-path mutations are serialized to prevent concurrent lost updates.
 - Added agent-safe runtime and multi-client stress harnesses that isolate ports, state, Startup shortcuts, Tunnel profiles, singleton namespaces, and owned process trees from any DeskMCP instance already in use.
-- Hardened Full Control process ownership for concurrent agents: active state now follows Desktop Commander's session registry rather than OS PID liveness guesses, completed sessions remain readable in bounded history, start reservations enforce the 32-session ceiling before spawn, and stress coverage now includes 40-way start bursts, read/terminate races, Desktop Commander crash recovery, and Gateway-owned shutdown cleanup.
-- Added `DeskMCP.ProcessHost` with a Windows Job Object (`KILL_ON_JOB_CLOSE`) for Full Control commands, so owned child/grandchild processes are kernel-cleaned when the root session, Desktop Commander, or Gateway disappears without exposing direct PID-tree termination to MCP callers.
+- Hardened Full Control process ownership for concurrent agents: active state now follows DeskMCP backend's session registry rather than OS PID liveness guesses, completed sessions remain readable in bounded history, start reservations enforce the 32-session ceiling before spawn, and stress coverage now includes 40-way start bursts, read/terminate races, DeskMCP backend crash recovery, and Gateway-owned shutdown cleanup.
+- Added `DeskMCP.ProcessHost` with a Windows Job Object (`KILL_ON_JOB_CLOSE`) for Full Control commands, so owned child/grandchild processes are kernel-cleaned when the root session, DeskMCP backend, or Gateway disappears without exposing direct PID-tree termination to MCP callers.
 - Prevented a verified update from launching Setup after the user has already begun quitting DeskMCP; shutdown now gates every update entry/continuation, discards a just-finished verified download, and avoids touching closing UI state.
 
 ## 0.9.5 — 2026-09-06
@@ -109,7 +109,7 @@ All notable changes to DeskMCP are documented here.
 ### Fixed
 
 - Prevented duplicate Gateway launch storms during slow cold starts.
-- Prevented orphan Desktop Commander processes and release-stage directory locks.
+- Prevented orphan DeskMCP backend processes and release-stage directory locks.
 - Clarified tray exit semantics between closing the UI and quitting DeskMCP services.
 - Moved user settings, logs, and secrets out of the installation directory.
 - Migrated the Control Panel to .NET 10 and removed obsolete PowerShell Control Panel implementations.

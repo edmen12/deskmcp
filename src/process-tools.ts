@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
-import type { DesktopCommanderBridge, DesktopCommanderToolResult } from './desktop-commander-bridge.js';
+import type { DesktopBackendBridge, DesktopBackendToolResult } from './desktop-backend-bridge.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import {
   extractListedProcessPids,
@@ -18,7 +18,7 @@ function failure(prefix: string, error: unknown) {
   };
 }
 
-function resultText(result: DesktopCommanderToolResult) {
+function resultText(result: DesktopBackendToolResult) {
   return {
     content: [{ type: 'text' as const, text: result.text }],
     ...(result.isError ? { isError: true as const } : {})
@@ -31,7 +31,7 @@ async function auditedProcessCall(
   tool: string,
   target: string | undefined,
   prefix: string,
-  action: () => Promise<DesktopCommanderToolResult>
+  action: () => Promise<DesktopBackendToolResult>
 ) {
   let operation;
   try {
@@ -75,7 +75,7 @@ export function requireSupportedProcessPresentation(
 }
 
 async function reconcileActiveProcessSessions(
-  bridge: DesktopCommanderBridge,
+  bridge: DesktopBackendBridge,
   sessions: ProcessSessionRegistry
 ): Promise<void> {
   const listed = await bridge.listProcessSessions();
@@ -84,10 +84,10 @@ async function reconcileActiveProcessSessions(
 }
 
 async function terminateVerifiedOwnedProcess(
-  bridge: DesktopCommanderBridge,
+  bridge: DesktopBackendBridge,
   sessions: ProcessSessionRegistry,
   pid: number
-): Promise<DesktopCommanderToolResult> {
+): Promise<DesktopBackendToolResult> {
   const listed = await bridge.listProcessSessions();
   if (listed.isError) return listed;
   const activePids = extractListedProcessPids(listed.text);
@@ -99,7 +99,7 @@ async function terminateVerifiedOwnedProcess(
   const terminated = await bridge.forceTerminateProcess(pid);
   if (!terminated.isError) return terminated;
 
-  // force_terminate can race a process exiting naturally. If Desktop Commander
+  // force_terminate can race a process exiting naturally. If DeskMCP backend
   // confirms the owned root is gone after the attempt, termination is complete.
   // Descendants are owned by DeskMCP.ProcessHost's Windows Job Object and are
   // killed by the kernel when that host/root session closes.
@@ -114,19 +114,19 @@ async function terminateVerifiedOwnedProcess(
   return terminated;
 }
 
-function resultShowsCompletedProcess(result: DesktopCommanderToolResult): boolean {
+function resultShowsCompletedProcess(result: DesktopBackendToolResult): boolean {
   return /Process completed with exit code/i.test(result.text);
 }
 
-function resultShowsMissingActiveProcess(result: DesktopCommanderToolResult): boolean {
+function resultShowsMissingActiveProcess(result: DesktopBackendToolResult): boolean {
   return /No active session found|No active process found|No session found/i.test(result.text);
 }
 
 function sanitizeProcessResult(
-  result: DesktopCommanderToolResult,
+  result: DesktopBackendToolResult,
   pid: number,
   sessionId: string
-): DesktopCommanderToolResult {
+): DesktopBackendToolResult {
   const text = redactPid(result.text, pid, sessionId)
     .replace(`Process started with PID ${sessionId}`, `Process session started: ${sessionId}`);
   return { text, isError: result.isError };
@@ -136,7 +136,7 @@ const sessionSchema = z.string().uuid();
 
 export function registerProcessTools(
   server: McpServer,
-  bridge: DesktopCommanderBridge,
+  bridge: DesktopBackendBridge,
   policy: DesktopPolicy,
   audit: AuditLogger,
   sessions: ProcessSessionRegistry

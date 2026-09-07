@@ -52,7 +52,7 @@ The Windows UAC decision remains the only approval step. DeskMCP does not disabl
 - `PROCESS_HOST_HIDDEN_ADMIN=PASS`.
 - WPF build: 0 warnings / 0 errors, including First Run and Full/Unlock modal capture validation.
 - Release-stage smoke: PASS with WinApp v0.5.0 payload integrity, 16-tool validation, and `SMOKE_TUNNEL_PROCESS_COUNT=0`.
-- Runtime stability: 5/5 spaced Gateway crash recoveries, 4/4 Gateway crash-storm recoveries and 5/5 Desktop Commander crash recoveries.
+- Runtime stability: 5/5 spaced Gateway crash recoveries, 4/4 Gateway crash-storm recoveries and 5/5 DeskMCP backend crash recoveries.
 - Installer smoke: install, injected-failure rollback, upgrade, interrupted-upgrade recovery, installed Computer Use runtime and uninstall all pass on Windows x64.
 - Production npm audit: 0 vulnerabilities; production Node package inventory: 501; unresolved licenses: 0.
 - Public release readiness: `BLOCKERS=0`.

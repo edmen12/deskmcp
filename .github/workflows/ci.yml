@@ -146,7 +146,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Gateway and Desktop Commander tests
+      - name: Gateway and DeskMCP backend tests
         run: npm test
 
       - name: Build native macOS release stage

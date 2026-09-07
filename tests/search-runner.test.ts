@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { DesktopCommanderBridge } from '../src/desktop-commander-bridge.js';
+import type { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { SafeSearchRunner } from '../src/search-runner.js';
 import { TEST_AREA } from '../src/paths.js';
 
-function fakeBridge(capture: (args: Record<string, unknown>) => void): DesktopCommanderBridge {
+function fakeBridge(capture: (args: Record<string, unknown>) => void): DesktopBackendBridge {
   return {
     startSearch: async (args: Record<string, unknown>) => {
       capture(args);
@@ -13,10 +13,10 @@ function fakeBridge(capture: (args: Record<string, unknown>) => void): DesktopCo
     },
     getSearchResults: async () => ({ text: 'Status: COMPLETED\n✅ Search completed.', isError: false }),
     stopSearch: async () => ({ text: 'Stopped', isError: false })
-  } as unknown as DesktopCommanderBridge;
+  } as unknown as DesktopBackendBridge;
 }
 
-test('search pre-excludes sensitive paths before Desktop Commander starts', async () => {
+test('search pre-excludes sensitive paths before DeskMCP backend starts', async () => {
   const policy = await DesktopPolicy.create({ profile: 'read-only', allowedRoots: [TEST_AREA] });
   let captured: Record<string, unknown> = {};
   const runner = new SafeSearchRunner(fakeBridge(args => { captured = args; }), policy);

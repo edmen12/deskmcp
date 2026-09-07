@@ -41,7 +41,7 @@ The release pipeline is expected to prove:
 - 13 production MCP tools are discoverable.
 - Read Only remains the default.
 - Single Instance works.
-- Gateway/Desktop Commander child processes are cleaned up.
+- Gateway/DeskMCP backend child processes are cleaned up.
 - The stage directory is not left locked.
 - Setup install, upgrade, runtime start and uninstall all return success.
 
