@@ -174,12 +174,26 @@ try {
   });
   if (completedStart.isError === true) throw new Error(`completed process start failed: ${text(completedStart)}`);
   const completedId = sessionId(completedStart);
-  const completedRead = await clients[0].callTool({
-    name: 'desktop_read_process',
-    arguments: { session_id: completedId, timeout_ms: 0, offset: 0, length: 100 }
-  });
-  if (completedRead.isError === true || !/DESKMCP_COMPLETED_OUTPUT/.test(text(completedRead)) || !/Process completed with exit code 0/.test(text(completedRead))) {
-    throw new Error(`completed process output was not readable: ${text(completedRead)}`);
+  let completedRead = null;
+  const completedReadDeadline = Date.now() + 3000;
+  do {
+    completedRead = await clients[0].callTool({
+      name: 'desktop_read_process',
+      arguments: { session_id: completedId, timeout_ms: 250, offset: 0, length: 100 }
+    });
+    if (
+      completedRead.isError !== true &&
+      /DESKMCP_COMPLETED_OUTPUT/.test(text(completedRead)) &&
+      /Process completed with exit code 0/.test(text(completedRead))
+    ) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  } while (Date.now() < completedReadDeadline);
+  if (
+    completedRead?.isError === true ||
+    !/DESKMCP_COMPLETED_OUTPUT/.test(text(completedRead)) ||
+    !/Process completed with exit code 0/.test(text(completedRead))
+  ) {
+    throw new Error(`completed process output was not readable within 3s: ${text(completedRead)}`);
   }
   console.log('PROCESS_COMPLETED_READ=PASS');
 
