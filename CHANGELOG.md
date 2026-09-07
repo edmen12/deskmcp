@@ -15,6 +15,17 @@ All notable changes to DeskMCP are documented here.
 - Added `DeskMCP.ProcessHost` with a Windows Job Object (`KILL_ON_JOB_CLOSE`) for Full Control commands, so owned child/grandchild processes are kernel-cleaned when the root session, DeskMCP backend, or Gateway disappears without exposing direct PID-tree termination to MCP callers.
 - Prevented a verified update from launching Setup after the user has already begun quitting DeskMCP; shutdown now gates every update entry/continuation, discards a just-finished verified download, and avoids touching closing UI state.
 
+## 0.9.6 — 2026-09-07
+
+### Changed
+
+- Removed Desktop Commander branding traces from DeskMCP-owned UI, health responses, logs, source identifiers, tests, CI, documentation, and architecture assets while preserving the complete 16-tool MCP surface and the underlying `@wonderwhy-er/desktop-commander` runtime dependency.
+- Renamed DeskMCP-owned backend bridge and health terminology to implementation-neutral DeskMCP backend / desktop runtime naming without changing tool behavior.
+
+### Fixed
+
+- Stabilized completed-process output validation by tolerating the short bounded delay between process exit and final session-output availability, reducing false CI failures without masking real process errors.
+
 ## 0.9.5 — 2026-09-06
 
 ### Added
