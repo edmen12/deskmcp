@@ -136,7 +136,7 @@ internal static class Program
 
             if (waitResult == WAIT_OBJECT_0 + 1)
             {
-                // Desktop Commander lost or terminated the outer terminal session.
+                // DeskMCP backend lost or terminated the outer terminal session.
                 // Kill the kernel-owned job immediately so descendants cannot orphan.
                 TerminateJobObject(jobHandle, 1);
                 return 1;

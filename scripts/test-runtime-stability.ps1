@@ -1,12 +1,12 @@
 param(
     [int]$GatewaySpacedLoops = 5,
     [int]$GatewayStormLoops = 4,
-    [int]$DesktopCommanderLoops = 5,
+    [int]$DesktopBackendLoops = 5,
     [switch]$Quick
 )
 $ErrorActionPreference = 'Stop'
-if ($Quick) { $GatewaySpacedLoops = 1; $GatewayStormLoops = 1; $DesktopCommanderLoops = 1 }
-foreach ($value in @($GatewaySpacedLoops,$GatewayStormLoops,$DesktopCommanderLoops)) { if ($value -lt 0 -or $value -gt 20) { throw 'Stability loop counts must be between 0 and 20.' } }
+if ($Quick) { $GatewaySpacedLoops = 1; $GatewayStormLoops = 1; $DesktopBackendLoops = 1 }
+foreach ($value in @($GatewaySpacedLoops,$GatewayStormLoops,$DesktopBackendLoops)) { if ($value -lt 0 -or $value -gt 20) { throw 'Stability loop counts must be between 0 and 20.' } }
 
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
@@ -33,7 +33,6 @@ $NodeExe = Join-Path $RuntimeRoot ('downloads\node-' + $Target + '\' + $TargetCo
 $localDotnet = Join-Path $RuntimeRoot 'dotnet-sdk\dotnet.exe'
 $DotnetExe = if(Test-Path -LiteralPath $localDotnet){$localDotnet}else{(Get-Command dotnet.exe -ErrorAction Stop).Source}
 $TscCmd = Join-Path $ProjectRoot 'node_modules\.bin\tsc.cmd'
-$DcEntry = Join-Path $ProjectRoot 'node_modules\@wonderwhy-er\desktop-commander\dist\index.js'
 $TunnelExe = Join-Path $StageRoot ('tunnel-client\' + $TargetConfig.TunnelVersion + '\bin\tunnel-client.exe')
 $SourceNodeModules = Join-Path $ProjectRoot 'node_modules'
 $panel = $null
@@ -50,8 +49,8 @@ function GatewayChild([int]$PanelPid) {
     if ($items.Count -ne 1) { return $null }
     return $items[0]
 }
-function DcChild([int]$GatewayPid) {
-    $items = @(ChildProcesses $GatewayPid | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'desktop-commander' })
+function BackendChild([int]$GatewayPid) {
+    $items = @(ChildProcesses $GatewayPid | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'dist[\\/]index\.js' })
     if ($items.Count -ne 1) { return $null }
     return $items[0]
 }
@@ -66,8 +65,8 @@ function StopCurrentPrivateTree([System.Diagnostics.Process]$PanelProcess) {
     $panelPid = [int]$PanelProcess.Id
     $gateways = @(ChildProcesses $panelPid | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'dist[\\/]src[\\/]index\.js' })
     foreach ($gateway in $gateways) {
-        $dcs = @(ChildProcesses ([int]$gateway.ProcessId) | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'desktop-commander' })
-        foreach ($dc in $dcs) { try { StopExpectedNodeChild ([int]$dc.ProcessId) ([int]$gateway.ProcessId) 'desktop-commander' } catch { } }
+        $backends = @(ChildProcesses ([int]$gateway.ProcessId) | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'dist[\\/]index\.js' })
+        foreach ($backend in $backends) { try { StopExpectedNodeChild ([int]$backend.ProcessId) ([int]$gateway.ProcessId) 'dist[\\/]index\.js' } catch { } }
         try { StopExpectedNodeChild ([int]$gateway.ProcessId) $panelPid 'dist[\\/]src[\\/]index\.js' } catch { }
     }
     try { if (-not $PanelProcess.HasExited) { Stop-Process -Id $panelPid -Force -ErrorAction Stop } } catch { }
@@ -89,18 +88,18 @@ function WaitInitial([string]$BaseUrl,[int]$PanelPid,[int]$Seconds=90) {
     do {
         $health = Health $BaseUrl
         $gateway = GatewayChild $PanelPid
-        if ($health -and $health.desktopCommander.ready -eq $true -and $gateway) {
-            $dc = DcChild ([int]$gateway.ProcessId)
-            if ($dc) { return @($health,$gateway,$dc) }
+        if ($health -and $health.desktopRuntime.ready -eq $true -and $gateway) {
+            $backend = BackendChild ([int]$gateway.ProcessId)
+            if ($backend) { return @($health,$gateway,$backend) }
         }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
     $errorLog = Join-Path $DataRoot 'logs\control-panel-error.log'
     if (Test-Path -LiteralPath $errorLog) { Write-Output 'CONTROL_PANEL_ERROR_BEGIN'; Get-Content -LiteralPath $errorLog -Tail 40; Write-Output 'CONTROL_PANEL_ERROR_END' }
-    throw 'Private stability instance did not reach healthy Gateway + Desktop Commander topology.'
+    throw 'Private stability instance did not reach healthy Gateway + DeskMCP backend topology.'
 }
 
-foreach ($required in @($NodeExe,$DotnetExe,$TscCmd,$DcEntry,$TunnelExe)) { Require (Test-Path -LiteralPath $required) ('Required stability dependency is missing: ' + $required) }
+foreach ($required in @($NodeExe,$DotnetExe,$TscCmd,$TunnelExe)) { Require (Test-Path -LiteralPath $required) ('Required stability dependency is missing: ' + $required) }
 $RealStartupLink = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) 'DeskMCP Control Panel.lnk'
 $RealSettingsPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP\settings.json'
 $RealTunnelProfile = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'tunnel-client\desktop-mcp.yaml'
@@ -111,7 +110,7 @@ $LivePanelPidsBefore = @(Get-Process -Name DeskMCP -ErrorAction SilentlyContinue
 $old = @{
     Data=$env:DESKTOP_MCP_DATA_ROOT; Settings=$env:DESKTOP_MCP_SETTINGS_DIR; Port=$env:DESKTOP_MCP_PORT;
     Namespace=$env:DESKTOP_MCP_INSTANCE_NAMESPACE; Gateway=$env:DESKTOP_MCP_GATEWAY_ROOT;
-    Node=$env:DESKTOP_MCP_NODE_PATH; Dc=$env:DESKTOP_COMMANDER_ENTRY; Tunnel=$env:DESKTOP_MCP_TUNNEL_PATH;
+    Node=$env:DESKTOP_MCP_NODE_PATH; Backend=$env:DESKMCP_BACKEND_ENTRY; Tunnel=$env:DESKTOP_MCP_TUNNEL_PATH;
     Startup=$env:DESKTOP_MCP_STARTUP_LINK_PATH; TunnelProfile=$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH; DisableTunnel=$env:DESKTOP_MCP_DISABLE_TUNNEL
 }
 
@@ -154,7 +153,7 @@ try {
     $env:DESKTOP_MCP_INSTANCE_NAMESPACE='stability-' + [guid]::NewGuid().ToString('N')
     $env:DESKTOP_MCP_GATEWAY_ROOT=$GatewayRoot
     $env:DESKTOP_MCP_NODE_PATH=$NodeExe
-    $env:DESKTOP_COMMANDER_ENTRY=$DcEntry
+    $env:DESKMCP_BACKEND_ENTRY=$null
     $env:DESKTOP_MCP_TUNNEL_PATH=$TunnelExe
     $env:DESKTOP_MCP_STARTUP_LINK_PATH=$StartupLink
     $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH=$TunnelProfile
@@ -166,9 +165,9 @@ try {
     Write-Output 'AGENT_SAFE_ISOLATION_CONTRACT=OK'
     $panel = Start-Process -FilePath $panelExe -ArgumentList '--startup' -WorkingDirectory $PanelRoot -PassThru
     $initial = WaitInitial $base ([int]$panel.Id)
-    $gateway=$initial[1]; $dc=$initial[2]
+    $gateway=$initial[1]; $backend=$initial[2]
     Require ((ProbeTool $port) -eq 0) 'Initial private MCP tool probe failed.'
-    Write-Output ("STABILITY_INITIAL=OK panel={0} gateway={1} dc={2} port={3}" -f $panel.Id,$gateway.ProcessId,$dc.ProcessId,$port)
+    Write-Output ("STABILITY_INITIAL=OK panel={0} gateway={1} backend={2} port={3}" -f $panel.Id,$gateway.ProcessId,$backend.ProcessId,$port)
     $privateTunnelCount = @(Get-CimInstance Win32_Process -Filter "Name='tunnel-client.exe'" -ErrorAction SilentlyContinue | Where-Object { [int]$_.ParentProcessId -eq [int]$panel.Id }).Count
     Require ($privateTunnelCount -eq 0) "Private stability runtime started a tunnel-client despite tunnel isolation: count=$privateTunnelCount"
     Write-Output 'AGENT_SAFE_TUNNEL_PROCESS_COUNT=0'
@@ -176,12 +175,12 @@ try {
     for($i=1;$i -le $GatewaySpacedLoops;$i++) {
         $oldGatewayPid=[int]$gateway.ProcessId
         $timer=[Diagnostics.Stopwatch]::StartNew(); StopExpectedNodeChild $oldGatewayPid ([int]$panel.Id) 'dist[\\/]src[\\/]index\.js'
-        $deadline=[DateTime]::UtcNow.AddSeconds(45); $gateway=$null;$dc=$null
+        $deadline=[DateTime]::UtcNow.AddSeconds(45); $gateway=$null;$backend=$null
         do {
             Start-Sleep -Milliseconds 250; $h=Health $base; $candidate=GatewayChild ([int]$panel.Id)
-            if($h -and $h.desktopCommander.ready -eq $true -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateDc=DcChild ([int]$candidate.ProcessId);if($candidateDc){$gateway=$candidate;$dc=$candidateDc;break}}
+            if($h -and $h.desktopRuntime.ready -eq $true -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateBackend=BackendChild ([int]$candidate.ProcessId);if($candidateBackend){$gateway=$candidate;$backend=$candidateBackend;break}}
         } while([DateTime]::UtcNow -lt $deadline)
-        $timer.Stop(); Require ($gateway -and $dc) "Spaced Gateway crash recovery $i failed."
+        $timer.Stop(); Require ($gateway -and $backend) "Spaced Gateway crash recovery $i failed."
         Require ((ProbeTool $port) -eq 0) "Spaced Gateway tool probe $i failed."
         Require ($timer.Elapsed.TotalSeconds -lt 22) "Gateway retry state did not reset after healthy interval $i."
         Write-Output ("GATEWAY_SPACED_{0}=PASS elapsedMs={1}" -f $i,[int]$timer.Elapsed.TotalMilliseconds)
@@ -191,36 +190,36 @@ try {
     for($i=1;$i -le $GatewayStormLoops;$i++) {
         $oldGatewayPid=[int]$gateway.ProcessId
         $timer=[Diagnostics.Stopwatch]::StartNew(); StopExpectedNodeChild $oldGatewayPid ([int]$panel.Id) 'dist[\\/]src[\\/]index\.js'
-        $deadline=[DateTime]::UtcNow.AddSeconds(60); $gateway=$null;$dc=$null
+        $deadline=[DateTime]::UtcNow.AddSeconds(60); $gateway=$null;$backend=$null
         do {
             Start-Sleep -Milliseconds 250; $h=Health $base; $candidate=GatewayChild ([int]$panel.Id)
-            if($h -and $h.desktopCommander.ready -eq $true -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateDc=DcChild ([int]$candidate.ProcessId);if($candidateDc){$gateway=$candidate;$dc=$candidateDc;break}}
+            if($h -and $h.desktopRuntime.ready -eq $true -and $candidate -and [int]$candidate.ProcessId -ne $oldGatewayPid){$candidateBackend=BackendChild ([int]$candidate.ProcessId);if($candidateBackend){$gateway=$candidate;$backend=$candidateBackend;break}}
         } while([DateTime]::UtcNow -lt $deadline)
-        $timer.Stop(); Require ($gateway -and $dc) "Gateway crash storm recovery $i failed."
+        $timer.Stop(); Require ($gateway -and $backend) "Gateway crash storm recovery $i failed."
         Require ((ProbeTool $port) -eq 0) "Gateway crash storm tool probe $i failed."
         Write-Output ("GATEWAY_STORM_{0}=PASS elapsedMs={1}" -f $i,[int]$timer.Elapsed.TotalMilliseconds)
     }
 
-    for($i=1;$i -le $DesktopCommanderLoops;$i++) {
-        $stableGatewayPid=[int]$gateway.ProcessId; $oldDcPid=[int]$dc.ProcessId; StopExpectedNodeChild $oldDcPid $stableGatewayPid 'desktop-commander'
+    for($i=1;$i -le $DesktopBackendLoops;$i++) {
+        $stableGatewayPid=[int]$gateway.ProcessId; $oldBackendPid=[int]$backend.ProcessId; StopExpectedNodeChild $oldBackendPid $stableGatewayPid 'dist[\\/]index\.js'
         $sawNotReady=$false; $deadline=[DateTime]::UtcNow.AddSeconds(10)
-        do { Start-Sleep -Milliseconds 100; $h=Health $base; if($h -and $h.desktopCommander -and $h.desktopCommander.ready -eq $false){$sawNotReady=$true;break} } while([DateTime]::UtcNow -lt $deadline)
-        Require $sawNotReady "Desktop Commander crash $i never surfaced ready=false."
-        Require ((ProbeTool $port) -eq 0) "Desktop Commander recovery tool probe $i failed."
-        $deadline=[DateTime]::UtcNow.AddSeconds(15);$dc=$null
+        do { Start-Sleep -Milliseconds 100; $h=Health $base; if($h -and $h.desktopRuntime -and $h.desktopRuntime.ready -eq $false){$sawNotReady=$true;break} } while([DateTime]::UtcNow -lt $deadline)
+        Require $sawNotReady "DeskMCP backend crash $i never surfaced ready=false."
+        Require ((ProbeTool $port) -eq 0) "DeskMCP backend recovery tool probe $i failed."
+        $deadline=[DateTime]::UtcNow.AddSeconds(15);$backend=$null
         do {
             Start-Sleep -Milliseconds 150; $currentGateway=GatewayChild ([int]$panel.Id)
-            Require ($currentGateway -and [int]$currentGateway.ProcessId -eq $stableGatewayPid) "Gateway restarted during Desktop Commander recovery $i."
-            $candidateDc=DcChild $stableGatewayPid; $h=Health $base
-            if($candidateDc -and [int]$candidateDc.ProcessId -ne $oldDcPid -and $h -and $h.desktopCommander.ready -eq $true){$dc=$candidateDc;break}
+            Require ($currentGateway -and [int]$currentGateway.ProcessId -eq $stableGatewayPid) "Gateway restarted during DeskMCP backend recovery $i."
+            $candidateBackend=BackendChild $stableGatewayPid; $h=Health $base
+            if($candidateBackend -and [int]$candidateBackend.ProcessId -ne $oldBackendPid -and $h -and $h.desktopRuntime.ready -eq $true){$backend=$candidateBackend;break}
         } while([DateTime]::UtcNow -lt $deadline)
-        Require ([bool]$dc) "Desktop Commander crash recovery $i failed."
-        Write-Output ("DC_CRASH_{0}=PASS gateway={1} readyFalseObserved=True" -f $i,$stableGatewayPid)
+        Require ([bool]$backend) "DeskMCP backend crash recovery $i failed."
+        Write-Output ("BACKEND_CRASH_{0}=PASS gateway={1} readyFalseObserved=True" -f $i,$stableGatewayPid)
     }
 
     Write-Output ('AGENT_SAFE_GATEWAY_SPACED_CRASH_LOOPS=' + $GatewaySpacedLoops)
     Write-Output ('AGENT_SAFE_GATEWAY_STORM_LOOPS=' + $GatewayStormLoops)
-    Write-Output ('AGENT_SAFE_DC_CRASH_LOOPS=' + $DesktopCommanderLoops)
+    Write-Output ('AGENT_SAFE_BACKEND_CRASH_LOOPS=' + $DesktopBackendLoops)
     Write-Output 'AGENT_SAFE_STABILITY=PASS'
 }
 finally {
@@ -230,7 +229,7 @@ finally {
     } finally {
         $env:DESKTOP_MCP_DATA_ROOT=$old.Data;$env:DESKTOP_MCP_SETTINGS_DIR=$old.Settings;$env:DESKTOP_MCP_PORT=$old.Port
         $env:DESKTOP_MCP_INSTANCE_NAMESPACE=$old.Namespace;$env:DESKTOP_MCP_GATEWAY_ROOT=$old.Gateway;$env:DESKTOP_MCP_NODE_PATH=$old.Node
-        $env:DESKTOP_COMMANDER_ENTRY=$old.Dc;$env:DESKTOP_MCP_TUNNEL_PATH=$old.Tunnel;$env:DESKTOP_MCP_STARTUP_LINK_PATH=$old.Startup;$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH=$old.TunnelProfile;$env:DESKTOP_MCP_DISABLE_TUNNEL=$old.DisableTunnel
+        $env:DESKMCP_BACKEND_ENTRY=$old.Backend;$env:DESKTOP_MCP_TUNNEL_PATH=$old.Tunnel;$env:DESKTOP_MCP_STARTUP_LINK_PATH=$old.Startup;$env:DESKTOP_MCP_TUNNEL_PROFILE_PATH=$old.TunnelProfile;$env:DESKTOP_MCP_DISABLE_TUNNEL=$old.DisableTunnel
         try{if(Test-Path -LiteralPath $RunRoot){Remove-Item -LiteralPath $RunRoot -Recurse -Force}}catch{}
     }
 }

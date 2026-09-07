@@ -102,7 +102,7 @@ const notices = `# Third-Party Notices\n\n` +
 runtimeNotice +
 winAppNotice +
 `- **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream \`LICENSE\`, \`NOTICE\`, third-party licenses text, and SPDX document remain under \`tunnel-client/v0.0.13/bin/\`.\n` +
-`- **Desktop Commander MCP 0.2.47** — MIT. Its package-local license remains in the bundled production \`node_modules\`.\n` +
+`- **@wonderwhy-er/desktop-commander 0.2.47** — MIT. Its package-local license remains in the bundled production \`node_modules\`.\n` +
 `- **${sharpPackage} 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.\n\n` +
 `## Manual license resolution\n\n` +
 `### buffers 0.1.1\n\n` +

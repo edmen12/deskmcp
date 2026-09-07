@@ -29,5 +29,5 @@ match('installer/DeskMCPInstaller.cs', /AssemblyFileVersion\("([^"]+)"\)/, 'Setu
 match('installer/DeskMCPUninstaller.cs', /AssemblyVersion\("([^"]+)"\)/, 'Uninstaller AssemblyVersion', expectedAssembly);
 match('installer/DeskMCPUninstaller.cs', /AssemblyFileVersion\("([^"]+)"\)/, 'Uninstaller FileVersion', expectedAssembly);
 if (!read('src/mcp-server.ts').includes("SERVER_NAME = 'deskmcp-gateway'")) throw new Error('MCP server name is not deskmcp-gateway');
-if (!read('src/desktop-commander-bridge.ts').includes(`name: 'deskmcp-gateway', version: '${expected}'`)) throw new Error('Desktop Commander bridge client metadata is inconsistent');
+if (!read('src/desktop-backend-bridge.ts').includes(`name: 'deskmcp-gateway', version: '${expected}'`)) throw new Error('DeskMCP backend bridge client metadata is inconsistent');
 console.log(`VERSION_CONSISTENCY_OK=${expected}`);

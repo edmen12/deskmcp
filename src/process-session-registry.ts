@@ -93,7 +93,7 @@ export class ProcessSessionRegistry {
     }
     this.startReservations.delete(reservationId);
 
-    // Desktop Commander identifies terminal sessions by the OS PID. Windows may
+    // DeskMCP backend identifies terminal sessions by the OS PID. Windows may
     // eventually reuse a PID after a completed process exits. Invalidate every
     // older opaque capability for that PID before attaching the PID to a new
     // process so an old session_id can never target a later process instance.
@@ -177,10 +177,10 @@ export class ProcessSessionRegistry {
 
 export function extractStartedPid(text: string): number {
   const match = text.match(/Process started with PID\s+(\d+)/i);
-  if (!match) throw new Error('Desktop Commander start_process response did not include a PID.');
+  if (!match) throw new Error('DeskMCP backend start_process response did not include a PID.');
   const pid = Number.parseInt(match[1] ?? '', 10);
   if (!Number.isInteger(pid) || pid <= 0) {
-    throw new Error('Desktop Commander returned an invalid PID.');
+    throw new Error('DeskMCP backend returned an invalid PID.');
   }
   return pid;
 }

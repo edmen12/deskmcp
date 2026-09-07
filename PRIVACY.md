@@ -24,7 +24,7 @@ DeskMCP itself does not control the privacy practices of services the user choos
 - OpenAI privacy policy: https://openai.com/policies/privacy-policy/
 - GitHub privacy statement: https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement
 
-Bundled Desktop Commander and other runtime dependencies execute locally as part of DeskMCP's local toolchain unless their documented behavior says otherwise. Third-party license information is listed in `THIRD_PARTY_NOTICES.md` and bundled release notices.
+Bundled runtime dependencies execute locally as part of DeskMCP's local toolchain unless their documented behavior says otherwise. Third-party license information is listed in `THIRD_PARTY_NOTICES.md` and bundled release notices.
 
 ## Workspace access
 

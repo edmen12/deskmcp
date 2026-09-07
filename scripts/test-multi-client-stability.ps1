@@ -20,7 +20,6 @@ $AuditLog = Join-Path $RunRoot 'audit.jsonl'
 $StressScript = Join-Path $RunRoot 'multi-client-stress.mjs'
 $NodeExe = Join-Path $ProjectRoot 'runtime\downloads\node-v24.19.0\node-v24.19.0-win-x64\node.exe'
 $TscCmd = Join-Path $ProjectRoot 'node_modules\.bin\tsc.cmd'
-$DcEntry = Join-Path $ProjectRoot 'node_modules\@wonderwhy-er\desktop-commander\dist\index.js'
 $ClientEntry = Join-Path $ProjectRoot 'node_modules\@modelcontextprotocol\client\dist\index.mjs'
 $SourceNodeModules = Join-Path $ProjectRoot 'node_modules'
 $gateway = $null
@@ -39,7 +38,7 @@ function Require-UnchangedFileState([string]$Label,[string]$Path,[object]$Before
     Require ($after.Exists -eq $Before.Exists -and $after.Hash -eq $Before.Hash) ($Label + ' changed during multi-client stability test.')
 }
 
-foreach ($required in @($NodeExe,$TscCmd,$DcEntry,$ClientEntry)) { Require (Test-Path -LiteralPath $required) ('Required dependency is missing: ' + $required) }
+foreach ($required in @($NodeExe,$TscCmd,$ClientEntry)) { Require (Test-Path -LiteralPath $required) ('Required dependency is missing: ' + $required) }
 $RealStartupLink = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) 'DeskMCP Control Panel.lnk'
 $RealSettingsPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP\settings.json'
 $RealTunnelProfile = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'tunnel-client\desktop-mcp.yaml'
@@ -49,7 +48,7 @@ $RealTunnelBefore = Get-OptionalFileState $RealTunnelProfile
 $LivePanelPidsBefore = @(Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $old = @{
     Profile=$env:DESKTOP_MCP_PROFILE; Roots=$env:DESKTOP_MCP_ALLOWED_ROOTS; Port=$env:DESKTOP_MCP_PORT;
-    Audit=$env:DESKTOP_MCP_AUDIT_LOG; Dc=$env:DESKTOP_COMMANDER_ENTRY
+    Audit=$env:DESKTOP_MCP_AUDIT_LOG; Backend=$env:DESKMCP_BACKEND_ENTRY
 }
 
 try {
@@ -146,7 +145,7 @@ console.log('MULTI_CLIENT_STABILITY=PASS');
     $env:DESKTOP_MCP_ALLOWED_ROOTS = $Workspace
     $env:DESKTOP_MCP_PORT = [string]$port
     $env:DESKTOP_MCP_AUDIT_LOG = $AuditLog
-    $env:DESKTOP_COMMANDER_ENTRY = $DcEntry
+    $env:DESKMCP_BACKEND_ENTRY = $null
     $gateway = Start-Process -FilePath $NodeExe -ArgumentList 'dist\src\index.js' -WorkingDirectory $GatewayRoot -PassThru
 
     $base = 'http://127.0.0.1:' + $port
@@ -155,10 +154,10 @@ console.log('MULTI_CLIENT_STABILITY=PASS');
     do {
         if ($gateway.HasExited) { throw ('Private Gateway exited early: ' + $gateway.ExitCode) }
         try { $health = Invoke-RestMethod ($base + '/health') -TimeoutSec 1 } catch { Start-Sleep -Milliseconds 250 }
-    } while (-not $health -and [DateTime]::UtcNow -lt $deadline)
+    } while ((-not $health -or $health.desktopRuntime.ready -ne $true) -and [DateTime]::UtcNow -lt $deadline)
     Require ([bool]$health) 'Private multi-client Gateway did not become healthy.'
     Require ($health.policy.profile -eq 'workspace-write') 'Private multi-client Gateway has the wrong profile.'
-    Require ($health.desktopCommander.ready -eq $true) 'Private Desktop Commander is not ready.'
+    Require ($health.desktopRuntime.ready -eq $true) 'Private DeskMCP backend is not ready.'
 
     & $NodeExe $StressScript ([string]$port) $Workspace (($ClientCounts -join ',')) ([string]$ReadRounds) ([string]$WriteRounds)
     if ($LASTEXITCODE -ne 0) { throw ('Multi-client stress exited ' + $LASTEXITCODE) }
@@ -174,7 +173,7 @@ console.log('MULTI_CLIENT_STABILITY=PASS');
         }
     } finally {
         $env:DESKTOP_MCP_PROFILE=$old.Profile; $env:DESKTOP_MCP_ALLOWED_ROOTS=$old.Roots; $env:DESKTOP_MCP_PORT=$old.Port
-        $env:DESKTOP_MCP_AUDIT_LOG=$old.Audit; $env:DESKTOP_COMMANDER_ENTRY=$old.Dc
+        $env:DESKTOP_MCP_AUDIT_LOG=$old.Audit; $env:DESKMCP_BACKEND_ENTRY=$old.Backend
         try { if (Test-Path -LiteralPath $RunRoot) { Remove-Item -LiteralPath $RunRoot -Recurse -Force } } catch { }
     }
 }

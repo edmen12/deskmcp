@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { AuditLogger } from '../dist/src/audit.js';
 import { startControlServer } from '../dist/src/control-server.js';
-import { DesktopCommanderBridge } from '../dist/src/desktop-commander-bridge.js';
+import { DesktopBackendBridge } from '../dist/src/desktop-backend-bridge.js';
 import { DesktopPolicy } from '../dist/src/desktop-policy.js';
 import { startHttpServer } from '../dist/src/http-server.js';
 import { ObservationStore } from '../dist/src/observation-store.js';
@@ -40,7 +40,7 @@ async function sampleOnce() {
   const policyMs = elapsed(startedAt);
   const observations = new ObservationStore();
   const processSessions = new ProcessSessionRegistry();
-  const bridge = new DesktopCommanderBridge();
+  const bridge = new DesktopBackendBridge();
 
   startedAt = performance.now();
   await bridge.start();
@@ -71,7 +71,7 @@ async function sampleOnce() {
 
     return {
       node: process.version,
-      desktopCommander: bridge.info().serverVersion,
+      desktopRuntime: bridge.info().serverVersion,
       auditMs,
       policyMs,
       bridgeMs,
@@ -104,7 +104,7 @@ function summarize(samples) {
   });
   return {
     semantics: {
-      processCold: 'fresh Node and Desktop Commander process per sample; OS caches are not flushed',
+      processCold: 'fresh Node and DeskMCP backend process per sample; OS caches are not flushed',
       warm: 'five get_file_info calls on the already-connected bridge per sample'
     },
     processColdConnectMs: stats(coldConnect),

@@ -24,7 +24,6 @@ $ShutdownScript = Join-Path $RunRoot 'shutdown-pressure.mjs'
 $NestedProcessScript = Join-Path $RunRoot 'nested-process-tree.mjs'
 $NodeExe = Join-Path $ProjectRoot 'runtime\downloads\node-v24.19.0\node-v24.19.0-win-x64\node.exe'
 $TscCmd = Join-Path $ProjectRoot 'node_modules\.bin\tsc.cmd'
-$DcEntry = Join-Path $ProjectRoot 'node_modules\@wonderwhy-er\desktop-commander\dist\index.js'
 $ClientEntry = Join-Path $ProjectRoot 'node_modules\@modelcontextprotocol\client\dist\index.mjs'
 $SourceNodeModules = Join-Path $ProjectRoot 'node_modules'
 $gateway = $null
@@ -56,7 +55,7 @@ function Require-UnchangedFileState([string]$Label,[string]$Path,[object]$Before
 }
 
 & (Join-Path $PSScriptRoot 'build-process-host.ps1') -Target $HostTarget
-foreach ($required in @($NodeExe,$TscCmd,$DcEntry,$ClientEntry,$ProcessHostExe)) { Require (Test-Path -LiteralPath $required) ('Required dependency is missing: ' + $required) }
+foreach ($required in @($NodeExe,$TscCmd,$ClientEntry,$ProcessHostExe)) { Require (Test-Path -LiteralPath $required) ('Required dependency is missing: ' + $required) }
 $RealStartupLink = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) 'DeskMCP Control Panel.lnk'
 $RealSettingsPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'DesktopMCP\settings.json'
 $RealTunnelProfile = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'tunnel-client\desktop-mcp.yaml'
@@ -66,7 +65,7 @@ $RealTunnelBefore = Get-OptionalFileState $RealTunnelProfile
 $LivePanelPidsBefore = @(Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $old = @{
     Profile=$env:DESKTOP_MCP_PROFILE; Roots=$env:DESKTOP_MCP_ALLOWED_ROOTS; Port=$env:DESKTOP_MCP_PORT;
-    Audit=$env:DESKTOP_MCP_AUDIT_LOG; Dc=$env:DESKTOP_COMMANDER_ENTRY; ProcessHost=$env:DESKTOP_MCP_PROCESS_HOST
+    Audit=$env:DESKTOP_MCP_AUDIT_LOG; Backend=$env:DESKMCP_BACKEND_ENTRY; ProcessHost=$env:DESKTOP_MCP_PROCESS_HOST
 }
 
 try {
@@ -274,7 +273,7 @@ try {
     $env:DESKTOP_MCP_ALLOWED_ROOTS = $Workspace
     $env:DESKTOP_MCP_PORT = [string]$port
     $env:DESKTOP_MCP_AUDIT_LOG = $AuditLog
-    $env:DESKTOP_COMMANDER_ENTRY = $DcEntry
+    $env:DESKMCP_BACKEND_ENTRY = $null
     $env:DESKTOP_MCP_PROCESS_HOST = $ProcessHostExe
     $gateway = Start-Process -FilePath $NodeExe -ArgumentList 'dist\src\index.js' -WorkingDirectory $GatewayRoot -PassThru
 
@@ -293,33 +292,33 @@ try {
     # The client has already requested termination; all test processes must now disappear.
     [void](Wait-MarkerCount 0 15)
 
-    # A Desktop Commander crash must not orphan terminal children. The next process
+    # A DeskMCP backend crash must not orphan terminal children. The next process
     # call must reconnect only the bridge while keeping the Gateway alive.
-    & $NodeExe $ShutdownScript ([string]$port) '1' $Marker $NestedProcessScript $NodeExe (Join-Path $RunRoot 'dc-tree.ready')
-    if($LASTEXITCODE -ne 0){throw ('DC-crash setup exited '+$LASTEXITCODE)}
+    & $NodeExe $ShutdownScript ([string]$port) '1' $Marker $NestedProcessScript $NodeExe (Join-Path $RunRoot 'backend-tree.ready')
+    if($LASTEXITCODE -ne 0){throw ('backend-crash setup exited '+$LASTEXITCODE)}
     [void](Wait-MarkerCount 3 15)
-    $privateDc=@(Get-CimInstance Win32_Process | Where-Object {
-        [int]$_.ParentProcessId -eq $gateway.Id -and $_.Name -eq 'node.exe' -and $_.CommandLine -match 'desktop-commander'
+    $privateBackend=@(Get-CimInstance Win32_Process | Where-Object {
+        [int]$_.ParentProcessId -eq $gateway.Id -and $_.Name -eq 'node.exe' -and $_.CommandLine -match 'dist[\\/]index\.js'
     })
-    Require ($privateDc.Count -eq 1) ('Private Desktop Commander count='+$privateDc.Count)
-    Stop-Process -Id ([int]$privateDc[0].ProcessId) -Force
+    Require ($privateBackend.Count -eq 1) ('Private DeskMCP backend count='+$privateBackend.Count)
+    Stop-Process -Id ([int]$privateBackend[0].ProcessId) -Force
     [void](Wait-MarkerCount 0 15)
-    $dcHealthDeadline=[DateTime]::UtcNow.AddSeconds(10);$dcHealth=$null
+    $backendHealthDeadline=[DateTime]::UtcNow.AddSeconds(10);$backendHealth=$null
     do {
-        try{$dcHealth=Invoke-RestMethod ($base+'/health') -TimeoutSec 1}catch{}
-        if($dcHealth -and $dcHealth.desktopCommander.ready -eq $false){break}
+        try{$backendHealth=Invoke-RestMethod ($base+'/health') -TimeoutSec 1}catch{}
+        if($backendHealth -and $backendHealth.desktopRuntime.ready -eq $false){break}
         Start-Sleep -Milliseconds 100
-    } while([DateTime]::UtcNow -lt $dcHealthDeadline)
-    Require ($dcHealth -and $dcHealth.desktopCommander.ready -eq $false) 'Desktop Commander crash did not surface ready=false.'
-    Write-Output 'PROCESS_DC_CRASH_CHILD_CLEANUP=PASS'
+    } while([DateTime]::UtcNow -lt $backendHealthDeadline)
+    Require ($backendHealth -and $backendHealth.desktopRuntime.ready -eq $false) 'DeskMCP backend crash did not surface ready=false.'
+    Write-Output 'PROCESS_BACKEND_CRASH_CHILD_CLEANUP=PASS'
 
     $shutdownCount=[Math]::Min(8,$SessionCount)
     & $NodeExe $ShutdownScript ([string]$port) ([string]$shutdownCount) $Marker $NestedProcessScript $NodeExe (Join-Path $RunRoot 'shutdown-tree.ready')
     if($LASTEXITCODE -ne 0){throw ('Shutdown-cleanup setup exited '+$LASTEXITCODE)}
     [void](Wait-MarkerCount ($shutdownCount * 3) 15)
     $reconnectedHealth=Invoke-RestMethod ($base+'/health') -TimeoutSec 2
-    Require ($reconnectedHealth.desktopCommander.ready -eq $true) 'Desktop Commander bridge did not reconnect on the next process call.'
-    Write-Output 'PROCESS_DC_RECONNECT=PASS'
+    Require ($reconnectedHealth.desktopRuntime.ready -eq $true) 'DeskMCP backend bridge did not reconnect on the next process call.'
+    Write-Output 'PROCESS_BACKEND_RECONNECT=PASS'
     $previousErrorActionPreference=$ErrorActionPreference
     try {
         $ErrorActionPreference='Continue'
@@ -349,7 +348,7 @@ try {
         }
     } finally {
         $env:DESKTOP_MCP_PROFILE=$old.Profile;$env:DESKTOP_MCP_ALLOWED_ROOTS=$old.Roots;$env:DESKTOP_MCP_PORT=$old.Port
-        $env:DESKTOP_MCP_AUDIT_LOG=$old.Audit;$env:DESKTOP_COMMANDER_ENTRY=$old.Dc;$env:DESKTOP_MCP_PROCESS_HOST=$old.ProcessHost
+        $env:DESKTOP_MCP_AUDIT_LOG=$old.Audit;$env:DESKMCP_BACKEND_ENTRY=$old.Backend;$env:DESKTOP_MCP_PROCESS_HOST=$old.ProcessHost
         try{if(Test-Path -LiteralPath $RunRoot){Remove-Item -LiteralPath $RunRoot -Recurse -Force}}catch{}
     }
 }

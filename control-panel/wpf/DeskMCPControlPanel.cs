@@ -28,11 +28,11 @@ using Forms = System.Windows.Forms;
 internal sealed class HealthInfo
 {
     public string version { get; set; }
-    public DesktopCommanderHealthInfo desktopCommander { get; set; }
+    public DesktopRuntimeHealthInfo desktopRuntime { get; set; }
     public PolicyInfo policy { get; set; }
 }
 
-internal sealed class DesktopCommanderHealthInfo
+internal sealed class DesktopRuntimeHealthInfo
 {
     public bool ready { get; set; }
 }
@@ -1179,7 +1179,7 @@ internal sealed partial class ControlPanelRuntime
         lastTunnelStatus = tunnelStatus ?? new TunnelRuntimeStatus();
         bool tunnelReady = lastTunnelStatus.Ready;
         gatewayIsRunning = health != null;
-        bool gatewayReady = health != null && (health.desktopCommander == null || health.desktopCommander.ready);
+        bool gatewayReady = health != null && (health.desktopRuntime == null || health.desktopRuntime.ready);
         bool gatewayStarting = (health != null && !gatewayReady) || (health == null && (gatewayStartInFlight || OwnedGatewayRunning()));
         Ellipse gatewayDot = Find<Ellipse>("GatewayDot");
         TextBlock gatewayText = Find<TextBlock>("GatewayStatus");
