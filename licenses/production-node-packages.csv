@@ -493,6 +493,7 @@
 "wsl-utils","0.1.0","MIT","MIT","license","gateway/node_modules/wsl-utils"
 "xmlchars","2.2.0","MIT","MIT","LICENSE","gateway/node_modules/xmlchars"
 "y18n","5.0.8","ISC","ISC","LICENSE","gateway/node_modules/y18n"
+"yaml","2.9.0","ISC","ISC","LICENSE","gateway/node_modules/yaml"
 "yargs","18.1.0","MIT","MIT","LICENSE","gateway/node_modules/yargs"
 "yargs-parser","22.0.0","ISC","ISC","LICENSE.txt","gateway/node_modules/yargs-parser"
 "zip-stream","4.1.1","MIT","MIT","LICENSE","gateway/node_modules/zip-stream"

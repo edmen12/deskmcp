@@ -45,7 +45,7 @@ In ChatGPT:
 6. Check **I understand and want to continue**.
 7. Run **Scan tools**.
 
-Expected result: **16 DeskMCP tools**.
+Expected result: **26 DeskMCP tools**.
 ## 3. Control Panel
 
 <p align="center"><img src="images/control-panel.png" alt="DeskMCP Control Panel" width="430" /></p>
@@ -54,9 +54,9 @@ The Control Panel shows Gateway and Tunnel health, the current Workspace, permis
 
 ### Permission profiles
 
-- **Read** — recommended default. Read/list/metadata/search only.
-- **Write** — adds guarded filesystem changes inside the selected Workspace.
-- **Full** — adds Gateway-owned process/terminal sessions plus Windows Computer Use for the current session only.
+- **Read** — recommended default. Read/list/metadata/search plus Task Room discovery, task inspection with an existing room capability, and installed Skill list/get/read plus local validation.
+- **Write** — adds guarded filesystem changes inside the selected Workspace plus Task Room creation/reattach, recoverable-task mutation, and local Workspace Skill install/activate/rollback.
+- **Full** — adds Gateway-owned process/terminal sessions, Windows Computer Use, isolated Browser Automation, and remote Skill validation/install over verified HTTPS sources for the current session only.
 
 Full Control is deliberately not persisted. After DeskMCP restarts, it returns to the last safe persisted Read or Write profile.
 
@@ -80,6 +80,11 @@ Externally managed Tunnel processes are not terminated by DeskMCP.
 %LOCALAPPDATA%\DesktopMCP\secrets\tunnel-runtime-key.dpapi
 %LOCALAPPDATA%\DesktopMCP\logs\audit.jsonl
 %LOCALAPPDATA%\DesktopMCP\workspace\
+%LOCALAPPDATA%\DesktopMCP\tasks\
+%LOCALAPPDATA%\DesktopMCP\artifacts\
+%LOCALAPPDATA%\DesktopMCP\mcp-hub\
+%LOCALAPPDATA%\DesktopMCP\skills\
+%LOCALAPPDATA%\DesktopMCP\browser\
 ```
 
 The internal `DesktopMCP` directory name is retained for upgrade compatibility.

@@ -4,16 +4,39 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added recoverable task state through `desktop_task_manage`, including persisted steps, checkpoints, block/resume, evidence-based final review, an explicit completion gate, and Workspace-bound Task Rooms with opaque per-room capabilities so parallel chat windows do not share task state by default.
+- Added verified expiring artifacts through `desktop_artifact_manage`, including Workspace-policy publication, SHA-256/size verification, bounded chunk reads, retention cleanup, and signed download URLs that default to loopback.
+- Added a dynamic Streamable HTTP MCP facade with `desktop_mcp_manage`, `desktop_mcp_tool_search`, `desktop_mcp_tool_inspect`, and `desktop_mcp_tool_call`, expanding the stable DeskMCP surface from 16 to 22 tools without flattening arbitrary upstream MCP schemas into the top-level tool list.
+- Added isolated Browser Automation through `desktop_browser_session`, `desktop_browser_snapshot`, and `desktop_browser_act`, expanding the stable DeskMCP surface from 22 to 25 tools with dedicated DeskMCP profiles, loopback CDP, typed page snapshots/actions, and screenshot publication through the verified Artifact store.
+- Added versioned model-readable Skills through `desktop_skill_manage`, expanding the stable DeskMCP surface from 25 to 26 tools with local Workspace validation/install, immutable content digests, active-version switching/rollback, bounded resource reads, and remote HTTPS + caller-supplied SHA-256 validation/install under Full or Unlock. Skill scripts remain inert resources and are never auto-executed by this subsystem.
+
 ### Changed
 
 - Simplified the Windows updater to a one-click **Update Now** flow: DeskMCP downloads the fixed-repository immutable release asset, verifies size and SHA-256, then launches Setup without a second install confirmation inside DeskMCP.
 - Decoupled updater availability from Authenticode. Unsigned artifacts that pass the source/integrity gates are eligible for user-initiated execution; valid signatures add publisher verification, while invalid signatures or configured publisher-pin mismatches are blocked.
 - Removed unsigned/publisher-signature status from the normal update UI; signing state remains an internal security/logging concern and Windows may still show its own SmartScreen or publisher UI.
 - Hardened multi-agent file mutation safety: `desktop_read_file` now returns a one-time path/version-bound `observation_id`; edit, move, and existing-file writes consume that capability, and same-path mutations are serialized to prevent concurrent lost updates.
+- Scoped recoverable tasks into explicit Task Rooms. Normal task list/get/mutation calls now require the room capability; room discovery is limited to the selected Workspace and intentionally omits task ids. Context loss can be recovered explicitly by exact task id or by exact context id plus matching label without invalidating other still-active capabilities.
 - Added agent-safe runtime and multi-client stress harnesses that isolate ports, state, Startup shortcuts, Tunnel profiles, singleton namespaces, and owned process trees from any DeskMCP instance already in use.
 - Hardened Full Control process ownership for concurrent agents: active state now follows DeskMCP backend's session registry rather than OS PID liveness guesses, completed sessions remain readable in bounded history, start reservations enforce the 32-session ceiling before spawn, and stress coverage now includes 40-way start bursts, read/terminate races, DeskMCP backend crash recovery, and Gateway-owned shutdown cleanup.
 - Added `DeskMCP.ProcessHost` with a Windows Job Object (`KILL_ON_JOB_CLOSE`) for Full Control commands, so owned child/grandchild processes are kernel-cleaned when the root session, DeskMCP backend, or Gateway disappears without exposing direct PID-tree termination to MCP callers.
 - Prevented a verified update from launching Setup after the user has already begun quitting DeskMCP; shutdown now gates every update entry/continuation, discards a just-finished verified download, and avoids touching closing UI state.
+
+### Security
+
+- Dynamic MCP persists environment-variable names instead of secret values, rejects remote plain HTTP and URL-embedded credentials, and requires session-only Full or Unlock for refresh/live upstream calls. Stdio MCP spawning is intentionally not exposed because it would bypass the existing owned-process boundary.
+- Artifact publication is constrained by DeskMCP filesystem policy; copied payloads are checked against persisted SHA-256/size metadata before reads, retention is bounded, and signed URLs default to loopback unless an HTTP(S) base is explicitly configured.
+- Task Room capability secrets are persisted only as SHA-256 hashes, are bound to a fingerprint of the selected Workspace roots, and are never written to the metadata-only audit log. Read-only can discover rooms and inspect tasks only with an existing capability; creating/reattaching rooms and mutating tasks now correctly require Write or higher.
+- Skill packages reject traversal, symlinks, encrypted ZIP entries, Windows-unsafe paths, oversized expansion, mutable declared-version/digest conflicts, and tampered registry version ids. Local installs remain Workspace-policy bound; remote Skill operations require session-only Full or Unlock, HTTPS without embedded credentials, and a caller-supplied SHA-256.
+- Browser Automation requires session-only Full or Unlock plus a locally configured browser executable. DeskMCP never attaches to an existing personal CDP session; each browser uses a DeskMCP-owned profile, loopback-only random CDP port, and the existing ProcessHost/Windows Job Object ownership chain so browser descendants cannot daemonize beyond the owned session.
+
+### Fixed
+
+- Prevented dynamic MCP refresh from overwriting concurrent server configuration changes by merging only discovery fields back into the latest registry state.
+- Hardened release-stage WinApp version probing so informational stderr update notices do not fail PowerShell smoke tests or get mistaken for the pinned runtime version.
+- Fixed owned Chromium startup on Windows by keeping the browser root process explicitly awaited under ProcessHost; GUI browser startup can no longer return early and lose its Job Object before publishing `DevToolsActivePort`.
 
 ## 0.9.6 — 2026-09-07
 

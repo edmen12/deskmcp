@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import http, { type Server as HttpServer } from 'node:http';
 import {
   localhostHostValidation,
@@ -6,13 +7,18 @@ import {
 } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
+import { ArtifactExpiredError, type ArtifactStore } from './artifact-store.js';
+import type { BrowserRuntime } from './browser-runtime.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
 import { createComputerUseRuntime, type ComputerUseRuntime } from './computer-use-runtime.js';
 import { createDesktopMcpServer, SERVER_NAME, SERVER_VERSION } from './mcp-server.js';
 import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import type { DesktopPolicy } from './desktop-policy.js';
+import type { DynamicMcpHub } from './dynamic-mcp-hub.js';
 import type { ObservationStore } from './observation-store.js';
 import type { ProcessSessionRegistry } from './process-session-registry.js';
+import type { SkillStore } from './skill-store.js';
+import type { TaskContextStore } from './task-context.js';
 
 export interface RunningHttpServer {
   readonly host: string;
@@ -65,6 +71,11 @@ function publicComputerUseInfo(runtime?: ComputerUseRuntime) {
   };
 }
 
+function publicBrowserInfo(runtime?: BrowserRuntime) {
+  if (!runtime) return null;
+  return runtime.info();
+}
+
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -75,6 +86,51 @@ function writeJson(res: http.ServerResponse, status: number, body: unknown): voi
   res.end(payload);
 }
 
+function publicArtifactPath(pathname: string): { artifactId: string; filename: string } | undefined {
+  const match = /^\/artifacts\/public\/([^/]+)\/([^/]+)$/u.exec(pathname);
+  if (!match) return undefined;
+  try {
+    return {
+      artifactId: decodeURIComponent(match[1]!),
+      filename: decodeURIComponent(match[2]!)
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function serveSignedArtifact(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  store: ArtifactStore,
+  route: { artifactId: string; filename: string }
+): Promise<void> {
+  try {
+    const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const resolved = await store.resolveSignedDownload(
+      route.artifactId,
+      route.filename,
+      parsed.searchParams.get('expires'),
+      parsed.searchParams.get('sig')
+    );
+    res.writeHead(200, {
+      'content-type': resolved.metadata.mime_type,
+      'content-length': String(resolved.metadata.size_bytes),
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(resolved.metadata.filename)}`,
+      'cache-control': 'private, no-store, max-age=0',
+      'x-content-type-options': 'nosniff'
+    });
+    const stream = createReadStream(resolved.payload);
+    stream.once('error', error => {
+      console.error('[deskmcp] artifact stream failed:', error);
+      res.destroy(error);
+    });
+    stream.pipe(res);
+  } catch (error) {
+    writeJson(res, error instanceof ArtifactExpiredError ? 410 : 403, { error: 'artifact_access_denied' });
+  }
+}
+
 export async function startHttpServer(
   host = '127.0.0.1',
   port = 8765,
@@ -83,7 +139,12 @@ export async function startHttpServer(
   audit?: AuditLogger,
   observations?: ObservationStore,
   processSessions?: ProcessSessionRegistry,
-  computerUse?: ComputerUseRuntime
+  computerUse?: ComputerUseRuntime,
+  taskStore?: TaskContextStore,
+  artifactStore?: ArtifactStore,
+  dynamicMcpHub?: DynamicMcpHub,
+  browser?: BrowserRuntime,
+  skillStore?: SkillStore
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -94,7 +155,19 @@ export async function startHttpServer(
   const effectiveComputerUse = computerUse ?? (bridge ? createComputerUseRuntime() : undefined);
 
   const mcpHandler = createMcpHandler(() =>
-    createDesktopMcpServer(bridge, policy, audit, observations, processSessions, effectiveComputerUse)
+    createDesktopMcpServer(
+      bridge,
+      policy,
+      audit,
+      observations,
+      processSessions,
+      effectiveComputerUse,
+      taskStore,
+      artifactStore,
+      dynamicMcpHub,
+      browser,
+      skillStore
+    )
   );
   const nodeHandler = toNodeHandler(mcpHandler, {
     onerror(error) {
@@ -120,9 +193,24 @@ export async function startHttpServer(
         desktopRuntime: publicDesktopRuntimeInfo(bridge),
         policy: publicPolicyInfo(policy),
         computerUse: publicComputerUseInfo(effectiveComputerUse),
+        recoverableTasksEnabled: Boolean(taskStore),
+        artifactsEnabled: Boolean(artifactStore),
+        dynamicMcpHubEnabled: Boolean(dynamicMcpHub),
+        browserAutomation: publicBrowserInfo(browser),
+        skillsEnabled: Boolean(skillStore),
         auditEnabled: Boolean(audit),
         observationStoreEnabled: Boolean(observations)
       });
+      return;
+    }
+
+    const artifactRoute = publicArtifactPath(pathname);
+    if (artifactRoute) {
+      if (!artifactStore || req.method !== 'GET') {
+        writeJson(res, artifactStore ? 405 : 404, { error: artifactStore ? 'method_not_allowed' : 'not_found' });
+        return;
+      }
+      void serveSignedArtifact(req, res, artifactStore, artifactRoute);
       return;
     }
 
@@ -150,10 +238,12 @@ export async function startHttpServer(
   }
 
   const actualPort = address.port;
+  const serverUrl = `http://${host}:${actualPort}`;
+  artifactStore?.setLocalBaseUrl(serverUrl);
   return {
     host,
     port: actualPort,
-    url: `http://${host}:${actualPort}`,
+    url: serverUrl,
     async close() {
       await mcpHandler.close();
       await new Promise<void>((resolve, reject) => {
