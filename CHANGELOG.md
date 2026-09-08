@@ -4,6 +4,8 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.7 — 2026-09-08
+
 ### Added
 
 - Added recoverable task state through `desktop_task_manage`, including persisted steps, checkpoints, block/resume, evidence-based final review, an explicit completion gate, and Workspace-bound Task Rooms with opaque per-room capabilities so parallel chat windows do not share task state by default.
