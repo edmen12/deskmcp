@@ -28,7 +28,7 @@ The complete machine-generated inventory is `licenses/production-node-packages.c
 
 Package/license counts for this stage:
 - MIT: 431
-- ISC: 32
+- ISC: 33
 - Apache-2.0: 10
 - BSD-3-Clause: 7
 - BSD-2-Clause: 4

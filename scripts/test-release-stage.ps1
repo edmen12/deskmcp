@@ -57,10 +57,17 @@ if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predat
 if ([string]$StageContract.winAppVersion -ne [string]$TargetConfig.WinAppVersion) { throw ('Unexpected WinApp version in release-target.json: ' + $StageContract.winAppVersion) }
 $expectedWinAppVersion = $TargetConfig.WinAppVersion.TrimStart('v')
 $env:WINAPP_CLI_TELEMETRY_OPTOUT = '1'
-$winAppVersionOutput = (& $WinAppExe --version 2>&1 | Out-String).Trim()
-$winAppVersionExit = $LASTEXITCODE
-$winAppVersionMatches = [regex]::Matches($winAppVersionOutput, '(?<!\d)(\d+\.\d+\.\d+)(?!\d)')
-$actualWinAppVersion = if ($winAppVersionMatches.Count -gt 0) { $winAppVersionMatches[$winAppVersionMatches.Count - 1].Groups[1].Value } else { '' }
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $winAppVersionLines = @(& $WinAppExe --version 2>&1 | ForEach-Object { $_.ToString() })
+    $winAppVersionExit = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+$winAppVersionOutput = ($winAppVersionLines -join [Environment]::NewLine).Trim()
+$winAppVersionLine = @($winAppVersionLines | Where-Object { $_ -match '^\s*v?\d+\.\d+\.\d+\s*$' } | Select-Object -First 1)
+$actualWinAppVersion = if ($winAppVersionLine.Count -gt 0) { [regex]::Match($winAppVersionLine[0], '\d+\.\d+\.\d+').Value } else { '' }
 if ($winAppVersionExit -ne 0 -or $actualWinAppVersion -ne $expectedWinAppVersion) {
     $versionDetail = if ($winAppVersionOutput.Length -gt 800) { $winAppVersionOutput.Substring($winAppVersionOutput.Length - 800) } else { $winAppVersionOutput }
     throw ('WinApp CLI version smoke failed: actual=' + $actualWinAppVersion + ' expected=' + $expectedWinAppVersion + ' output=' + $versionDetail)
@@ -173,6 +180,9 @@ try {
     if ($health.computerUse.available -ne $true) { throw 'Release-stage computer-use backend is not available in Gateway health.' }
     if ($health.computerUse.backendVersion -ne $TargetConfig.WinAppVersion) { throw ('Unexpected computer-use backend version: ' + $health.computerUse.backendVersion) }
     if ($health.computerUse.globalSerialization -ne $true -or $health.computerUse.freshObservationRequired -ne $true) { throw 'Computer-use safety contract is incomplete in Gateway health.' }
+    if ($health.recoverableTasksEnabled -ne $true -or $health.artifactsEnabled -ne $true -or $health.dynamicMcpHubEnabled -ne $true -or $health.skillsEnabled -ne $true) { throw 'Agent-runtime capabilities are incomplete in Gateway health.' }
+    if ($null -eq $health.browserAutomation -or $health.browserAutomation.process_ownership -ne 'deskmcp-job-object' -or $health.browserAutomation.profile_isolation -ne $true -or $health.browserAutomation.reuse_existing_cdp -ne $false) { throw 'Browser-runtime safety contract is incomplete in Gateway health.' }
+    Write-Output 'BROWSER_RUNTIME_CONTRACT=OK'
     $targetNode = [IO.Path]::GetFullPath($NodeExe)
     $gatewayProcess = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
         try { [int]$_.ParentProcessId -eq [int]$panel.Id -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode -and $_.CommandLine -match 'dist[\\/]src[\\/]index\.js' } catch { $false }
@@ -197,15 +207,27 @@ try {
   const names = listed.tools.map(tool => tool.name);
   console.log('TOOLS=' + listed.tools.length);
   console.log('COMPUTER_TOOLS=' + ['desktop_ui_windows','desktop_ui_snapshot','desktop_ui_action'].every(name => names.includes(name)));
+  console.log('AGENT_RUNTIME_TOOLS=' + ['desktop_task_manage','desktop_artifact_manage','desktop_mcp_manage','desktop_mcp_tool_search','desktop_mcp_tool_inspect','desktop_mcp_tool_call','desktop_skill_manage'].every(name => names.includes(name)));
+  console.log('BROWSER_TOOLS=' + ['desktop_browser_session','desktop_browser_snapshot','desktop_browser_act'].every(name => names.includes(name)));
   const status = await client.callTool({ name: 'desktop_policy_status', arguments: {} });
   console.log('POLICY_OK=' + (status.isError !== true));
   const denied = await client.callTool({ name: 'desktop_ui_windows', arguments: {} });
   console.log('COMPUTER_POLICY_DENY=' + (denied.isError === true));
+  const browserDenied = await client.callTool({ name: 'desktop_browser_session', arguments: { action: 'list' } });
+  console.log('BROWSER_POLICY_DENY=' + (browserDenied.isError === true));
+  const taskDiscover = await client.callTool({ name: 'desktop_task_manage', arguments: { action: 'context_discover' } });
+  console.log('TASK_DISCOVER_OK=' + (taskDiscover.isError !== true));
+  const taskCreateDenied = await client.callTool({ name: 'desktop_task_manage', arguments: { action: 'context_create', context_label: 'release-smoke' } });
+  console.log('TASK_WRITE_POLICY_DENY=' + (taskCreateDenied.isError === true));
+  const skillList = await client.callTool({ name: 'desktop_skill_manage', arguments: { action: 'list' } });
+  console.log('SKILL_LIST_OK=' + (skillList.isError !== true));
+  const skillInstallDenied = await client.callTool({ name: 'desktop_skill_manage', arguments: { action: 'install', source_path: 'release-smoke-denied' } });
+  console.log('SKILL_WRITE_POLICY_DENY=' + (skillInstallDenied.isError === true));
 } finally { await client.close().catch(() => {}); }
 '@
     $smokeSource.Replace('__CLIENT_ENTRY__', $clientEntry).Replace('__SMOKE_BASE_URL__', $SmokeBaseUrl) | Set-Content -LiteralPath $SmokeFile -Encoding UTF8
     try { $smoke = (& $NodeExe $SmokeFile 2>&1 | Out-String); $smokeExit = $LASTEXITCODE } finally { }
-    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=16' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
+    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=26' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'AGENT_RUNTIME_TOOLS=true' -or $smoke -notmatch 'BROWSER_TOOLS=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true' -or $smoke -notmatch 'BROWSER_POLICY_DENY=true' -or $smoke -notmatch 'TASK_DISCOVER_OK=true' -or $smoke -notmatch 'TASK_WRITE_POLICY_DENY=true' -or $smoke -notmatch 'SKILL_LIST_OK=true' -or $smoke -notmatch 'SKILL_WRITE_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
     $before = (Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $PanelExe }).Count
     $second = Start-Process -FilePath $PanelExe -WorkingDirectory $StageRoot -PassThru
     [void]$second.WaitForExit(5000)
@@ -217,7 +239,13 @@ try {
     Write-Output ('PROFILE=' + $health.policy.profile)
     Write-Output ('VERSION=' + $health.version)
     Write-Output ('STAGE_NODE_COUNT=' + $OwnedStageNodePids.Count)
-    Write-Output 'TOOLS=16'
+    Write-Output 'TOOLS=26'
+    Write-Output 'BROWSER_TOOLS=OK'
+    Write-Output 'BROWSER_POLICY_DENY=OK'
+    Write-Output 'TASK_DISCOVER=OK'
+    Write-Output 'TASK_WRITE_POLICY_DENY=OK'
+    Write-Output 'SKILL_LIST=OK'
+    Write-Output 'SKILL_WRITE_POLICY_DENY=OK'
     Write-Output 'SINGLE_INSTANCE=OK'
 } finally {
     try {

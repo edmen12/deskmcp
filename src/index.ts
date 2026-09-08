@@ -1,17 +1,23 @@
 import { AuditLogger } from './audit.js';
+import { ArtifactStore } from './artifact-store.js';
+import { BrowserRuntime, OwnedBrowserProcessController } from './browser-runtime.js';
 import {
   startControlServer,
   type RunningControlServer
 } from './control-server.js';
 import { createComputerUseRuntime } from './computer-use-runtime.js';
+import { resolveDeskMcpStateRoot } from './data-root.js';
 import { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import { DesktopPolicy } from './desktop-policy.js';
+import { DynamicMcpHub } from './dynamic-mcp-hub.js';
 import { startHttpServer, type RunningHttpServer } from './http-server.js';
 import { ObservationStore } from './observation-store.js';
 import {
   extractListedProcessPids,
   ProcessSessionRegistry
 } from './process-session-registry.js';
+import { SkillStore } from './skill-store.js';
+import { TaskContextStore } from './task-context.js';
 
 const host = '127.0.0.1';
 const rawPort = process.env.DESKTOP_MCP_PORT ?? '8765';
@@ -27,7 +33,21 @@ const policy = await DesktopPolicy.create();
 const observations = new ObservationStore();
 const processSessions = new ProcessSessionRegistry();
 const computerUse = createComputerUseRuntime();
+const taskStore = new TaskContextStore(resolveDeskMcpStateRoot('tasks'));
+await taskStore.init();
+const artifactStore = new ArtifactStore(resolveDeskMcpStateRoot('artifacts'));
+await artifactStore.init();
+const dynamicMcpHub = new DynamicMcpHub(resolveDeskMcpStateRoot('mcp-hub'));
+await dynamicMcpHub.init();
+const skillStore = new SkillStore(resolveDeskMcpStateRoot('skills'));
+await skillStore.init();
 const bridge = new DesktopBackendBridge();
+const browser = new BrowserRuntime(
+  resolveDeskMcpStateRoot('browser'),
+  new OwnedBrowserProcessController(bridge, processSessions),
+  artifactStore
+);
+await browser.init();
 
 let running: RunningHttpServer | null = null;
 let control: RunningControlServer | null = null;
@@ -99,6 +119,13 @@ async function shutdown(signal: string): Promise<void> {
     process.exitCode = 1;
   }
 
+  try {
+    await browser.closeAll();
+  } catch (error) {
+    console.error('[deskmcp] browser shutdown failed:', error);
+    process.exitCode = 1;
+  }
+
   await cleanupOwnedProcesses();
 
   try {
@@ -118,7 +145,12 @@ try {
     audit,
     observations,
     processSessions,
-    computerUse
+    computerUse,
+    taskStore,
+    artifactStore,
+    dynamicMcpHub,
+    browser,
+    skillStore
   );
   control = await startControlServer(port, () => shutdown('LOCAL_CONTROL'));
   await bridge.start();

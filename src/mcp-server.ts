@@ -1,13 +1,23 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
+import type { ArtifactStore } from './artifact-store.js';
+import { registerArtifactTools } from './artifact-tools.js';
+import type { BrowserRuntime } from './browser-runtime.js';
+import { registerBrowserTools } from './browser-tools.js';
 import { registerDesktopBackendBridgeTools } from './bridge-tools.js';
 import { registerComputerUseTools } from './computer-use-tools.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
 import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import type { DesktopPolicy } from './desktop-policy.js';
+import type { DynamicMcpHub } from './dynamic-mcp-hub.js';
+import { registerDynamicMcpTools } from './dynamic-mcp-tools.js';
 import type { ObservationStore } from './observation-store.js';
 import { registerProcessTools } from './process-tools.js';
 import type { ProcessSessionRegistry } from './process-session-registry.js';
+import type { SkillStore } from './skill-store.js';
+import { registerSkillTools } from './skill-tools.js';
+import type { TaskContextStore } from './task-context.js';
+import { registerTaskTools } from './task-tools.js';
 import { registerTestTools } from './test-tools.js';
 
 export const SERVER_NAME = 'deskmcp-gateway';
@@ -19,7 +29,12 @@ export function createDesktopMcpServer(
   audit?: AuditLogger,
   observations?: ObservationStore,
   processSessions?: ProcessSessionRegistry,
-  computerUse?: ComputerUseRuntime
+  computerUse?: ComputerUseRuntime,
+  taskStore?: TaskContextStore,
+  artifactStore?: ArtifactStore,
+  dynamicMcpHub?: DynamicMcpHub,
+  browser?: BrowserRuntime,
+  skillStore?: SkillStore
 ): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
@@ -30,6 +45,11 @@ export function createDesktopMcpServer(
     registerDesktopBackendBridgeTools(server, bridge, policy, audit, observations);
     registerProcessTools(server, bridge, policy, audit, processSessions);
     registerComputerUseTools(server, policy, audit, computerUse);
+    if (taskStore) registerTaskTools(server, policy, audit, taskStore);
+    if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
+    if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
+    if (browser) registerBrowserTools(server, policy, audit, browser);
+    if (skillStore) registerSkillTools(server, policy, audit, skillStore);
   } else {
     registerTestTools(server);
   }

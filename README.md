@@ -7,7 +7,7 @@
   <a href="https://github.com/edmen12/deskmcp/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/edmen12/deskmcp?display_name=tag" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-22B8FF" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20x64%20%2B%20ARM64-2563EB" />
-  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-16-2DE0D8" />
+  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-26-2DE0D8" />
 </p>
 
 # DeskMCP
@@ -47,7 +47,7 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
 5. Use **Name: DeskMCP**, **Connection: Tunnel**, **Auth: No auth**.
 6. Select the Tunnel, check **I understand and want to continue**, then **Scan tools**.
 
-Expected result: **16 DeskMCP tools**.
+Expected result: **26 DeskMCP tools**.
 
 The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. Secret writes are verified by immediate DPAPI readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
 ## Architecture
@@ -64,23 +64,30 @@ DeskMCP Gateway  (127.0.0.1:8765)
   ├─ DeskMCP backend
   │   ↳ selected workspace
   │   ↳ Gateway-owned process sessions
+  ├─ Agent Runtime
+  │   ↳ Workspace-bound recoverable Task Rooms
+  │   ↳ verified expiring artifacts
+  │   ↳ dynamic Streamable HTTP MCP facade
+  │   ↳ versioned model-readable Skills
+  ├─ Browser Runtime
+  │   ↳ DeskMCP-owned Chromium profile / loopback CDP / verified screenshots
   └─ Windows Computer Use backend
       ↳ Microsoft WinApp CLI / UI Automation / screenshot / input
 ```
 
-The Tunnel provides the remote transport. The local Gateway checks policy before every filesystem, process, or computer-use action. Windows Computer Use is packaged as a pinned backend behind DeskMCP's own stable MCP schema, so backend changes do not become remote API changes.
+The Tunnel provides the remote transport. The local Gateway checks policy before filesystem, process, computer-use, artifact publication, dynamic MCP, or Skill mutations. Recoverable task state stays local under Workspace-bound Task Rooms: parallel chat windows receive separate opaque room capabilities by default, task listing requires the current room capability, and an interrupted chat can explicitly reattach by exact task id or by a discovered room id plus matching label. Artifacts and installed Skill versions stay local under DeskMCP's data root; Skills expose instructions/resources to the model but never auto-execute bundled scripts. Dynamic MCP servers are user-configured and only their non-secret configuration plus environment-variable names are persisted. Windows Computer Use is packaged as a pinned backend behind DeskMCP's own stable MCP schema, so backend changes do not become remote API changes.
 
 ## Permission profiles
 
-- **Read** — default; read, list, metadata and bounded search only inside the selected Workspace.
-- **Write** — adds guarded create/edit/write/move operations inside the selected Workspace.
-- **Full** — session-only; keeps the Workspace filesystem boundary and adds terminal/process sessions plus Windows Computer Use under the current Windows user permissions.
+- **Read** — default; read, list, metadata, bounded search, Task Room discovery plus task inspection when the current room capability is already available, artifact inspection/read, cached dynamic-MCP discovery, and installed Skill list/get/read plus local package validation.
+- **Write** — adds guarded create/edit/write/move operations plus Task Room creation/reattach and task mutation, artifact publish/delete, and local Workspace Skill install/activate/rollback.
+- **Full** — session-only; keeps the Workspace filesystem boundary and adds terminal/process sessions, Windows Computer Use, isolated Browser Automation, dynamic MCP refresh/live calls, and remote Skill validation/install over verified HTTPS sources.
 - **Unlock** (`fully-unlocked`) — session-only; disables DeskMCP Workspace, sensitive-path and fresh-observation file guards and also permits explicitly requested system-wide key injection. Windows ACL/UAC and Secure Desktop remain host boundaries.
 
 `Full` and `Unlock` are never persisted. Restarting DeskMCP returns to the last safe persisted profile: **Read** or **Write**. Neither profile bypasses Windows ACL/UAC or any remote-client safety policy.
 ## Tool surface
 
-DeskMCP currently exposes a stable **16-tool** MCP surface:
+DeskMCP currently exposes a stable **26-tool** MCP surface:
 
 ```text
 desktop_policy_status
@@ -99,9 +106,19 @@ desktop_terminate_process
 desktop_ui_windows
 desktop_ui_snapshot
 desktop_ui_action
+desktop_task_manage
+desktop_artifact_manage
+desktop_mcp_manage
+desktop_mcp_tool_search
+desktop_mcp_tool_inspect
+desktop_mcp_tool_call
+desktop_skill_manage
+desktop_browser_session
+desktop_browser_snapshot
+desktop_browser_act
 ```
 
-The schemas stay discoverable across profiles so the remote connection remains stable. **Discoverable does not mean permitted**: every invocation is still checked by the local DeskMCP policy before it can execute.
+The schemas stay discoverable across profiles so the remote connection remains stable. **Discoverable does not mean permitted**: every invocation is still checked by the local DeskMCP policy before it can execute. The dynamic MCP facade keeps arbitrary upstream tool schemas behind search → inspect → call rather than expanding DeskMCP's top-level tool list for every connected server.
 
 Windows Computer Use is **UI Automation first**. `desktop_ui_snapshot` returns a short-lived opaque `computer_observation_id`; every `desktop_ui_action` must consume a fresh observation, and any action invalidates sibling observations for that window so concurrent agents cannot keep acting from stale UI state. GUI mutations are serialized process-wide. Screenshot capture is optional and returned as MCP `image/png`; use it when visual context is needed instead of paying the image cost on every step. See [`docs/COMPUTER_USE.md`](docs/COMPUTER_USE.md).
 
@@ -120,6 +137,11 @@ On Windows, `window_mode` controls only whether the CMD/PowerShell console itsel
 - Computer Use exposes opaque `window_id` capabilities rather than HWND/PID targets. A fresh `computer_observation_id` is required for every action, observations expire after 30 seconds and are one-time, and the first action on a window invalidates sibling observations from the same UI state.
 - Computer Use is available only in session-only Full Control or Fully Unlocked. It does not bypass Windows ACL/UAC, the lock screen, or UAC Secure Desktop. System-wide key injection requires Fully Unlocked; the MCP surface does not expose WinApp's cross-integrity `post-message` keyboard transport.
 - All GUI operations share one process-wide coordinator so multiple MCP clients cannot concurrently mutate the desktop. UI Automation actions are preferred over injected input; screenshots are optional and temporary PNG files are removed after capture.
+- Recoverable tasks are persisted inside Workspace-bound Task Rooms. Each room uses an opaque capability whose secret is stored only as a SHA-256 hash locally; normal task list/get/mutation calls require that capability, so parallel chat windows do not share task state by default. Explicit recovery can mint an additional capability only from an exact task id or an exact discovered context id plus matching label. Room capabilities are also bound to the selected Workspace fingerprint. Mutations inside one room remain serialized, and a task cannot be completed until all declared steps are complete and a final review passes with verified evidence.
+- Artifacts can only be published from DeskMCP policy-approved paths. DeskMCP copies the payload into its own state root, records SHA-256/size metadata, re-verifies integrity on reads, expires artifacts after a bounded retention period, and signs download URLs. The default URL is loopback-only unless the user explicitly configures an HTTP(S) artifact base URL.
+- Dynamic MCP servers use a fixed search → inspect → call facade. Remote plain HTTP and URL-embedded credentials are rejected; persisted registry data contains environment-variable names rather than secret values. Refresh and live upstream calls require Full or Unlock. This implementation supports Streamable HTTP only; stdio is intentionally not exposed because spawning arbitrary child MCP servers would bypass DeskMCP's owned-process boundary.
+- Skills are versioned model-readable instruction/resource packages behind the single `desktop_skill_manage` facade. Local installs must come from a policy-approved Workspace path; remote ZIP validation/install requires Full or Unlock, HTTPS without URL credentials, and a caller-supplied SHA-256. Archives reject traversal, symlinks, encrypted entries, Windows-unsafe paths, oversized expansion, and mutable declared-version/digest conflicts. Skill `scripts/` are resources only and are never auto-executed by this subsystem.
+- Browser Automation requires Full or Unlock and a locally configured `DESKTOP_MCP_BROWSER_EXECUTABLE`. DeskMCP never attaches to an existing personal CDP session: each browser session uses a DeskMCP-owned profile, loopback-only random CDP port, and the existing ProcessHost/Windows Job Object ownership chain. Browser screenshots are published through the verified Artifact store; ephemeral profiles are deleted on close.
 - Audit records metadata only; it does not record file contents, terminal input/output, Authorization headers, API keys, screenshot pixels, or real process/window IDs. Writes and GUI mutations are serialized within their respective safety domains, and audit logs rotate at 10 MB with four bounded backups.
 
 Security reports should use [GitHub Private vulnerability reporting](https://github.com/edmen12/deskmcp/security/advisories/new), not a public issue.
@@ -131,6 +153,11 @@ User data lives under:
 %LOCALAPPDATA%\DesktopMCP\secrets\tunnel-runtime-key.dpapi
 %LOCALAPPDATA%\DesktopMCP\logs\audit.jsonl
 %LOCALAPPDATA%\DesktopMCP\workspace\
+%LOCALAPPDATA%\DesktopMCP\tasks\
+%LOCALAPPDATA%\DesktopMCP\artifacts\
+%LOCALAPPDATA%\DesktopMCP\mcp-hub\
+%LOCALAPPDATA%\DesktopMCP\skills\
+%LOCALAPPDATA%\DesktopMCP\browser\
 ```
 
 These internal paths intentionally retain `DesktopMCP` for upgrade compatibility even though the public product name is **DeskMCP**.
@@ -160,7 +187,7 @@ Build the complete Windows release with:
 scripts\build-installer.cmd
 ```
 
-The release pipeline performs Gateway build, clean `dist` generation, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, pinned WinApp CLI provenance/architecture checks, stage smoke, 16-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
+The release pipeline performs Gateway build, clean `dist` generation, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, pinned WinApp CLI provenance/architecture checks, stage smoke, 26-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
 
 Generated artifacts live under ignored `runtime\release\` and should be attached to GitHub Releases instead of committed.
 
