@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { AuditLogger, AuditRisk } from './audit.js';
+import type { BrowserRuntime } from './browser-runtime.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import { TaskContextStore, workspaceFingerprint } from './task-context.js';
 import {
@@ -75,7 +77,9 @@ export function registerTaskTools(
   server: McpServer,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  store: TaskContextStore
+  store: TaskContextStore,
+  agentDesktop?: AgentDesktopManager,
+  browser?: BrowserRuntime
 ): void {
   server.registerTool(
     'desktop_task_manage',
@@ -235,7 +239,39 @@ export function registerTaskTools(
           }
           case 'complete': {
             if (!input.task_id) throw new Error('complete requires task_id.');
-            result = { action, task: await store.complete(input.context_handle!, workspace, input.task_id) };
+            const task = await store.complete(input.context_handle!, workspace, input.task_id);
+            let agentDesktopCleanup: Record<string, unknown> = { linked: false, control_stopped: false, browser_sessions_closed: 0 };
+            if (agentDesktop) {
+              try {
+                const stopped = await agentDesktop.stopControlForTask(task.id);
+                if (stopped.stopped && stopped.leaseId) {
+                  let closedSessions = 0;
+                  let browserCleanupError: string | undefined;
+                  if (browser) {
+                    try {
+                      closedSessions = (await browser.closeAgentDesktopLease(stopped.leaseId)).closed_sessions;
+                    } catch (error) {
+                      browserCleanupError = error instanceof Error ? error.message : String(error);
+                    }
+                  }
+                  agentDesktopCleanup = {
+                    linked: true,
+                    control_stopped: true,
+                    lease_id: stopped.leaseId,
+                    browser_sessions_closed: closedSessions,
+                    ...(browserCleanupError ? { browser_cleanup_error: browserCleanupError } : {})
+                  };
+                }
+              } catch (error) {
+                agentDesktopCleanup = {
+                  linked: true,
+                  control_stopped: false,
+                  browser_sessions_closed: 0,
+                  cleanup_error: error instanceof Error ? error.message : String(error)
+                };
+              }
+            }
+            result = { action, task, agent_desktop_cleanup: agentDesktopCleanup };
             break;
           }
         }

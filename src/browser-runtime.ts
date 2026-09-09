@@ -471,6 +471,23 @@ export class BrowserRuntime {
     });
   }
 
+  async closeAgentDesktopLease(leaseId: string): Promise<{ lease_id: string; closed_sessions: number }> {
+    const normalizedLeaseId = leaseId.trim();
+    if (!SESSION_ID_PATTERN.test(normalizedLeaseId)) throw new Error('Invalid Agent Desktop lease id.');
+    return this.serializeMutation(async () => {
+      const records = [...this.sessions.values()].filter(record => record.agentDesktopLeaseId === normalizedLeaseId);
+      for (const record of records) {
+        this.sessions.delete(record.sessionId);
+        this.profilesInUse.delete(record.profileId);
+      }
+      for (const record of records) {
+        await this.processController.terminate(record.processSessionId).catch(() => undefined);
+        if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      return { lease_id: normalizedLeaseId, closed_sessions: records.length };
+    });
+  }
+
   async closeAll(): Promise<void> {
     await this.serializeMutation(async () => {
       const records = [...this.sessions.values()];
