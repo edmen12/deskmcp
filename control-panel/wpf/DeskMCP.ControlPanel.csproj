@@ -23,8 +23,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Resource Include="..\..\assets\brand\deskmcp-mark-64.png" Link="brand\deskmcp-mark-64.png"/>
-    <Content Include="..\..\assets\brand\DeskMCP.ico" Link="brand\DeskMCP.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <Resource Include="..\..\assets\brand\DeskMCP.ico" Link="brand\DeskMCP.ico"/>
   </ItemGroup>
 </Project>

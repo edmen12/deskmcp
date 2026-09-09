@@ -158,6 +158,7 @@ Require ([int]$targetContract.computerUseContract -ge 1) 'Release stage predates
 Require ([int]$targetContract.agentDesktopContract -ge 1) 'Release stage predates the Agent Desktop payload contract; rebuild it before packaging.'
 Require ([int]$targetContract.panelSingleFileContract -ge 1) 'Release stage predates the single-file Panel contract; rebuild it before packaging.'
 Require ([int]$targetContract.processHostSingleFileContract -ge 1) 'Release stage predates the single-file ProcessHost contract; rebuild it before packaging.'
+Require ([int]$targetContract.trayIconEmbeddedContract -ge 1) 'Release stage predates the embedded Tray icon contract; rebuild it before packaging.'
 foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
     Require (-not (Test-Path -LiteralPath (Join-Path $StageRoot $forbiddenPanelPayload))) ('Release stage Panel is not single-file: ' + $forbiddenPanelPayload)
 }

@@ -78,6 +78,10 @@ if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predat
 if ([int]$StageContract.agentDesktopContract -lt 1) { throw 'Release-stage predates the Agent Desktop payload contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.panelSingleFileContract -lt 1) { throw 'Release-stage predates the single-file Panel contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processHostSingleFileContract -lt 1) { throw 'Release-stage predates the single-file ProcessHost contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.trayIconEmbeddedContract -lt 1) { throw 'Release-stage predates the embedded Tray icon contract; rebuild the stage before smoke testing.' }
+$trayIconSelfTest = Start-Process -FilePath $PanelExe -ArgumentList '--tray-icon-self-test' -Wait -PassThru
+if ($trayIconSelfTest.ExitCode -ne 0) { throw ('Embedded Tray icon self-test failed: exit=' + $trayIconSelfTest.ExitCode) }
+Write-Output 'TRAY_ICON_EMBEDDED_SELF_TEST=PASS'
 if ([string]$StageContract.virtualDesktopAccessorCommit -ne '8172097993b1194e3d5e2ff38421ebb06f867b6c') { throw ('Unexpected VirtualDesktopAccessor source commit: ' + $StageContract.virtualDesktopAccessorCommit) }
 if ([string]$StageContract.winAppVersion -ne [string]$TargetConfig.WinAppVersion) { throw ('Unexpected WinApp version in release-target.json: ' + $StageContract.winAppVersion) }
 $vdaCommitText = (Get-Content -LiteralPath $VdaCommit -Raw).Trim()

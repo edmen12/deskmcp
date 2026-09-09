@@ -739,8 +739,28 @@ internal sealed partial class ControlPanelRuntime
     }
 
 
+    private static Drawing.Icon TryCreateEmbeddedBrandTrayIcon()
+    {
+        try
+        {
+            Uri resourceUri = new Uri("pack://application:,,,/brand/DeskMCP.ico", UriKind.Absolute);
+            System.Windows.Resources.StreamResourceInfo resource = Application.GetResourceStream(resourceUri);
+            if (resource != null && resource.Stream != null)
+            {
+                using (resource.Stream)
+                using (Drawing.Icon icon = new Drawing.Icon(resource.Stream, 32, 32))
+                    return (Drawing.Icon)icon.Clone();
+            }
+        }
+        catch { }
+        return null;
+    }
+
     private static Drawing.Icon CreateTrayIcon()
     {
+        Drawing.Icon embeddedBrandIcon = TryCreateEmbeddedBrandTrayIcon();
+        if (embeddedBrandIcon != null) return embeddedBrandIcon;
+
         string brandIcon = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "brand", "DeskMCP.ico");
         if (File.Exists(brandIcon))
         {
@@ -767,6 +787,27 @@ internal sealed partial class ControlPanelRuntime
                     return (Drawing.Icon)temp.Clone();
             }
             finally { DestroyIcon(handle); }
+        }
+    }
+
+    public static int RunTrayIconSelfTest()
+    {
+        try
+        {
+            using (Drawing.Icon icon = TryCreateEmbeddedBrandTrayIcon())
+            {
+                if (icon == null) throw new InvalidDataException("DeskMCP embedded brand Tray icon resource is missing.");
+                if (icon.Width <= 0 || icon.Height <= 0) throw new InvalidDataException("DeskMCP embedded tray icon has invalid dimensions.");
+                Console.WriteLine("TRAY_ICON_EMBEDDED_SELF_TEST=PASS");
+                Console.WriteLine("TRAY_ICON_SOURCE=EMBEDDED_RESOURCE");
+                Console.WriteLine("TRAY_ICON_SIZE=" + icon.Width + "x" + icon.Height);
+                return 0;
+            }
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("TRAY_ICON_EMBEDDED_SELF_TEST=FAIL " + error.Message);
+            return 1;
         }
     }
 
@@ -2891,6 +2932,8 @@ internal static class Program
                 return ControlPanelRuntime.RunUpdateSecuritySelfTest();
             if (args.Length > 0 && args[0] == "--runtime-reliability-self-test")
                 return RuntimeReliability.RunSelfTest();
+            if (args.Length > 0 && args[0] == "--tray-icon-self-test")
+                return ControlPanelRuntime.RunTrayIconSelfTest();
             if (args.Length > 0 && args[0] == "--tunnel-status-self-test")
                 return TunnelRuntimeStatusEvaluator.RunSelfTest();
             if (args.Length > 0 && args[0] == "--agent-safe-isolation-self-test")
