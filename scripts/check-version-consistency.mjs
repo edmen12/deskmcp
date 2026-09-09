@@ -24,8 +24,15 @@ match('installer/DeskMCPInstaller.cs', /public const string Version = "([^"]+)"/
 match('control-panel/wpf/DeskMCP.ControlPanel.csproj', /<Version>([^<]+)<\/Version>/, 'WPF Version');
 match('control-panel/wpf/DeskMCP.ControlPanel.csproj', /<AssemblyVersion>([^<]+)<\/AssemblyVersion>/, 'WPF AssemblyVersion', expectedAssembly);
 match('control-panel/wpf/DeskMCP.ControlPanel.csproj', /<FileVersion>([^<]+)<\/FileVersion>/, 'WPF FileVersion', expectedAssembly);
+match('process-host/DeskMCP.ProcessHost.csproj', /<Version>([^<]+)<\/Version>/, 'ProcessHost Version');
+match('process-host/DeskMCP.ProcessHost.csproj', /<AssemblyVersion>([^<]+)<\/AssemblyVersion>/, 'ProcessHost AssemblyVersion', expectedAssembly);
+match('process-host/DeskMCP.ProcessHost.csproj', /<FileVersion>([^<]+)<\/FileVersion>/, 'ProcessHost FileVersion', expectedAssembly);
+match('agent-desktop-host/DeskMCP.AgentDesktopHost.csproj', /<Version>([^<]+)<\/Version>/, 'AgentDesktopHost Version');
+match('agent-desktop-host/DeskMCP.AgentDesktopHost.csproj', /<AssemblyVersion>([^<]+)<\/AssemblyVersion>/, 'AgentDesktopHost AssemblyVersion', expectedAssembly);
+match('agent-desktop-host/DeskMCP.AgentDesktopHost.csproj', /<FileVersion>([^<]+)<\/FileVersion>/, 'AgentDesktopHost FileVersion', expectedAssembly);
 match('installer/DeskMCPInstaller.cs', /AssemblyVersion\("([^"]+)"\)/, 'Setup AssemblyVersion', expectedAssembly);
 match('installer/DeskMCPInstaller.cs', /AssemblyFileVersion\("([^"]+)"\)/, 'Setup FileVersion', expectedAssembly);
 if (!read('src/mcp-server.ts').includes("SERVER_NAME = 'deskmcp-gateway'")) throw new Error('MCP server name is not deskmcp-gateway');
 if (!read('src/desktop-backend-bridge.ts').includes(`name: 'deskmcp-gateway', version: '${expected}'`)) throw new Error('DeskMCP backend bridge client metadata is inconsistent');
+if (!read('src/dynamic-mcp-hub.ts').includes(`name: 'deskmcp-mcp-hub', version: '${expected}'`)) throw new Error('Dynamic MCP hub client metadata is inconsistent');
 console.log(`VERSION_CONSISTENCY_OK=${expected}`);

@@ -4,6 +4,34 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.8 — 2026-09-09
+
+### Added
+
+- Added Agent Desktop isolation on Windows so DeskMCP can move owned browser windows to a dedicated virtual desktop while keeping the user's current desktop free of Agent HUD/edge overlays. The Agent Desktop control bar and blue edge indicator are shown only on the bound virtual desktop.
+- Added Task Room lifecycle binding for Agent Desktop. Completing the matching recoverable task now revokes that Agent Desktop lease, closes browser sessions owned by the lease, removes the HUD, and returns Agent Desktop to inactive without touching unrelated tasks or browser sessions.
+- Added a pre-UAC administrator-request disclosure for agent-initiated elevation that shows the real shell/target command with sensitive values redacted. The disclosure now follows the DeskMCP panel's current-monitor, taskbar-aware bottom-right placement, including taskbar auto-hide handling.
+
+### Changed
+
+- Converted `DeskMCP.ProcessHost` to .NET 10 self-contained single-file packaging and added release contracts that reject stray `.dll`, `.deps.json`, and `.runtimeconfig.json` dependencies.
+- Reworked the Windows uninstaller host to reuse the same published DeskMCP single-file binary instead of shipping a separate executable, preserving the existing uninstall flow while reducing Application Control friction.
+- Extended version consistency checks to include ProcessHost, AgentDesktopHost, and Dynamic MCP client metadata so every shipped runtime component reports the same release version.
+- Updated Windows x64 CI self-tests to execute the published release-stage DeskMCP binary, matching the ARM64 validation path instead of relying on the internal WPF build output layout.
+
+### Fixed
+
+- Fixed AgentDesktopHost parsing of boolean flags such as `--show-no-activate`, which previously could fail a valid move-to-Agent-Desktop operation with an incomplete-argument error.
+- Fixed release-stage ProcessHost startup failures caused by missing `hostpolicy.dll` when the published host was treated as framework-dependent.
+- Fixed Windows Application Control blocking the old standalone uninstaller executable by eliminating the second uninstaller binary.
+- Fixed the administrator-request disclosure appearing near the top of the display instead of directly above the taskbar in the bottom-right corner.
+
+### Validation
+
+- Gateway/runtime test suite: 102 passed, 0 failed.
+- Agent Desktop + Browser native E2E passed on Windows, including Desktop 2 window ownership, Desktop 1 HUD isolation, blue-edge/control visibility, browser CDP activity, return-to-Desktop-1 cleanup, and task-completion auto-exit.
+- Windows x64, native Windows ARM64, and macOS ARM64 main-branch CI passed on the merged release code.
+
 ## 0.9.7 — 2026-09-08
 
 ### Added
