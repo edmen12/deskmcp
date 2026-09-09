@@ -28,6 +28,14 @@ internal sealed class AgentDesktopBindingDocument
     public string BoundAtUtc { get; set; }
 }
 
+internal sealed class AgentDesktopBindingPoolDocument
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; set; }
+    [JsonPropertyName("bindings")]
+    public List<AgentDesktopBindingDocument> Bindings { get; set; }
+}
+
 internal sealed class AgentDesktopControlDocument
 {
     [JsonPropertyName("schemaVersion")]
@@ -38,12 +46,28 @@ internal sealed class AgentDesktopControlDocument
     public bool Active { get; set; }
     [JsonPropertyName("leaseId")]
     public string LeaseId { get; set; }
+    [JsonPropertyName("desktopId")]
+    public string DesktopId { get; set; }
+    [JsonPropertyName("desktopNumber")]
+    public int? DesktopNumber { get; set; }
     [JsonPropertyName("taskLabel")]
     public string TaskLabel { get; set; }
+    [JsonPropertyName("taskId")]
+    public string TaskId { get; set; }
     [JsonPropertyName("startedAtUtc")]
     public string StartedAtUtc { get; set; }
     [JsonPropertyName("revokedAtUtc")]
     public string RevokedAtUtc { get; set; }
+}
+
+internal sealed class AgentDesktopControlPoolDocument
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; set; }
+    [JsonPropertyName("generation")]
+    public int Generation { get; set; }
+    [JsonPropertyName("controls")]
+    public List<AgentDesktopControlDocument> Controls { get; set; }
 }
 
 internal sealed class AgentDesktopCurrentDesktopDocument
@@ -129,12 +153,15 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GetCurrentDesktopNumberDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int GoToDesktopNumberDelegate(int desktopNumber);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int RegisterPostMessageHookDelegate(IntPtr listenerHwnd, uint messageId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void UnregisterPostMessageHookDelegate(IntPtr listenerHwnd);
 
     private readonly IntPtr libraryHandle;
     private readonly GetCurrentDesktopNumberDelegate getCurrentDesktopNumber;
+    private readonly GoToDesktopNumberDelegate goToDesktopNumber;
     private readonly RegisterPostMessageHookDelegate registerPostMessageHook;
     private readonly UnregisterPostMessageHookDelegate unregisterPostMessageHook;
     private bool disposed;
@@ -148,6 +175,8 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
         {
             IntPtr export = NativeLibrary.GetExport(libraryHandle, "GetCurrentDesktopNumber");
             getCurrentDesktopNumber = Marshal.GetDelegateForFunctionPointer<GetCurrentDesktopNumberDelegate>(export);
+            goToDesktopNumber = Marshal.GetDelegateForFunctionPointer<GoToDesktopNumberDelegate>(
+                NativeLibrary.GetExport(libraryHandle, "GoToDesktopNumber"));
             registerPostMessageHook = Marshal.GetDelegateForFunctionPointer<RegisterPostMessageHookDelegate>(
                 NativeLibrary.GetExport(libraryHandle, "RegisterPostMessageHook"));
             unregisterPostMessageHook = Marshal.GetDelegateForFunctionPointer<UnregisterPostMessageHookDelegate>(
@@ -168,6 +197,14 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
         int current = getCurrentDesktopNumber();
         if (current < 0) throw new InvalidOperationException("VirtualDesktopAccessor could not resolve the current virtual desktop.");
         return current;
+    }
+
+    public void GoToDesktopNumber(int desktopNumber)
+    {
+        if (disposed) throw new ObjectDisposedException(nameof(AgentDesktopVirtualDesktopClient));
+        if (desktopNumber < 0) throw new ArgumentOutOfRangeException(nameof(desktopNumber));
+        if (goToDesktopNumber(desktopNumber) != 1)
+            throw new InvalidOperationException("VirtualDesktopAccessor could not switch to the requested virtual desktop.");
     }
 
     public void RegisterDesktopSwitchHook(IntPtr listenerHwnd, uint messageId)
@@ -473,10 +510,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         hostPath = ResolveHostPath(baseDir, projectRoot);
         desktopClient = new AgentDesktopVirtualDesktopClient(ResolveVirtualDesktopAccessorPath(baseDir, projectRoot, hostPath));
         notify = notifyAction;
-        timer = new DispatcherTimer(DispatcherPriority.Send, eventWindow.Dispatcher)
-        {
-            Interval = HeartbeatInterval
-        };
+        timer = new DispatcherTimer(DispatcherPriority.Send, eventWindow.Dispatcher) { Interval = HeartbeatInterval };
         timer.Tick += delegate { Tick(); };
     }
 
@@ -489,17 +523,17 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         started = true;
         try
         {
-            AgentDesktopControlDocument stale = ReadControlFile(controlPath);
-            if (stale != null && stale.Active)
+            AgentDesktopControlPoolDocument stale = ReadControlPoolFile(controlPath);
+            if (stale != null && stale.Controls != null && stale.Controls.Count > 0)
             {
-                RevokeActiveControl();
+                RevokeAllControls();
                 try { if (File.Exists(hudPath)) File.Delete(hudPath); } catch { }
-                if (notify != null) notify("Previous Agent Desktop control was revoked after Control Panel restart.", false);
+                if (notify != null) notify("Previous Agent Desktop controls were revoked after Control Panel restart.", false);
             }
         }
         catch (Exception error)
         {
-            if (notify != null) notify("Could not revoke stale Agent Desktop control: " + error.Message, true);
+            if (notify != null) notify("Could not revoke stale Agent Desktop controls: " + error.Message, true);
         }
         try { RegisterDesktopSwitchNotifications(); }
         catch (Exception error)
@@ -554,17 +588,37 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         desktopEventHwnd = IntPtr.Zero;
     }
 
+    public List<AgentDesktopBindingDocument> ReadBindings()
+    {
+        return ReadBindingsFile(configPath);
+    }
+
     public AgentDesktopBindingDocument ReadBinding()
     {
-        return ReadBindingFile(configPath);
+        List<AgentDesktopBindingDocument> bindings = ReadBindings();
+        return bindings.Count > 0 ? bindings[0] : null;
     }
 
     public bool IsControlActive
     {
         get
         {
-            AgentDesktopControlDocument control = ReadControlFile(controlPath);
-            return control != null && control.Active;
+            AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
+            return state != null && state.Controls != null && state.Controls.Count > 0;
+        }
+    }
+
+    public bool IsCurrentDesktopControlled
+    {
+        get
+        {
+            try
+            {
+                int current = desktopClient.CurrentDesktopNumber();
+                AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
+                return state != null && state.Controls != null && state.Controls.Exists(control => control.DesktopNumber == current);
+            }
+            catch { return false; }
         }
     }
 
@@ -572,11 +626,17 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
     {
         get
         {
-            AgentDesktopBindingDocument binding = ReadBinding();
-            if (binding == null) return "Not bound";
-            return binding.DesktopNumber.HasValue
-                ? "Desktop " + (binding.DesktopNumber.Value + 1) + " · ready"
-                : "Bound · " + binding.DesktopId.Substring(0, 8);
+            List<AgentDesktopBindingDocument> bindings = ReadBindings();
+            if (bindings.Count == 0) return "Not bound";
+            AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
+            int active = state != null && state.Controls != null ? state.Controls.Count : 0;
+            if (bindings.Count == 1)
+            {
+                AgentDesktopBindingDocument binding = bindings[0];
+                string label = binding.DesktopNumber.HasValue ? "Desktop " + (binding.DesktopNumber.Value + 1) : "Bound · " + binding.DesktopId.Substring(0, 8);
+                return active > 0 ? label + " · controlling" : label + " · ready";
+            }
+            return bindings.Count + " Agent Desktops · " + active + " controlling";
         }
     }
 
@@ -585,10 +645,6 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         if (disposed) throw new ObjectDisposedException(nameof(AgentDesktopControlCoordinator));
         return Task.Run(delegate
         {
-            AgentDesktopControlDocument control = ReadControlFile(controlPath);
-            if (control != null && control.Active)
-                throw new InvalidOperationException("Exit Agent Control before rebinding the Agent Desktop.");
-
             AgentDesktopCurrentDesktopDocument current = RunCurrentDesktopHost();
             if (current.DesktopCount < 2)
                 throw new InvalidOperationException("Create Desktop 2 first (Win + Ctrl + D), switch to it, then bind Agent Desktop.");
@@ -605,7 +661,18 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 DesktopNumber = current.DesktopNumber,
                 BoundAtUtc = DateTime.UtcNow.ToString("O")
             };
-            RuntimeReliability.WriteAllTextAtomic(configPath, JsonSerializer.Serialize(binding) + Environment.NewLine, false);
+            List<AgentDesktopBindingDocument> bindings = ReadBindingsFile(configPath);
+            bindings.RemoveAll(existing =>
+                String.Equals(existing.DesktopId, binding.DesktopId, StringComparison.OrdinalIgnoreCase) ||
+                existing.DesktopNumber == binding.DesktopNumber);
+            bindings.Add(binding);
+            bindings.Sort(delegate(AgentDesktopBindingDocument left, AgentDesktopBindingDocument right)
+            {
+                return Nullable.Compare(left.DesktopNumber, right.DesktopNumber);
+            });
+            WriteBindingsPool(bindings);
+            desktopClient.GoToDesktopNumber(0);
+            RaiseStateChanged();
             return binding;
         });
     }
@@ -615,9 +682,31 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         if (disposed) return;
         try
         {
-            RevokeActiveControl();
-            HideOverlayAndHud();
+            int current = desktopClient.CurrentDesktopNumber();
+            AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
+            AgentDesktopControlDocument control = state?.Controls?.Find(row => row.DesktopNumber == current);
+            if (control == null || String.IsNullOrWhiteSpace(control.LeaseId))
+            {
+                if (notify != null) notify("No Agent Control lease is active on this desktop.", false);
+                return;
+            }
+            ExitControl(control.LeaseId);
+        }
+        catch (Exception error)
+        {
+            if (notify != null) notify("Could not exit Agent Control: " + error.Message, true);
+        }
+    }
+
+    private void ExitControl(string leaseId)
+    {
+        if (disposed || String.IsNullOrWhiteSpace(leaseId)) return;
+        try
+        {
+            RevokeControl(leaseId);
+            if (String.Equals(overlayLeaseId, leaseId, StringComparison.OrdinalIgnoreCase)) HideOverlayOnly();
             RaiseStateChanged();
+            Tick();
             if (notify != null) notify("Agent control exited. This desktop is back under manual control.", false);
         }
         catch (Exception error)
@@ -630,82 +719,88 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
     {
         if (disposed || tickInFlight) return;
         tickInFlight = true;
+        AgentDesktopControlDocument currentControl = null;
         try
         {
-            AgentDesktopControlDocument control = ReadControlFile(controlPath);
-            if (control == null || !control.Active || !ValidActiveControl(control))
+            AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
+            List<AgentDesktopControlDocument> controls = state?.Controls ?? new List<AgentDesktopControlDocument>();
+            if (controls.Count == 0)
             {
                 if (overlay != null || File.Exists(hudPath)) HideOverlayAndHud();
                 return;
             }
 
-            AgentDesktopBindingDocument binding = ReadBindingFile(configPath);
-            if (binding == null)
+            List<AgentDesktopBindingDocument> bindings = ReadBindingsFile(configPath);
+            foreach (AgentDesktopControlDocument control in controls)
             {
-                HideOverlayAndHud();
-                TryRevokeAfterSafetyFailure("Agent Desktop binding disappeared while control was active.");
-                return;
+                if (!ValidActiveControl(control, true))
+                    throw new InvalidDataException("Agent Desktop active control state is invalid.");
+                bool bound = bindings.Exists(binding =>
+                    String.Equals(binding.DesktopId, control.DesktopId, StringComparison.OrdinalIgnoreCase) &&
+                    binding.DesktopNumber == control.DesktopNumber);
+                if (!bound)
+                {
+                    TryRevokeAfterSafetyFailure(control.LeaseId, "Agent Desktop binding disappeared while its control lease was active.");
+                    return;
+                }
             }
-            Guid boundDesktopId;
-            if (!Guid.TryParse(binding.DesktopId, out boundDesktopId) || boundDesktopId == Guid.Empty)
-                throw new InvalidDataException("Agent Desktop binding contains an invalid desktop id.");
-            if (!binding.DesktopNumber.HasValue)
-                throw new InvalidDataException("Agent Desktop binding is missing its desktop number. Re-bind Desktop 2 from DeskMCP Settings.");
 
             int currentDesktopNumber = desktopClient.CurrentDesktopNumber();
-            bool viewingAgentDesktop = currentDesktopNumber == binding.DesktopNumber.Value;
-
-            if (!viewingAgentDesktop)
+            currentControl = controls.Find(control => control.DesktopNumber == currentDesktopNumber);
+            if (currentControl == null)
             {
                 if (overlay != null) HideOverlayOnly();
-                if (DateTime.UtcNow - lastHeartbeatUtc >= HeartbeatInterval)
-                {
-                    WriteHudHeartbeat(control, false);
-                    lastHeartbeatUtc = DateTime.UtcNow;
-                }
-                return;
             }
-
-            bool replaceOverlay = overlay == null ||
-                !String.Equals(overlayLeaseId, control.LeaseId, StringComparison.OrdinalIgnoreCase) ||
-                overlayGeneration != control.Generation ||
-                !overlay.IsOnDesktop(boundDesktopId);
-            if (replaceOverlay)
+            else
             {
-                HideOverlayOnly();
-                AgentDesktopOverlay next = new AgentDesktopOverlay(control.TaskLabel, ExitControl);
-                try
+                Guid boundDesktopId;
+                if (!Guid.TryParse(currentControl.DesktopId, out boundDesktopId) || boundDesktopId == Guid.Empty)
+                    throw new InvalidDataException("Agent Desktop control contains an invalid desktop id.");
+
+                bool replaceOverlay = overlay == null ||
+                    !String.Equals(overlayLeaseId, currentControl.LeaseId, StringComparison.OrdinalIgnoreCase) ||
+                    overlayGeneration != currentControl.Generation ||
+                    !overlay.IsOnDesktop(boundDesktopId);
+                if (replaceOverlay)
                 {
-                    await next.ShowOnDesktopAsync(boundDesktopId, delegate
+                    HideOverlayOnly();
+                    string capturedLeaseId = currentControl.LeaseId;
+                    int capturedGeneration = currentControl.Generation;
+                    int capturedDesktopNumber = currentControl.DesktopNumber.Value;
+                    AgentDesktopOverlay next = new AgentDesktopOverlay(currentControl.TaskLabel, delegate { ExitControl(capturedLeaseId); });
+                    try
                     {
-                        AgentDesktopControlDocument live = ReadControlFile(controlPath);
-                        return live != null && live.Active &&
-                            live.Generation == control.Generation &&
-                            String.Equals(live.LeaseId, control.LeaseId, StringComparison.OrdinalIgnoreCase) &&
-                            desktopClient.CurrentDesktopNumber() == binding.DesktopNumber.Value;
-                    });
-                    overlay = next;
-                    overlayLeaseId = control.LeaseId;
-                    overlayGeneration = control.Generation;
-                    lastHeartbeatUtc = DateTime.MinValue;
-                }
-                catch
-                {
-                    next.Dispose();
-                    throw;
+                        await next.ShowOnDesktopAsync(boundDesktopId, delegate
+                        {
+                            AgentDesktopControlPoolDocument liveState = ReadControlPoolFile(controlPath);
+                            AgentDesktopControlDocument live = liveState?.Controls?.Find(control =>
+                                control.Generation == capturedGeneration &&
+                                String.Equals(control.LeaseId, capturedLeaseId, StringComparison.OrdinalIgnoreCase));
+                            return live != null && desktopClient.CurrentDesktopNumber() == capturedDesktopNumber;
+                        });
+                        overlay = next;
+                        overlayLeaseId = capturedLeaseId;
+                        overlayGeneration = capturedGeneration;
+                        lastHeartbeatUtc = DateTime.MinValue;
+                    }
+                    catch
+                    {
+                        next.Dispose();
+                        throw;
+                    }
                 }
             }
 
             if (DateTime.UtcNow - lastHeartbeatUtc >= HeartbeatInterval)
             {
-                WriteHudHeartbeat(control, true);
+                WriteHudHeartbeats(controls, currentControl?.LeaseId);
                 lastHeartbeatUtc = DateTime.UtcNow;
             }
         }
         catch (Exception error)
         {
-            HideOverlayAndHud();
-            TryRevokeAfterSafetyFailure(error.Message);
+            HideOverlayOnly();
+            TryRevokeAfterSafetyFailure(currentControl?.LeaseId, error.Message);
         }
         finally
         {
@@ -713,23 +808,29 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         }
     }
 
-    private void WriteHudHeartbeat(AgentDesktopControlDocument control, bool visible)
+    private void WriteHudHeartbeats(List<AgentDesktopControlDocument> controls, string visibleLeaseId)
     {
-        if (!ValidActiveControl(control)) throw new InvalidDataException("Agent Desktop active control state is invalid.");
-        string json = JsonSerializer.Serialize(new
+        string heartbeat = DateTime.UtcNow.ToString("O");
+        List<object> entries = new List<object>();
+        foreach (AgentDesktopControlDocument control in controls)
         {
-            schemaVersion = 1,
-            generation = control.Generation,
-            leaseId = control.LeaseId,
-            armed = true,
-            visible = visible,
-            processId = Environment.ProcessId,
-            heartbeatAtUtc = DateTime.UtcNow.ToString("O")
-        });
+            if (!ValidActiveControl(control, true)) continue;
+            entries.Add(new
+            {
+                schemaVersion = 1,
+                generation = control.Generation,
+                leaseId = control.LeaseId,
+                armed = true,
+                visible = !String.IsNullOrWhiteSpace(visibleLeaseId) && String.Equals(control.LeaseId, visibleLeaseId, StringComparison.OrdinalIgnoreCase),
+                processId = Environment.ProcessId,
+                heartbeatAtUtc = heartbeat
+            });
+        }
+        string json = JsonSerializer.Serialize(new { schemaVersion = 2, entries = entries });
         RuntimeReliability.WriteAllTextAtomic(hudPath, json + Environment.NewLine, false);
     }
 
-    private void TryRevokeAfterSafetyFailure(string detail)
+    private void TryRevokeAfterSafetyFailure(string leaseId, string detail)
     {
         try
         {
@@ -737,27 +838,61 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 File.AppendAllText(Path.Combine(root, "control-error.log"), DateTime.UtcNow.ToString("O") + " " + detail + Environment.NewLine);
         }
         catch { }
-        try { RevokeActiveControl(); } catch { }
+        try
+        {
+            if (!String.IsNullOrWhiteSpace(leaseId)) RevokeControl(leaseId);
+            else RevokeAllControls();
+        }
+        catch { }
         if (notify != null && !String.IsNullOrWhiteSpace(detail))
             notify("Agent Desktop control was revoked for safety: " + detail, true);
         RaiseStateChanged();
     }
 
-    private void RevokeActiveControl()
+    private void RevokeControl(string leaseId)
     {
         FileStream controlLock = AcquireControlLock();
         try
         {
-            AgentDesktopControlDocument live = ReadControlFile(controlPath);
-            if (live == null || !live.Active) return;
-            string json = JsonSerializer.Serialize(new
+            AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath) ?? new AgentDesktopControlPoolDocument
             {
-                schemaVersion = 1,
-                generation = checked(live.Generation + 1),
-                active = false,
-                revokedAtUtc = DateTime.UtcNow.ToString("O")
+                SchemaVersion = 2,
+                Generation = 0,
+                Controls = new List<AgentDesktopControlDocument>()
+            };
+            int before = state.Controls?.Count ?? 0;
+            if (before == 0) return;
+            state.Controls.RemoveAll(control => String.Equals(control.LeaseId, leaseId, StringComparison.OrdinalIgnoreCase));
+            if (state.Controls.Count == before) return;
+            state.SchemaVersion = 2;
+            state.Generation = checked(state.Generation + 1);
+            WriteControlPool(state);
+        }
+        finally
+        {
+            try { controlLock.Dispose(); } catch { }
+            try { if (File.Exists(lockPath)) File.Delete(lockPath); } catch { }
+        }
+    }
+
+    private void RevokeAllControls()
+    {
+        FileStream controlLock = AcquireControlLock();
+        try
+        {
+            AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath) ?? new AgentDesktopControlPoolDocument
+            {
+                SchemaVersion = 2,
+                Generation = 0,
+                Controls = new List<AgentDesktopControlDocument>()
+            };
+            int nextGeneration = state.Controls != null && state.Controls.Count > 0 ? checked(state.Generation + 1) : state.Generation;
+            WriteControlPool(new AgentDesktopControlPoolDocument
+            {
+                SchemaVersion = 2,
+                Generation = nextGeneration,
+                Controls = new List<AgentDesktopControlDocument>()
             });
-            RuntimeReliability.WriteAllTextAtomic(controlPath, json + Environment.NewLine, false);
         }
         finally
         {
@@ -829,44 +964,97 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         }
     }
 
-    private static AgentDesktopBindingDocument ReadBindingFile(string path)
+    private void WriteBindingsPool(List<AgentDesktopBindingDocument> bindings)
+    {
+        AgentDesktopBindingPoolDocument document = new AgentDesktopBindingPoolDocument
+        {
+            SchemaVersion = 2,
+            Bindings = bindings ?? new List<AgentDesktopBindingDocument>()
+        };
+        RuntimeReliability.WriteAllTextAtomic(configPath, JsonSerializer.Serialize(document) + Environment.NewLine, false);
+    }
+
+    private void WriteControlPool(AgentDesktopControlPoolDocument document)
+    {
+        RuntimeReliability.WriteAllTextAtomic(controlPath, JsonSerializer.Serialize(document) + Environment.NewLine, false);
+    }
+
+    private static List<AgentDesktopBindingDocument> ReadBindingsFile(string path)
     {
         try
         {
-            if (!File.Exists(path)) return null;
-            AgentDesktopBindingDocument binding = JsonSerializer.Deserialize<AgentDesktopBindingDocument>(File.ReadAllText(path));
-            Guid id;
-            DateTime stamp;
-            if (binding == null || binding.SchemaVersion != 1 ||
-                !Guid.TryParse(binding.DesktopId, out id) || id == Guid.Empty ||
-                (binding.DesktopNumber.HasValue && binding.DesktopNumber.Value < 0) ||
-                !DateTime.TryParse(binding.BoundAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out stamp))
-                return null;
-            return binding;
+            if (!File.Exists(path)) return new List<AgentDesktopBindingDocument>();
+            string text = File.ReadAllText(path);
+            using (JsonDocument json = JsonDocument.Parse(text))
+            {
+                if (json.RootElement.TryGetProperty("schemaVersion", out JsonElement schema) && schema.GetInt32() == 2)
+                {
+                    AgentDesktopBindingPoolDocument pool = JsonSerializer.Deserialize<AgentDesktopBindingPoolDocument>(text);
+                    if (pool?.Bindings == null) return new List<AgentDesktopBindingDocument>();
+                    List<AgentDesktopBindingDocument> valid = new List<AgentDesktopBindingDocument>();
+                    foreach (AgentDesktopBindingDocument binding in pool.Bindings)
+                        if (ValidBinding(binding) && !valid.Exists(existing =>
+                            String.Equals(existing.DesktopId, binding.DesktopId, StringComparison.OrdinalIgnoreCase) ||
+                            existing.DesktopNumber == binding.DesktopNumber)) valid.Add(binding);
+                    valid.Sort(delegate(AgentDesktopBindingDocument left, AgentDesktopBindingDocument right)
+                    {
+                        return Nullable.Compare(left.DesktopNumber, right.DesktopNumber);
+                    });
+                    return valid;
+                }
+            }
+            AgentDesktopBindingDocument legacy = JsonSerializer.Deserialize<AgentDesktopBindingDocument>(text);
+            return ValidBinding(legacy) ? new List<AgentDesktopBindingDocument> { legacy } : new List<AgentDesktopBindingDocument>();
+        }
+        catch { return new List<AgentDesktopBindingDocument>(); }
+    }
+
+    private static bool ValidBinding(AgentDesktopBindingDocument binding)
+    {
+        Guid id;
+        DateTime stamp;
+        return binding != null && binding.SchemaVersion == 1 &&
+            Guid.TryParse(binding.DesktopId, out id) && id != Guid.Empty &&
+            (!binding.DesktopNumber.HasValue || binding.DesktopNumber.Value >= 0) &&
+            DateTime.TryParse(binding.BoundAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out stamp);
+    }
+
+    private static AgentDesktopControlPoolDocument ReadControlPoolFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return new AgentDesktopControlPoolDocument { SchemaVersion = 2, Generation = 0, Controls = new List<AgentDesktopControlDocument>() };
+            string text = File.ReadAllText(path);
+            using (JsonDocument json = JsonDocument.Parse(text))
+            {
+                if (json.RootElement.TryGetProperty("schemaVersion", out JsonElement schema) && schema.GetInt32() == 2)
+                {
+                    AgentDesktopControlPoolDocument pool = JsonSerializer.Deserialize<AgentDesktopControlPoolDocument>(text);
+                    if (pool == null || pool.Generation < 0 || pool.Controls == null) return null;
+                    if (pool.Controls.Exists(control => !ValidActiveControl(control, true))) return null;
+                    return pool;
+                }
+            }
+            AgentDesktopControlDocument legacy = JsonSerializer.Deserialize<AgentDesktopControlDocument>(text);
+            if (legacy == null || legacy.SchemaVersion != 1 || legacy.Generation < 0) return null;
+            List<AgentDesktopControlDocument> controls = new List<AgentDesktopControlDocument>();
+            if (legacy.Active && ValidActiveControl(legacy, false)) controls.Add(legacy);
+            return new AgentDesktopControlPoolDocument { SchemaVersion = 2, Generation = legacy.Generation, Controls = controls };
         }
         catch { return null; }
     }
 
-    private static AgentDesktopControlDocument ReadControlFile(string path)
-    {
-        try
-        {
-            if (!File.Exists(path)) return null;
-            AgentDesktopControlDocument control = JsonSerializer.Deserialize<AgentDesktopControlDocument>(File.ReadAllText(path));
-            if (control == null || control.SchemaVersion != 1 || control.Generation < 0) return null;
-            if (control.Active && !ValidActiveControl(control)) return null;
-            return control;
-        }
-        catch { return null; }
-    }
-
-    private static bool ValidActiveControl(AgentDesktopControlDocument control)
+    private static bool ValidActiveControl(AgentDesktopControlDocument control, bool requireDesktop)
     {
         if (control == null || !control.Active || control.Generation < 0) return false;
         Guid lease;
         DateTime started;
-        return Guid.TryParse(control.LeaseId, out lease) && lease != Guid.Empty &&
-            DateTime.TryParse(control.StartedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out started);
+        if (!Guid.TryParse(control.LeaseId, out lease) || lease == Guid.Empty ||
+            !DateTime.TryParse(control.StartedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out started)) return false;
+        if (!requireDesktop) return true;
+        Guid desktop;
+        return Guid.TryParse(control.DesktopId, out desktop) && desktop != Guid.Empty &&
+            control.DesktopNumber.HasValue && control.DesktopNumber.Value > 0;
     }
 
     private static string ResolveHostPath(string baseDir, string projectRoot)
@@ -921,7 +1109,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         timer.Stop();
         if (revokeActive)
         {
-            try { RevokeActiveControl(); } catch { }
+            try { RevokeAllControls(); } catch { }
         }
         HideOverlayAndHud();
         try { UnregisterDesktopSwitchNotifications(); } catch { }

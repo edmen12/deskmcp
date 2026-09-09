@@ -234,3 +234,45 @@ test('closing an Agent Desktop lease only closes browser sessions owned by that 
 
   await browser.closeAll();
 });
+
+
+test('Agent Desktop browser stays open until its control lease exits', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const browserRoot = path.join(root, 'browser');
+  const controller = new FakeProcessController(browserRoot);
+  const cdp = new FakeCdpDriver();
+  const leaseId = '33333333-3333-4333-8333-333333333333';
+  const activeLeases = new Set([leaseId]);
+  const agentDesktop = {
+    async assertLease(id: string) {
+      if (!activeLeases.has(id)) throw new Error('lease revoked');
+      return {};
+    },
+    async placeProcessWindows() { },
+    async isLeaseActive(id: string) { return activeLeases.has(id); }
+  } as unknown as AgentDesktopManager;
+  const browser = new BrowserRuntime(browserRoot, controller, artifacts, cdp, executable, agentDesktop);
+  await browser.init();
+
+  const session = await browser.start({ profile_id: 'lease-lifetime', agent_desktop_lease_id: leaseId });
+  await assert.rejects(
+    browser.close(session.session_id),
+    /stay open until their Agent Control lease exits/i
+  );
+  assert.equal((await browser.list()).length, 1);
+  assert.deepEqual(controller.terminated, []);
+
+  activeLeases.delete(leaseId);
+  const deadline = Date.now() + 3000;
+  while ((await browser.list()).length > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.equal((await browser.list()).length, 0);
+  assert.deepEqual(controller.terminated, ['process-1']);
+  await browser.closeAll();
+});

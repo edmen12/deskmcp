@@ -257,6 +257,7 @@ export class BrowserRuntime {
   private readonly sessions = new Map<string, BrowserSessionRecord>();
   private readonly profilesInUse = new Map<string, string>();
   private mutationChain: Promise<void> = Promise.resolve();
+  private leaseReaper: NodeJS.Timeout | undefined;
 
   constructor(
     readonly root: string,
@@ -269,6 +270,12 @@ export class BrowserRuntime {
 
   async init(): Promise<void> {
     await mkdir(path.join(this.root, 'profiles'), { recursive: true, mode: 0o700 });
+    if (this.agentDesktop && !this.leaseReaper) {
+      this.leaseReaper = setInterval(() => {
+        void this.reapRevokedAgentDesktopLeases().catch(() => undefined);
+      }, 1000);
+      this.leaseReaper.unref();
+    }
   }
 
   info(): BrowserRuntimeInfo {
@@ -288,6 +295,24 @@ export class BrowserRuntime {
     await previous;
     try { return await operation(); }
     finally { release(); }
+  }
+
+  private async disposeRecord(record: BrowserSessionRecord): Promise<void> {
+    this.sessions.delete(record.sessionId);
+    this.profilesInUse.delete(record.profileId);
+    await this.processController.terminate(record.processSessionId).catch(() => undefined);
+    if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  private async reapRevokedAgentDesktopLeases(): Promise<void> {
+    if (!this.agentDesktop) return;
+    await this.serializeMutation(async () => {
+      const leased = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
+      for (const record of leased) {
+        if (record.agentDesktopLeaseId && await this.agentDesktop!.isLeaseActive(record.agentDesktopLeaseId)) continue;
+        await this.disposeRecord(record);
+      }
+    });
   }
 
   private async configuredExecutable(): Promise<string> {
@@ -460,13 +485,10 @@ export class BrowserRuntime {
       const normalized = validateSessionId(sessionId);
       const record = this.sessions.get(normalized);
       if (!record) return { session_id: normalized, closed: false };
-      this.sessions.delete(normalized);
-      this.profilesInUse.delete(record.profileId);
-      try {
-        await this.processController.terminate(record.processSessionId);
-      } finally {
-        if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
+      if (record.agentDesktopLeaseId) {
+        throw new Error('Agent Desktop browser sessions stay open until their Agent Control lease exits. Exit Agent Control instead of closing this browser session directly.');
       }
+      await this.disposeRecord(record);
       return { session_id: normalized, closed: true };
     });
   }
@@ -476,27 +498,19 @@ export class BrowserRuntime {
     if (!SESSION_ID_PATTERN.test(normalizedLeaseId)) throw new Error('Invalid Agent Desktop lease id.');
     return this.serializeMutation(async () => {
       const records = [...this.sessions.values()].filter(record => record.agentDesktopLeaseId === normalizedLeaseId);
-      for (const record of records) {
-        this.sessions.delete(record.sessionId);
-        this.profilesInUse.delete(record.profileId);
-      }
-      for (const record of records) {
-        await this.processController.terminate(record.processSessionId).catch(() => undefined);
-        if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
-      }
+      for (const record of records) await this.disposeRecord(record);
       return { lease_id: normalizedLeaseId, closed_sessions: records.length };
     });
   }
 
   async closeAll(): Promise<void> {
+    if (this.leaseReaper) {
+      clearInterval(this.leaseReaper);
+      this.leaseReaper = undefined;
+    }
     await this.serializeMutation(async () => {
       const records = [...this.sessions.values()];
-      this.sessions.clear();
-      this.profilesInUse.clear();
-      for (const record of records) {
-        await this.processController.terminate(record.processSessionId).catch(() => undefined);
-        if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
-      }
+      for (const record of records) await this.disposeRecord(record);
     });
   }
 }

@@ -75,7 +75,9 @@ $StageContract = Get-Content -LiteralPath $StageContractPath -Raw | ConvertFrom-
 if ([int]$StageContract.agentSafeIsolationContract -lt 2) { throw 'Release-stage predates the tunnel-isolated agent-safe contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processJobObjectContract -lt 1) { throw 'Release-stage predates the owned-process Job Object contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predates the computer-use payload contract; rebuild the stage before smoke testing.' }
-if ([int]$StageContract.agentDesktopContract -lt 1) { throw 'Release-stage predates the Agent Desktop payload contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.agentDesktopContract -lt 2) { throw 'Release-stage predates the Agent Desktop pool contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.agentDesktopPoolContract -lt 1) { throw 'Release-stage predates the multi-desktop Agent pool contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.browserLeaseLifetimeContract -lt 1) { throw 'Release-stage predates the Agent Browser lease-lifetime contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.panelSingleFileContract -lt 1) { throw 'Release-stage predates the single-file Panel contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processHostSingleFileContract -lt 1) { throw 'Release-stage predates the single-file ProcessHost contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.trayIconEmbeddedContract -lt 1) { throw 'Release-stage predates the embedded Tray icon contract; rebuild the stage before smoke testing.' }

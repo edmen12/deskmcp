@@ -6,16 +6,31 @@ All notable changes to DeskMCP are documented here.
 
 ## 0.9.9 — 2026-09-09
 
+### Added
+
+- Added a multi-desktop Agent Desktop pool. Users can bind Desktop 2 or later as independent Agent slots; DeskMCP allocates the first free bound desktop to each new Agent Control lease so concurrent agents no longer compete for one shared desktop.
+- Added per-lease desktop ownership to Agent Desktop state. Each active lease now carries its own desktop id/number, task metadata, HUD heartbeat, Browser ownership, and independent stop/revoke lifecycle.
+- Added automatic return to Desktop 1 after binding a desktop into the Agent pool. Desktop 1 remains permanently reserved for the user and cannot be bound.
+
+### Changed
+
+- Agent Desktop Browser sessions now live for the full Agent Control lease. A lease-owned Browser cannot be closed independently by an agent; it remains open with page/login state intact until that lease exits, completes, or is revoked.
+- Agent Desktop safety HUD/blue edge are scoped to the currently viewed controlled desktop. Returning to Desktop 1 hides Agent overlays while agents on Desktop 2/3/4+ continue running in the background.
+- Extended release metadata with `agentDesktopContract=2`, `agentDesktopPoolContract=1`, and `browserLeaseLifetimeContract=1` so x64/ARM64 packaging rejects older single-desktop or early-browser-cleanup behavior.
+
 ### Fixed
 
-- Restored the official DeskMCP tray icon in Windows single-file builds. The tray now loads the original `DeskMCP.ico` from an embedded WPF resource instead of depending on an external `brand\DeskMCP.ico` file that is omitted by single-file publish.
-- Added an embedded Tray icon release contract and runtime self-test so x64/ARM64 release-stage validation fails if the official Tray icon resource is missing.
+- Restored the official DeskMCP Tray icon in Windows single-file builds. The original `DeskMCP.ico` is now compiled as a .NET embedded manifest resource, so the Tray no longer depends on an external `brand\DeskMCP.ico` file or WPF pack URI behavior.
+- Fixed the first Tray hotfix implementation failing only in published single-file Windows executables: WPF pack resources worked in the normal DLL build but were not reliable for the self-test inside the bundled EXE.
+- Added an embedded Tray icon release contract and runtime self-test so x64/ARM64 release-stage validation fails if the official Tray resource disappears again.
 
 ### Validation
 
-- WPF release build passes with 0 warnings and 0 errors.
-- Embedded Tray icon self-test passes without any external `brand\DeskMCP.ico` beside the single-file executable.
-- Gateway/runtime regression suite: 102 passed, 0 failed.
+- WPF Release build passes with 0 warnings and 0 errors.
+- Embedded Tray icon self-test passes while the single-file publish contains `DeskMCP.exe` and no external `brand\DeskMCP.ico`.
+- Agent Desktop pool regression verifies two bound desktops receive two simultaneous leases and a further lease reports busy only when all slots are occupied.
+- Agent Browser regression verifies a lease-owned Browser rejects direct close and remains alive until its Agent Control lease is revoked.
+- Gateway/runtime regression suite: 104 passed, 0 failed.
 
 ## 0.9.8 — 2026-09-09
 
