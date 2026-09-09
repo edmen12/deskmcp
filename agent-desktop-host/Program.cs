@@ -178,6 +178,38 @@ internal static class Program
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr hwnd, int command);
 
+    private const uint Th32csSnapProcess = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
     private const int SwShowNoActivate = 4;
     private const int SwRestore = 9;
 
@@ -200,6 +232,7 @@ internal static class Program
                 "window-info" => WindowInfo(ParseHwnd(Required(options, "hwnd")), vda),
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
+                "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "self-test" => SelfTest(vda),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };
@@ -381,6 +414,57 @@ internal static class Program
         return new { processId, moved = moved.Count, windows };
     }
 
+    private static object MoveProcessTree(int processId, Guid desktopId, int timeoutMs, bool restore, bool showNoActivate, VirtualDesktopAccessor vda)
+    {
+        if (restore && showNoActivate)
+            throw new ArgumentException("restore and show-no-activate cannot be combined.");
+        if (!vda.Available)
+            throw new InvalidOperationException("VirtualDesktopAccessor is required to move an Agent Desktop process tree.");
+        int? desktopNumber = vda.DesktopNumberById(desktopId);
+        if (!desktopNumber.HasValue)
+            throw new InvalidOperationException("Agent Desktop id is not present in the current Windows virtual desktop set.");
+
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        HashSet<IntPtr> moved = new();
+        do
+        {
+            foreach (int treeProcessId in EnumerateProcessTree(processId))
+            {
+                foreach (IntPtr hwnd in EnumerateTopLevelWindows(treeProcessId))
+                {
+                    try
+                    {
+                        Guid currentDesktopId = GetDesktopId(hwnd);
+                        if (currentDesktopId != desktopId)
+                            MoveWindowCore(hwnd, desktopId, desktopNumber.Value, restore, showNoActivate, vda);
+                        moved.Add(hwnd);
+                    }
+                    catch (InvalidOperationException) { }
+                }
+            }
+            Thread.Sleep(75);
+        } while (DateTime.UtcNow < deadline);
+
+        List<object> windows = new();
+        foreach (int treeProcessId in EnumerateProcessTree(processId))
+        {
+            foreach (IntPtr hwnd in EnumerateTopLevelWindows(treeProcessId))
+            {
+                if (!IsWindow(hwnd)) continue;
+                Guid actual = GetDesktopId(hwnd);
+                if (actual != desktopId)
+                    throw new InvalidOperationException("An Agent Desktop process-tree window remained on a different virtual desktop after placement.");
+                windows.Add(new
+                {
+                    hwnd = HwndText(hwnd),
+                    desktopId = actual.ToString("D"),
+                    desktopNumber = vda.WindowDesktopNumber(hwnd)
+                });
+            }
+        }
+        return new { processId, moved = moved.Count, windows };
+    }
+
     private static object SelfTest(VirtualDesktopAccessor vda)
     {
         IVirtualDesktopManager manager = CreateManager();
@@ -438,6 +522,43 @@ internal static class Program
             return true;
         }, IntPtr.Zero);
         return windows;
+    }
+
+    private static HashSet<int> EnumerateProcessTree(int rootProcessId)
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+        if (snapshot == new IntPtr(-1))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not snapshot the Agent Desktop process tree.");
+        try
+        {
+            List<(int ProcessId, int ParentProcessId)> entries = new();
+            ProcessEntry32 entry = new ProcessEntry32 { dwSize = (uint)Marshal.SizeOf<ProcessEntry32>() };
+            if (Process32FirstW(snapshot, ref entry))
+            {
+                do
+                {
+                    entries.Add((unchecked((int)entry.th32ProcessID), unchecked((int)entry.th32ParentProcessID)));
+                    entry.dwSize = (uint)Marshal.SizeOf<ProcessEntry32>();
+                } while (Process32NextW(snapshot, ref entry));
+            }
+
+            HashSet<int> tree = new() { rootProcessId };
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach ((int processId, int parentProcessId) in entries)
+                {
+                    if (!tree.Contains(parentProcessId) || !tree.Add(processId)) continue;
+                    changed = true;
+                }
+            } while (changed);
+            return tree;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
     }
 
     private static void EnsureWindow(IntPtr hwnd)

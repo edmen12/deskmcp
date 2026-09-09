@@ -4,9 +4,9 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DeskMCP.ProcessHost</AssemblyName>
     <RootNamespace>DeskMCP.ProcessHost</RootNamespace>
-    <Version>0.9.9</Version>
-    <AssemblyVersion>0.9.9.0</AssemblyVersion>
-    <FileVersion>0.9.9.0</FileVersion>
+    <Version>0.9.10</Version>
+    <AssemblyVersion>0.9.10.0</AssemblyVersion>
+    <FileVersion>0.9.10.0</FileVersion>
     <Product>DeskMCP</Product>
     <AssemblyTitle>DeskMCP Elevated Command Host</AssemblyTitle>
     <Description>DeskMCP secure host for user-approved elevated commands</Description>

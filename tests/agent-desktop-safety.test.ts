@@ -224,3 +224,64 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test('Agent Desktop process-tree placement keeps owned descendant GUI windows on the lease desktop', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-process-tree-'));
+  try {
+    const leaseId = randomUUID();
+    const desktopId = randomUUID();
+    const now = new Date().toISOString();
+    let observed: { processId: number; desktopId: string; timeoutMs: number | undefined } | undefined;
+    const native = {
+      async moveProcessTreeWindows(processId: number, targetDesktopId: string, options: { timeoutMs?: number }) {
+        observed = { processId, desktopId: targetDesktopId, timeoutMs: options.timeoutMs };
+        return {
+          processId,
+          moved: 2,
+          windows: [
+            { hwnd: '0x101', desktopId: targetDesktopId, desktopNumber: 2 },
+            { hwnd: '0x102', desktopId: targetDesktopId, desktopNumber: 2 }
+          ]
+        };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [{ schemaVersion: 1, desktopId, desktopNumber: 2, boundAtUtc: now }]
+    });
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 2,
+      generation: 9,
+      controls: [{
+        schemaVersion: 1,
+        generation: 9,
+        active: true,
+        leaseId,
+        desktopId,
+        desktopNumber: 2,
+        taskLabel: 'GUI placement',
+        startedAtUtc: now
+      }]
+    });
+    await writeJson(path.join(root, 'hud-state.json'), {
+      schemaVersion: 2,
+      entries: [{
+        schemaVersion: 1,
+        generation: 9,
+        leaseId,
+        armed: true,
+        visible: false,
+        processId: 1234,
+        heartbeatAtUtc: new Date().toISOString()
+      }]
+    });
+
+    await manager.placeProcessTreeWindows(4321, leaseId);
+    assert.deepEqual(observed, { processId: 4321, desktopId, timeoutMs: 15000 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

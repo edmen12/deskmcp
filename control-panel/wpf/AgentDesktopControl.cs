@@ -766,7 +766,6 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                     HideOverlayOnly();
                     string capturedLeaseId = currentControl.LeaseId;
                     int capturedGeneration = currentControl.Generation;
-                    int capturedDesktopNumber = currentControl.DesktopNumber.Value;
                     AgentDesktopOverlay next = new AgentDesktopOverlay(currentControl.TaskLabel, delegate { ExitControl(capturedLeaseId); });
                     try
                     {
@@ -776,7 +775,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                             AgentDesktopControlDocument live = liveState?.Controls?.Find(control =>
                                 control.Generation == capturedGeneration &&
                                 String.Equals(control.LeaseId, capturedLeaseId, StringComparison.OrdinalIgnoreCase));
-                            return live != null && desktopClient.CurrentDesktopNumber() == capturedDesktopNumber;
+                            return live != null;
                         });
                         overlay = next;
                         overlayLeaseId = capturedLeaseId;

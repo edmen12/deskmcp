@@ -457,4 +457,16 @@ export class AgentDesktopManager {
     }
     await this.assertLease(leaseId);
   }
+
+  async placeProcessTreeWindows(processId: number, leaseId: string): Promise<void> {
+    const { binding } = await this.assertLease(leaseId);
+    const moved = await this.native.moveProcessTreeWindows(processId, binding.desktopId, {
+      timeoutMs: 15000,
+      showNoActivate: true
+    });
+    if (moved.windows.some(window => window.desktopId.toLowerCase() !== binding.desktopId.toLowerCase())) {
+      throw new Error('Agent Desktop process-tree placement verification failed.');
+    }
+    await this.assertLease(leaseId);
+  }
 }
