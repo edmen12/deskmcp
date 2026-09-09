@@ -44,18 +44,6 @@ jobs:
         shell: powershell
         run: dotnet build .\control-panel\wpf\DeskMCP.ControlPanel.csproj -c Release --nologo -p:ContinuousIntegrationBuild=true
 
-      - name: Update security self-test
-        shell: powershell
-        run: |
-          $p = Start-Process -FilePath .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe -ArgumentList '--update-security-self-test' -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "Update security self-test failed: $($p.ExitCode)" }
-
-      - name: Runtime reliability self-test
-        shell: powershell
-        run: |
-          $p = Start-Process -FilePath .\control-panel\wpf\bin\Release\net10.0-windows\DeskMCP.exe -ArgumentList '--runtime-reliability-self-test' -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "Runtime reliability self-test failed: $($p.ExitCode)" }
-
       - name: Installer UI build
         shell: powershell
         run: .\scripts\test-installer-ui.ps1
@@ -63,6 +51,18 @@ jobs:
       - name: Build and smoke x64 installer
         shell: powershell
         run: .\scripts\build-installer.ps1 -Target win-x64
+
+      - name: Update security self-test
+        shell: powershell
+        run: |
+          $p = Start-Process -FilePath .\runtime\release-stage\win-x64\DesktopMCP\DeskMCP.exe -ArgumentList '--update-security-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Update security self-test failed: $($p.ExitCode)" }
+
+      - name: Runtime reliability self-test
+        shell: powershell
+        run: |
+          $p = Start-Process -FilePath .\runtime\release-stage\win-x64\DesktopMCP\DeskMCP.exe -ArgumentList '--runtime-reliability-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Runtime reliability self-test failed: $($p.ExitCode)" }
 
       - name: x64 release readiness
         shell: powershell
