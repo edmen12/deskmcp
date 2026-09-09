@@ -13,5 +13,5 @@ if exist "%DOTNET_LOCAL%" (
 set DOTNET_CLI_TELEMETRY_OPTOUT=1
 set "OUT=%~dp0..\..\runtime\publish\control-panel-win-x64"
 if exist "%OUT%" rmdir /s /q "%OUT%"
-"%DOTNET%" publish "%~dp0DeskMCP.ControlPanel.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o "%OUT%" --nologo
+"%DOTNET%" publish "%~dp0DeskMCP.ControlPanel.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "%OUT%" --nologo
 exit /b %errorlevel%

@@ -24,12 +24,13 @@ $localDotnet=Join-Path $RuntimeRoot 'dotnet-sdk\dotnet.exe'
 $dotnet=if(Test-Path -LiteralPath $localDotnet){$localDotnet}else{(Get-Command dotnet.exe -ErrorAction Stop).Source}
 Require (Test-Path -LiteralPath $Project) 'DeskMCP ProcessHost project is missing.'
 if(Test-Path -LiteralPath $Output){Remove-Item -LiteralPath $Output -Recurse -Force}
-& $dotnet publish $Project -c Release -r $TargetConfig.DotnetRid --self-contained true -p:PublishSingleFile=false -o $Output --nologo
+& $dotnet publish $Project -c Release -r $TargetConfig.DotnetRid --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $Output --nologo
 if($LASTEXITCODE -ne 0){throw ('ProcessHost publish failed: ' + $LASTEXITCODE)}
 
 $exe=Join-Path $Output 'DeskMCP.ProcessHost.exe'
-foreach($name in @('DeskMCP.ProcessHost.exe','DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')){
-    Require (Test-Path -LiteralPath (Join-Path $Output $name)) ('ProcessHost output is missing: ' + $name)
+Require (Test-Path -LiteralPath $exe) 'ProcessHost output is missing: DeskMCP.ProcessHost.exe'
+foreach($forbidden in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')){
+    Require (-not (Test-Path -LiteralPath (Join-Path $Output $forbidden))) ('ProcessHost publish is not single-file: ' + $forbidden)
 }
 $machine=Get-PeMachine $exe
 Require ($machine -eq $TargetConfig.PeMachine) ('ProcessHost PE architecture mismatch: 0x{0:X4}' -f $machine)

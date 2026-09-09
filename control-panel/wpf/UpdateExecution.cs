@@ -703,7 +703,9 @@ internal sealed partial class ControlPanelRuntime
             };
             if (IsCandidateForInstalledClient(badPath, "9.9.8", "win-x64", out reason)) throw new InvalidOperationException("version-mismatched download path was accepted");
 
-            string selfPath = typeof(ControlPanelRuntime).Assembly.Location;
+            string selfPath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(selfPath) || !File.Exists(selfPath))
+                throw new InvalidOperationException("could not resolve the current executable path for update verification");
             string selfSigner;
             string selfInspectionReason;
             AuthenticodeInspection selfInspection = InspectAuthenticode(selfPath, out selfSigner, out selfInspectionReason);

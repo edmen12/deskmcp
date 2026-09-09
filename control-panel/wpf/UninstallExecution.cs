@@ -1,22 +1,24 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Text;
 using Microsoft.Win32;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("DeskMCP Uninstaller")]
-[assembly: AssemblyProduct("DeskMCP")]
-[assembly: AssemblyVersion("0.9.7.0")]
-[assembly: AssemblyFileVersion("0.9.7.0")]
-
-internal static class DeskMcpUninstaller
+internal static class UninstallExecution
 {
     private const string ProductKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DesktopMCP";
 
-    [STAThread]
-    private static int Main(string[] args)
+    internal static bool ShouldRun()
+    {
+        string processPath = Environment.ProcessPath;
+        if (String.IsNullOrWhiteSpace(processPath)) return false;
+        string fileName = Path.GetFileName(processPath);
+        return String.Equals(fileName, "DeskMCPUninstaller.exe", StringComparison.OrdinalIgnoreCase)
+            || String.Equals(fileName, "DesktopMCPUninstaller.exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static int Run(string[] args)
     {
         bool quiet = HasArg(args, "--quiet");
         bool purge = HasArg(args, "--purge-data");
@@ -25,9 +27,17 @@ internal static class DeskMcpUninstaller
         if (testMode) quiet = true;
         if (!quiet)
         {
-            DialogResult answer = MessageBox.Show("Remove DeskMCP from this Windows account?\n\nYour settings, secrets, logs and workspace are kept by default.", "Uninstall DeskMCP", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            DialogResult answer = MessageBox.Show(
+                "Remove DeskMCP from this Windows account?\n\nYour settings, secrets, logs and workspace are kept by default.",
+                "Uninstall DeskMCP",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
             if (answer != DialogResult.Yes) return 1;
-            purge = MessageBox.Show("Also remove DeskMCP user data?\n\nChoose No to keep settings, secrets, logs and workspace.", "Remove user data?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
+            purge = MessageBox.Show(
+                "Also remove DeskMCP user data?\n\nChoose No to keep settings, secrets, logs and workspace.",
+                "Remove user data?",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) == DialogResult.Yes;
         }
         try
         {
@@ -45,14 +55,20 @@ internal static class DeskMcpUninstaller
         }
         catch (Exception ex)
         {
-            if (!quiet) MessageBox.Show("DeskMCP could not be fully uninstalled.\n\n" + ex.Message, "Uninstall DeskMCP", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!quiet)
+                MessageBox.Show(
+                    "DeskMCP could not be fully uninstalled.\n\n" + ex.Message,
+                    "Uninstall DeskMCP",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             return 2;
         }
     }
 
     private static bool HasArg(string[] args, string value)
     {
-        foreach (string arg in args) if (String.Equals(arg, value, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (string arg in args)
+            if (String.Equals(arg, value, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 
@@ -60,12 +76,12 @@ internal static class DeskMcpUninstaller
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
+
     private static string ResolveGatewayPortArgument()
     {
         string raw = Environment.GetEnvironmentVariable("DESKTOP_MCP_PORT");
         if (String.IsNullOrWhiteSpace(raw)) return "8765";
-        int port;
-        if (!Int32.TryParse(raw, out port) || port < 1 || port > 65535) return "8765";
+        if (!Int32.TryParse(raw, out int port) || port < 1 || port > 65535) return "8765";
         return port.ToString();
     }
 
@@ -93,6 +109,7 @@ internal static class DeskMcpUninstaller
         StopExactProcesses("node", nodePath);
         StopProcessesUnderRoot("tunnel-client", installDir);
     }
+
     private static void StopExactProcesses(string processName, string expectedPath)
     {
         foreach (Process p in Process.GetProcessesByName(processName))
@@ -125,6 +142,7 @@ internal static class DeskMcpUninstaller
             finally { try { p.Dispose(); } catch { } }
         }
     }
+
     private static void ScheduleRemoval(string installDir, bool purgeData)
     {
         string script = Path.Combine(Path.GetTempPath(), "DesktopMCP-uninstall-" + Guid.NewGuid().ToString("N") + ".cmd");

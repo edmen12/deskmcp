@@ -9,7 +9,13 @@ if ($Target -eq 'win-arm64' -and $hostArch -ne 'ARM64') { throw 'ARM64 runtime s
 if ($Target -eq 'win-x64' -and $hostArch -ne 'AMD64') { throw 'x64 runtime smoke requires a native Windows x64 runner.' }
 $Version = (Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version
 $PanelExe = Join-Path $StageRoot 'DeskMCP.exe'
+$PanelManagedDll = Join-Path $StageRoot 'DeskMCP.dll'
+$PanelDepsJson = Join-Path $StageRoot 'DeskMCP.deps.json'
+$PanelRuntimeConfig = Join-Path $StageRoot 'DeskMCP.runtimeconfig.json'
 $ProcessHostExe = Join-Path $StageRoot 'DeskMCP.ProcessHost.exe'
+$ProcessHostManagedDll = Join-Path $StageRoot 'DeskMCP.ProcessHost.dll'
+$ProcessHostDepsJson = Join-Path $StageRoot 'DeskMCP.ProcessHost.deps.json'
+$ProcessHostRuntimeConfig = Join-Path $StageRoot 'DeskMCP.ProcessHost.runtimeconfig.json'
 $NodeExe = Join-Path $StageRoot 'node\node.exe'
 $GatewayRoot = Join-Path $StageRoot 'gateway'
 $WinAppRoot = Join-Path $GatewayRoot 'winapp'
@@ -19,6 +25,12 @@ $WinAppSums = Join-Path $WinAppRoot 'SHA256SUMS.txt'
 $WinAppArchiveSum = Join-Path $WinAppRoot 'UPSTREAM_ARCHIVE_SHA256.txt'
 $WinAppVersionFile = Join-Path $WinAppRoot 'VERSION.txt'
 $WinAppLicense = Join-Path $StageRoot 'licenses\winappcli\LICENSE.txt'
+$AgentDesktopHost = Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.exe'
+$VdaRoot = Join-Path $StageRoot 'virtual-desktop-accessor'
+$VdaDll = Join-Path $VdaRoot 'VirtualDesktopAccessor.dll'
+$VdaLicense = Join-Path $VdaRoot 'LICENSE.txt'
+$VdaCommit = Join-Path $VdaRoot 'SOURCE_COMMIT.txt'
+$VdaSums = Join-Path $VdaRoot 'SHA256SUMS.txt'
 $SmokeStateRoot = Join-Path $ProjectRoot ('runtime\release-smoke-state\' + $Target + '-' + [Guid]::NewGuid().ToString('N'))
 $SmokeFile = Join-Path $SmokeStateRoot 'release-smoke.mjs'
 $SmokeDataRoot = Join-Path $SmokeStateRoot 'local'
@@ -43,8 +55,17 @@ $PreviousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
 $PreviousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $SmokeInstanceNamespace = 'release-smoke-' + $Target + '-' + [Guid]::NewGuid().ToString('N')
 if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
+foreach ($forbiddenPanelPayload in @($PanelManagedDll,$PanelDepsJson,$PanelRuntimeConfig)) {
+    if (Test-Path -LiteralPath $forbiddenPanelPayload) { throw ('Release-stage Panel is not single-file: ' + $forbiddenPanelPayload) }
+}
 if (-not (Test-Path -LiteralPath $ProcessHostExe)) { throw 'Release-stage ProcessHost is missing.' }
+foreach ($forbiddenProcessHostPayload in @($ProcessHostManagedDll,$ProcessHostDepsJson,$ProcessHostRuntimeConfig)) {
+    if (Test-Path -LiteralPath $forbiddenProcessHostPayload) { throw ('Release-stage ProcessHost is not single-file: ' + $forbiddenProcessHostPayload) }
+}
 if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missing.' }
+foreach ($requiredAgentDesktopFile in @($AgentDesktopHost,$VdaDll,$VdaLicense,$VdaCommit,$VdaSums)) {
+    if (-not (Test-Path -LiteralPath $requiredAgentDesktopFile)) { throw ('Release-stage Agent Desktop payload is missing: ' + $requiredAgentDesktopFile) }
+}
 foreach ($requiredWinAppFile in @($WinAppExe,$WinAppSkia,$WinAppSums,$WinAppArchiveSum,$WinAppVersionFile,$WinAppLicense)) {
     if (-not (Test-Path -LiteralPath $requiredWinAppFile)) { throw ('Release-stage computer-use payload is missing: ' + $requiredWinAppFile) }
 }
@@ -54,7 +75,27 @@ $StageContract = Get-Content -LiteralPath $StageContractPath -Raw | ConvertFrom-
 if ([int]$StageContract.agentSafeIsolationContract -lt 2) { throw 'Release-stage predates the tunnel-isolated agent-safe contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processJobObjectContract -lt 1) { throw 'Release-stage predates the owned-process Job Object contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predates the computer-use payload contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.agentDesktopContract -lt 1) { throw 'Release-stage predates the Agent Desktop payload contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.panelSingleFileContract -lt 1) { throw 'Release-stage predates the single-file Panel contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.processHostSingleFileContract -lt 1) { throw 'Release-stage predates the single-file ProcessHost contract; rebuild the stage before smoke testing.' }
+if ([string]$StageContract.virtualDesktopAccessorCommit -ne '8172097993b1194e3d5e2ff38421ebb06f867b6c') { throw ('Unexpected VirtualDesktopAccessor source commit: ' + $StageContract.virtualDesktopAccessorCommit) }
 if ([string]$StageContract.winAppVersion -ne [string]$TargetConfig.WinAppVersion) { throw ('Unexpected WinApp version in release-target.json: ' + $StageContract.winAppVersion) }
+$vdaCommitText = (Get-Content -LiteralPath $VdaCommit -Raw).Trim()
+if ($vdaCommitText -ne '8172097993b1194e3d5e2ff38421ebb06f867b6c') { throw ('VirtualDesktopAccessor SOURCE_COMMIT.txt mismatch: ' + $vdaCommitText) }
+$vdaHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $VdaDll).Hash.ToLowerInvariant()
+$vdaSumsText = Get-Content -LiteralPath $VdaSums -Raw
+if ($vdaSumsText -notmatch [regex]::Escape($vdaHash + '  VirtualDesktopAccessor.dll')) { throw 'VirtualDesktopAccessor SHA256SUMS entry is missing or wrong.' }
+if ((Get-Content -LiteralPath $VdaLicense -Raw) -notmatch 'Permission is hereby granted, free of charge') { throw 'VirtualDesktopAccessor MIT license payload is invalid.' }
+$previousVdaPath = $env:DESKTOP_MCP_VDA_PATH
+try {
+    $env:DESKTOP_MCP_VDA_PATH = $VdaDll
+    $agentDesktopInfoText = (& $AgentDesktopHost info 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw ('Agent Desktop Host runtime smoke failed: ' + $agentDesktopInfoText) }
+    $agentDesktopInfo = $agentDesktopInfoText | ConvertFrom-Json
+    if ($agentDesktopInfo.officialApi -ne $true -or $agentDesktopInfo.virtualDesktopAccessor -ne $true) { throw 'Agent Desktop Host runtime smoke did not report both desktop backends.' }
+} finally { $env:DESKTOP_MCP_VDA_PATH = $previousVdaPath }
+Write-Output 'AGENT_DESKTOP_PAYLOAD_INTEGRITY=OK'
+Write-Output ('VDA_COMMIT=' + $vdaCommitText)
 $expectedWinAppVersion = $TargetConfig.WinAppVersion.TrimStart('v')
 $env:WINAPP_CLI_TELEMETRY_OPTOUT = '1'
 $previousErrorActionPreference = $ErrorActionPreference
@@ -181,6 +222,7 @@ try {
     if ($health.computerUse.backendVersion -ne $TargetConfig.WinAppVersion) { throw ('Unexpected computer-use backend version: ' + $health.computerUse.backendVersion) }
     if ($health.computerUse.globalSerialization -ne $true -or $health.computerUse.freshObservationRequired -ne $true) { throw 'Computer-use safety contract is incomplete in Gateway health.' }
     if ($health.recoverableTasksEnabled -ne $true -or $health.artifactsEnabled -ne $true -or $health.dynamicMcpHubEnabled -ne $true -or $health.skillsEnabled -ne $true) { throw 'Agent-runtime capabilities are incomplete in Gateway health.' }
+    if ($health.agentDesktopEnabled -ne $true) { throw 'Release-stage Agent Desktop manager is not enabled in Gateway health.' }
     if ($null -eq $health.browserAutomation -or $health.browserAutomation.process_ownership -ne 'deskmcp-job-object' -or $health.browserAutomation.profile_isolation -ne $true -or $health.browserAutomation.reuse_existing_cdp -ne $false) { throw 'Browser-runtime safety contract is incomplete in Gateway health.' }
     Write-Output 'BROWSER_RUNTIME_CONTRACT=OK'
     $targetNode = [IO.Path]::GetFullPath($NodeExe)
@@ -209,12 +251,15 @@ try {
   console.log('COMPUTER_TOOLS=' + ['desktop_ui_windows','desktop_ui_snapshot','desktop_ui_action'].every(name => names.includes(name)));
   console.log('AGENT_RUNTIME_TOOLS=' + ['desktop_task_manage','desktop_artifact_manage','desktop_mcp_manage','desktop_mcp_tool_search','desktop_mcp_tool_inspect','desktop_mcp_tool_call','desktop_skill_manage'].every(name => names.includes(name)));
   console.log('BROWSER_TOOLS=' + ['desktop_browser_session','desktop_browser_snapshot','desktop_browser_act'].every(name => names.includes(name)));
+  console.log('AGENT_DESKTOP_TOOL=' + names.includes('desktop_agent_desktop'));
   const status = await client.callTool({ name: 'desktop_policy_status', arguments: {} });
   console.log('POLICY_OK=' + (status.isError !== true));
   const denied = await client.callTool({ name: 'desktop_ui_windows', arguments: {} });
   console.log('COMPUTER_POLICY_DENY=' + (denied.isError === true));
   const browserDenied = await client.callTool({ name: 'desktop_browser_session', arguments: { action: 'list' } });
   console.log('BROWSER_POLICY_DENY=' + (browserDenied.isError === true));
+  const agentDesktopDenied = await client.callTool({ name: 'desktop_agent_desktop', arguments: { action: 'status' } });
+  console.log('AGENT_DESKTOP_POLICY_DENY=' + (agentDesktopDenied.isError === true));
   const taskDiscover = await client.callTool({ name: 'desktop_task_manage', arguments: { action: 'context_discover' } });
   console.log('TASK_DISCOVER_OK=' + (taskDiscover.isError !== true));
   const taskCreateDenied = await client.callTool({ name: 'desktop_task_manage', arguments: { action: 'context_create', context_label: 'release-smoke' } });
@@ -227,7 +272,7 @@ try {
 '@
     $smokeSource.Replace('__CLIENT_ENTRY__', $clientEntry).Replace('__SMOKE_BASE_URL__', $SmokeBaseUrl) | Set-Content -LiteralPath $SmokeFile -Encoding UTF8
     try { $smoke = (& $NodeExe $SmokeFile 2>&1 | Out-String); $smokeExit = $LASTEXITCODE } finally { }
-    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=26' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'AGENT_RUNTIME_TOOLS=true' -or $smoke -notmatch 'BROWSER_TOOLS=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true' -or $smoke -notmatch 'BROWSER_POLICY_DENY=true' -or $smoke -notmatch 'TASK_DISCOVER_OK=true' -or $smoke -notmatch 'TASK_WRITE_POLICY_DENY=true' -or $smoke -notmatch 'SKILL_LIST_OK=true' -or $smoke -notmatch 'SKILL_WRITE_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
+    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=27' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'AGENT_RUNTIME_TOOLS=true' -or $smoke -notmatch 'BROWSER_TOOLS=true' -or $smoke -notmatch 'AGENT_DESKTOP_TOOL=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true' -or $smoke -notmatch 'BROWSER_POLICY_DENY=true' -or $smoke -notmatch 'AGENT_DESKTOP_POLICY_DENY=true' -or $smoke -notmatch 'TASK_DISCOVER_OK=true' -or $smoke -notmatch 'TASK_WRITE_POLICY_DENY=true' -or $smoke -notmatch 'SKILL_LIST_OK=true' -or $smoke -notmatch 'SKILL_WRITE_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
     $before = (Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $PanelExe }).Count
     $second = Start-Process -FilePath $PanelExe -WorkingDirectory $StageRoot -PassThru
     [void]$second.WaitForExit(5000)
@@ -239,9 +284,11 @@ try {
     Write-Output ('PROFILE=' + $health.policy.profile)
     Write-Output ('VERSION=' + $health.version)
     Write-Output ('STAGE_NODE_COUNT=' + $OwnedStageNodePids.Count)
-    Write-Output 'TOOLS=26'
+    Write-Output 'TOOLS=27'
     Write-Output 'BROWSER_TOOLS=OK'
     Write-Output 'BROWSER_POLICY_DENY=OK'
+    Write-Output 'AGENT_DESKTOP_TOOL=OK'
+    Write-Output 'AGENT_DESKTOP_POLICY_DENY=OK'
     Write-Output 'TASK_DISCOVER=OK'
     Write-Output 'TASK_WRITE_POLICY_DENY=OK'
     Write-Output 'SKILL_LIST=OK'

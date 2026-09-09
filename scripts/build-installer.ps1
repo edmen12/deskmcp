@@ -15,7 +15,6 @@ $SmokeRunId = $Target + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 # that the fixed per-user production install path would never hit.
 $SmokeRoot = Join-Path $RuntimeRoot ('i\' + $SmokeRunId + '\D')
 $InstallerSource = Join-Path $InstallerRoot 'DeskMCPInstaller.cs'
-$UninstallerSource = Join-Path $InstallerRoot 'DeskMCPUninstaller.cs'
 $UninstallerExe = Join-Path $BuildRoot 'DeskMCPUninstaller.exe'
 $PayloadZip = Join-Path $BuildRoot 'DesktopMCP-payload.zip'
 $PayloadHashFile = Join-Path $BuildRoot 'DesktopMCP-payload.sha256'
@@ -119,7 +118,6 @@ function Require-InstallerTest([object]$Result, [int]$ExpectedExitCode, [string]
 New-Item -ItemType Directory -Force -Path $BuildRoot, $ReleaseRoot | Out-Null
 Assert-StageNotRunning $StageRoot
 Require (Test-Path -LiteralPath $InstallerSource) 'Installer source is missing.'
-Require (Test-Path -LiteralPath $UninstallerSource) 'Uninstaller source is missing.'
 Require (Test-Path -LiteralPath $BrandIcon) 'DeskMCP brand icon is missing.'
 
 if (-not $SkipStage) {
@@ -142,26 +140,39 @@ $cscCandidates = @(
 $csc = $cscCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 Require ([bool]$csc) 'Windows .NET Framework C# compiler was not found.'
 
-Write-Output 'STEP=compile-uninstaller'
-Invoke-Native $csc @(
-    '/nologo', '/target:winexe', ('/platform:' + $TargetConfig.CscPlatform), '/optimize+',
-    ('/win32icon:' + $BrandIcon), ('/out:' + $UninstallerExe), '/reference:System.Windows.Forms.dll',
-    $UninstallerSource
-)
-Require (Test-Path -LiteralPath $UninstallerExe) 'Uninstaller build output is missing.'
+Write-Output 'STEP=prepare-uninstaller'
+$stagePanelExe = Join-Path $StageRoot 'DeskMCP.exe'
+Require (Test-Path -LiteralPath $stagePanelExe) 'Release-stage Panel is missing before uninstaller preparation.'
+Copy-Item -LiteralPath $stagePanelExe -Destination $UninstallerExe -Force
+Require (Test-Path -LiteralPath $UninstallerExe) 'Uninstaller host output is missing.'
+$panelHashForUninstaller = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagePanelExe).Hash
+$uninstallerHostHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $UninstallerExe).Hash
+Require ($uninstallerHostHash -eq $panelHashForUninstaller) 'Uninstaller host must be byte-identical to DeskMCP.exe.'
 Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskMCPUninstaller.exe') -Force
+Require ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $StageRoot 'DeskMCPUninstaller.exe')).Hash -eq $panelHashForUninstaller) 'Staged Uninstaller host must be byte-identical to DeskMCP.exe.'
 Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
 Require ([int]$targetContract.agentSafeIsolationContract -ge 2) 'Release stage predates the tunnel-isolated agent-safe contract; rebuild it before packaging.'
 Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
 Require ([int]$targetContract.computerUseContract -ge 1) 'Release stage predates the computer-use payload contract; rebuild it before packaging.'
+Require ([int]$targetContract.agentDesktopContract -ge 1) 'Release stage predates the Agent Desktop payload contract; rebuild it before packaging.'
+Require ([int]$targetContract.panelSingleFileContract -ge 1) 'Release stage predates the single-file Panel contract; rebuild it before packaging.'
+Require ([int]$targetContract.processHostSingleFileContract -ge 1) 'Release stage predates the single-file ProcessHost contract; rebuild it before packaging.'
+foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
+    Require (-not (Test-Path -LiteralPath (Join-Path $StageRoot $forbiddenPanelPayload))) ('Release stage Panel is not single-file: ' + $forbiddenPanelPayload)
+}
+foreach ($forbiddenProcessHostPayload in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
+    Require (-not (Test-Path -LiteralPath (Join-Path $StageRoot $forbiddenProcessHostPayload))) ('Release stage ProcessHost is not single-file: ' + $forbiddenProcessHostPayload)
+}
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
     'DeskMCP.exe',
     'DeskMCP.ProcessHost.exe',
-    'DeskMCP.ProcessHost.dll',
-    'DeskMCP.ProcessHost.deps.json',
-    'DeskMCP.ProcessHost.runtimeconfig.json',
+    'DeskMCP.AgentDesktopHost.exe',
+    'virtual-desktop-accessor\VirtualDesktopAccessor.dll',
+    'virtual-desktop-accessor\LICENSE.txt',
+    'virtual-desktop-accessor\SOURCE_COMMIT.txt',
+    'virtual-desktop-accessor\SHA256SUMS.txt',
     'Panel.xaml',
     'node\node.exe',
     'gateway\dist\src\index.js',
@@ -266,7 +277,20 @@ Write-Output 'STEP=installer-smoke-install'
 $install = Invoke-IsolatedInstallerTest $SetupExe @('--install-test', ('"' + $SmokeRoot + '"')) 'clean-install'
 Require-InstallerTest $install 0 'Smoke install'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.exe')) 'Installed Panel is missing.'
+foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
+    Require (-not (Test-Path -LiteralPath (Join-Path $SmokeRoot $forbiddenPanelPayload))) ('Installed Panel is not single-file: ' + $forbiddenPanelPayload)
+}
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.ProcessHost.exe')) 'Installed ProcessHost is missing.'
+foreach ($forbiddenProcessHostPayload in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
+    Require (-not (Test-Path -LiteralPath (Join-Path $SmokeRoot $forbiddenProcessHostPayload))) ('Installed ProcessHost is not single-file: ' + $forbiddenProcessHostPayload)
+}
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCPUninstaller.exe')) 'Installed Uninstaller is missing.'
+Require ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $SmokeRoot 'DeskMCPUninstaller.exe')).Hash -eq (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.exe')).Hash) 'Installed Uninstaller host must be byte-identical to DeskMCP.exe.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.AgentDesktopHost.exe')) 'Installed Agent Desktop Host is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'virtual-desktop-accessor\VirtualDesktopAccessor.dll')) 'Installed VirtualDesktopAccessor DLL is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'virtual-desktop-accessor\LICENSE.txt')) 'Installed VirtualDesktopAccessor MIT license is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'virtual-desktop-accessor\SOURCE_COMMIT.txt')) 'Installed VirtualDesktopAccessor provenance is missing.'
+Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'virtual-desktop-accessor\SHA256SUMS.txt')) 'Installed VirtualDesktopAccessor checksum manifest is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'node\node.exe')) 'Installed Node is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'LICENSE')) 'Installed Apache-2.0 project LICENSE is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'THIRD_PARTY_NOTICES.md')) 'Installed third-party notices are missing.'
@@ -285,6 +309,9 @@ Require (Test-Path -LiteralPath $installedIntegrityPath) 'Installed integrity ma
 $installedIntegrityText = Get-Content -LiteralPath $installedIntegrityPath -Raw
 foreach ($protectedWinAppPath in @('gateway/winapp/winapp.exe','gateway/winapp/libSkiaSharp.dll','gateway/winapp/SHA256SUMS.txt','gateway/winapp/UPSTREAM_ARCHIVE_SHA256.txt','gateway/winapp/VERSION.txt','licenses/winappcli/LICENSE.txt')) {
     Require ($installedIntegrityText -match [regex]::Escape('  ' + $protectedWinAppPath)) ('Installed integrity manifest does not protect ' + $protectedWinAppPath)
+}
+foreach ($protectedAgentDesktopPath in @('DeskMCP.AgentDesktopHost.exe','virtual-desktop-accessor/VirtualDesktopAccessor.dll','virtual-desktop-accessor/LICENSE.txt','virtual-desktop-accessor/SOURCE_COMMIT.txt','virtual-desktop-accessor/SHA256SUMS.txt')) {
+    Require ($installedIntegrityText -match [regex]::Escape('  ' + $protectedAgentDesktopPath)) ('Installed integrity manifest does not protect ' + $protectedAgentDesktopPath)
 }
 
 $rollbackMarker = Join-Path $SmokeRoot 'ROLLBACK_OLD_MARKER.txt'

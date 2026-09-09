@@ -7,6 +7,7 @@ This notice is generated from the actual Windows x64 release stage for DeskMCP 0
 - **Node.js 24.19.0** — distributed with its upstream `node/LICENSE`, which includes Node.js and bundled third-party notices.
 - **.NET 10 Windows x64 self-contained runtime** — the release carries `licenses/dotnet/LICENSE.txt` and `licenses/dotnet/ThirdPartyNotices.txt` copied from the exact SDK used to publish the desktop application.
 - **Microsoft WinApp CLI v0.5.0** — MIT; DeskMCP bundles the pinned standalone `winapp.exe` + `libSkiaSharp.dll` computer-use backend and preserves its MIT notice at `licenses/winappcli/LICENSE.txt`.
+- **VirtualDesktopAccessor** — MIT; DeskMCP builds the pinned source commit recorded in `virtual-desktop-accessor/SOURCE_COMMIT.txt`, preserves the upstream MIT notice at `virtual-desktop-accessor/LICENSE.txt`, and records the shipped DLL checksum in `virtual-desktop-accessor/SHA256SUMS.txt`.
 - **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream `LICENSE`, `NOTICE`, third-party licenses text, and SPDX document remain under `tunnel-client/v0.0.13/bin/`.
 - **@wonderwhy-er/desktop-commander 0.2.47** — MIT. Its package-local license remains in the bundled production `node_modules`.
 - **sharp-win32-x64 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.
@@ -54,4 +55,4 @@ License expressions requiring special attention or explicit choice:
 
 ## Preservation rule
 
-Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, WinApp CLI's MIT notice, or tunnel-client notice/SPDX files when optimizing a release payload.
+Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, WinApp CLI's MIT notice, VirtualDesktopAccessor's MIT/provenance/checksum files, or tunnel-client notice/SPDX files when optimizing a release payload.

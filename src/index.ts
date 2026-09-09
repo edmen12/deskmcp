@@ -1,4 +1,6 @@
+import { AgentDesktopNativeBridge } from './agent-desktop-native.js';
 import { AuditLogger } from './audit.js';
+import { AgentDesktopManager } from './agent-desktop-state.js';
 import { ArtifactStore } from './artifact-store.js';
 import { BrowserRuntime, OwnedBrowserProcessController } from './browser-runtime.js';
 import {
@@ -42,10 +44,18 @@ await dynamicMcpHub.init();
 const skillStore = new SkillStore(resolveDeskMcpStateRoot('skills'));
 await skillStore.init();
 const bridge = new DesktopBackendBridge();
+const agentDesktop = new AgentDesktopManager(
+  resolveDeskMcpStateRoot('agent-desktop'),
+  new AgentDesktopNativeBridge()
+);
+await agentDesktop.init();
 const browser = new BrowserRuntime(
   resolveDeskMcpStateRoot('browser'),
   new OwnedBrowserProcessController(bridge, processSessions),
-  artifactStore
+  artifactStore,
+  undefined,
+  undefined,
+  agentDesktop
 );
 await browser.init();
 
@@ -150,7 +160,8 @@ try {
     artifactStore,
     dynamicMcpHub,
     browser,
-    skillStore
+    skillStore,
+    agentDesktop
   );
   control = await startControlServer(port, () => shutdown('LOCAL_CONTROL'));
   await bridge.start();

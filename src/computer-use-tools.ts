@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
+import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { ComputerWindow, UiAction } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
@@ -59,6 +60,47 @@ function selectForegroundOrSingle(windows: readonly ComputerWindow[]): ComputerW
   throw new Error('Multiple windows matched. Call desktop_ui_windows and pass the returned window_id.');
 }
 
+export class RequiresForegroundInputError extends Error {
+  readonly code = 'requires_foreground_input';
+
+  constructor(message: string) {
+    super(`requires_foreground_input: ${message}`);
+    this.name = 'RequiresForegroundInputError';
+  }
+}
+
+export function prepareAgentDesktopAction(action: UiAction): UiAction {
+  switch (action.type) {
+    case 'invoke':
+    case 'set_value':
+    case 'wait':
+      return action;
+    case 'scroll':
+      if (action.wheel !== undefined) {
+        throw new RequiresForegroundInputError('mouse-wheel scrolling is disabled in Agent Desktop background mode. Use semantic direction/to scrolling when supported.');
+      }
+      return action;
+    case 'send_keys':
+      if (action.allowSystemKeys) {
+        throw new RequiresForegroundInputError('system-wide key injection is never allowed in Agent Desktop background mode.');
+      }
+      if (action.transport === 'send-input') {
+        throw new RequiresForegroundInputError('SendInput is disabled in Agent Desktop background mode. Use post-message or set_value.');
+      }
+      return { ...action, transport: 'post-message', allowSystemKeys: false };
+    case 'click':
+      throw new RequiresForegroundInputError('physical mouse click is disabled in Agent Desktop background mode. Use invoke when the element exposes an invoke pattern.');
+    case 'hover':
+      throw new RequiresForegroundInputError('physical mouse hover is disabled in Agent Desktop background mode.');
+    case 'drag':
+      throw new RequiresForegroundInputError('physical drag is disabled in Agent Desktop background mode.');
+  }
+}
+
+function isAgentDesktopSafetyWindow(window: ComputerWindow): boolean {
+  return window.title?.startsWith('DeskMCP Agent Desktop') === true;
+}
+
 function parseAction(input: {
   action: string;
   selector?: string | undefined;
@@ -106,7 +148,7 @@ function parseAction(input: {
         type: 'send_keys',
         keys: input.keys,
         ...(input.selector ? { selector: input.selector } : {}),
-        transport: input.transport ?? 'send-input',
+        ...(input.transport ? { transport: input.transport } : {}),
         ...(input.verbatim !== undefined ? { verbatim: input.verbatim } : {}),
         ...(input.allow_system_keys !== undefined ? { allowSystemKeys: input.allow_system_keys } : {})
       };
@@ -179,7 +221,8 @@ export function registerComputerUseTools(
   server: McpServer,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  runtime: ComputerUseRuntime
+  runtime: ComputerUseRuntime,
+  agentDesktop?: AgentDesktopManager
 ): void {
   server.registerTool(
     'desktop_ui_windows',
@@ -188,14 +231,20 @@ export function registerComputerUseTools(
       description: 'List Windows desktop windows for semantic computer use. Returns opaque window_id capabilities instead of raw HWND/PID targets. Requires Full Control or Fully Unlocked.',
       inputSchema: z.object({
         app: z.string().min(1).max(256).optional(),
-        include_untitled: z.boolean().optional().default(false)
+        include_untitled: z.boolean().optional().default(false),
+        agent_desktop_lease_id: z.string().uuid().optional()
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
     },
-    async ({ app, include_untitled }) => auditedComputerCall(audit, policy, 'desktop_ui_windows', undefined, async () => {
-      const windows = await runtime.coordinator.exclusive(() => runtime.backend.listWindows(app));
+    async ({ app, include_untitled, agent_desktop_lease_id }) => auditedComputerCall(audit, policy, 'desktop_ui_windows', undefined, async () => {
+      let windows = await runtime.coordinator.exclusive(() => runtime.backend.listWindows(app));
+      if (agent_desktop_lease_id) {
+        if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+        windows = await agentDesktop.filterWindowsForLease(windows, agent_desktop_lease_id);
+      }
       const visible = windows
         .filter(window => window.width >= 32 && window.height >= 24)
+        .filter(window => !isAgentDesktopSafetyWindow(window))
         .filter(window => include_untitled || Boolean(window.title?.trim()) || window.isForeground)
         .sort((a, b) => Number(b.isForeground) - Number(a.isForeground) || (b.width * b.height) - (a.width * a.height))
         .slice(0, 100)
@@ -215,26 +264,36 @@ export function registerComputerUseTools(
         include_tree: z.boolean().optional().default(true),
         include_screenshot: z.boolean().optional().default(false),
         interactive_only: z.boolean().optional().default(true),
-        max_elements: z.number().int().min(1).max(200).optional().default(80)
+        max_elements: z.number().int().min(1).max(200).optional().default(80),
+        agent_desktop_lease_id: z.string().uuid().optional()
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false }
     },
-    async ({ window_id, app, include_tree, include_screenshot, interactive_only, max_elements }) => auditedComputerCall(
+    async ({ window_id, app, include_tree, include_screenshot, interactive_only, max_elements, agent_desktop_lease_id }) => auditedComputerCall(
       audit,
       policy,
       'desktop_ui_snapshot',
       window_id ? `window:${window_id}` : undefined,
       async () => runtime.coordinator.exclusive(async () => {
-        const all = await runtime.backend.listWindows(app);
+        const all = window_id ? await runtime.backend.listWindows() : await runtime.backend.listWindows(app);
+        let candidates = all;
+        if (agent_desktop_lease_id) {
+          if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+          candidates = await agentDesktop.filterWindowsForLease(all, agent_desktop_lease_id);
+        }
         const target = window_id
-          ? runtime.windows.resolve(window_id, app ? await runtime.backend.listWindows() : all)
-          : selectForegroundOrSingle(all);
-        return snapshotContent(runtime, target, {
+          ? runtime.windows.resolve(window_id, all)
+          : selectForegroundOrSingle(candidates);
+        if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
+        if (agent_desktop_lease_id) await agentDesktop!.assertWindowOnLease(target.hwnd, agent_desktop_lease_id);
+        const snapshot = await snapshotContent(runtime, target, {
           includeTree: include_tree,
           includeScreenshot: include_screenshot,
           interactiveOnly: interactive_only,
           maxElements: max_elements
         });
+        if (agent_desktop_lease_id) await agentDesktop!.assertLease(agent_desktop_lease_id);
+        return snapshot;
       })
     )
   );
@@ -243,7 +302,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Prefer invoke/set_value over injected input. Keyboard injection uses Windows send-input so Full Control does not gain a cross-integrity message path; system-wide keys require Fully Unlocked.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. In Agent Desktop background mode, only UIA/window-targeted actions are allowed: invoke, set_value, semantic scroll, post-message send_keys, and wait. Physical mouse input, SendInput, wheel injection, drag, and hover return requires_foreground_input instead of stealing the user desktop.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -256,6 +315,7 @@ export function registerComputerUseTools(
         direction: z.enum(['up', 'down', 'left', 'right']).optional(),
         to: z.enum(['top', 'bottom']).optional(),
         wheel: z.number().int().min(-100).max(100).optional(),
+        transport: z.enum(['post-message', 'send-input']).optional(),
         verbatim: z.boolean().optional().default(false),
         allow_system_keys: z.boolean().optional().default(false),
         from: z.string().min(1).max(512).optional(),
@@ -264,24 +324,33 @@ export function registerComputerUseTools(
         dwell_ms: z.number().int().min(0).max(5000).optional(),
         wait_ms: z.number().int().min(0).max(10000).optional(),
         settle_ms: z.number().int().min(0).max(5000).optional().default(150),
-        observe_after: z.enum(['none', 'tree', 'screenshot', 'both']).optional().default('tree')
+        observe_after: z.enum(['none', 'tree', 'screenshot', 'both']).optional().default('tree'),
+        agent_desktop_lease_id: z.string().uuid().optional()
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
     },
     async input => auditedComputerCall(audit, policy, 'desktop_ui_action', `window:${input.window_id}`, async () => runtime.coordinator.exclusive(async () => {
-      if (input.allow_system_keys && !policy.isFullyUnlocked()) {
+      if (input.allow_system_keys && !input.agent_desktop_lease_id && !policy.isFullyUnlocked()) {
         throw new PolicyDeniedError('System-wide key injection requires Fully Unlocked.');
       }
 
+      const parsedAction = parseAction(input);
+      const action = input.agent_desktop_lease_id ? prepareAgentDesktopAction(parsedAction) : parsedAction;
       const liveWindows = await runtime.backend.listWindows();
       const target = runtime.windows.resolve(input.window_id, liveWindows);
+      if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
+      if (input.agent_desktop_lease_id) {
+        if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+        await agentDesktop.assertWindowOnLease(target.hwnd, input.agent_desktop_lease_id);
+      }
+
       runtime.observations.consume(input.computer_observation_id, input.window_id);
       // Invalidate every sibling observation before attempting the action. Even a
       // backend error can be partial, so all clients must re-observe afterward.
       runtime.observations.advance(input.window_id);
 
-      const action = parseAction(input);
       await runtime.backend.act(target.hwnd, action);
+      if (input.agent_desktop_lease_id) await agentDesktop!.assertLease(input.agent_desktop_lease_id);
       if (input.settle_ms > 0 && action.type !== 'wait') {
         await new Promise(resolve => setTimeout(resolve, input.settle_ms));
       }
@@ -302,6 +371,7 @@ export function registerComputerUseTools(
           }]
         };
       }
+      if (input.agent_desktop_lease_id) await agentDesktop!.assertWindowOnLease(refreshed.hwnd, input.agent_desktop_lease_id);
       if (input.observe_after === 'none') {
         return {
           content: [{
@@ -312,6 +382,7 @@ export function registerComputerUseTools(
       }
 
       const snapshot = await observeAfter(runtime, refreshed, input.observe_after);
+      if (input.agent_desktop_lease_id) await agentDesktop!.assertLease(input.agent_desktop_lease_id);
       const first = snapshot.content[0];
       if (first?.type !== 'text') throw new Error('Computer observation metadata was unavailable.');
       first.text = JSON.stringify({

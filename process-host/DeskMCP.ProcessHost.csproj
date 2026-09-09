@@ -11,6 +11,9 @@
     <AssemblyTitle>DeskMCP Elevated Command Host</AssemblyTitle>
     <Description>DeskMCP secure host for user-approved elevated commands</Description>
     <UseWindowsForms>true</UseWindowsForms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>

@@ -24,6 +24,19 @@ internal static class RuntimeReliability
         return path + ".bak";
     }
 
+    public static bool IsKnownProfile(string profile)
+    {
+        return profile == "read-only" || profile == "workspace-write" ||
+            profile == "full-control" || profile == "fully-unlocked";
+    }
+
+    public static string ResolveGatewayRecoveryProfile(bool profileChangeInFlight, string requestedProfile, string selectedProfile)
+    {
+        if (profileChangeInFlight && IsKnownProfile(requestedProfile)) return requestedProfile;
+        if (IsKnownProfile(selectedProfile)) return selectedProfile;
+        return "read-only";
+    }
+
     public static void WriteAllTextAtomic(string path, string content, bool backupExisting)
     {
         byte[] bytes = new UTF8Encoding(false).GetBytes(content ?? String.Empty);
@@ -82,6 +95,15 @@ internal static class RuntimeReliability
                 throw new InvalidOperationException("empty deadline was treated as expired");
             if (!DeadlineExceeded(now.AddSeconds(-46), now, TimeSpan.FromSeconds(45)))
                 throw new InvalidOperationException("runtime watchdog deadline did not expire");
+
+            if (ResolveGatewayRecoveryProfile(true, "fully-unlocked", "read-only") != "fully-unlocked")
+                throw new InvalidOperationException("profile switch recovery did not preserve the requested elevated profile");
+            if (ResolveGatewayRecoveryProfile(true, "workspace-write", "read-only") != "workspace-write")
+                throw new InvalidOperationException("profile switch recovery did not preserve the requested persistent profile");
+            if (ResolveGatewayRecoveryProfile(false, null, "workspace-write") != "workspace-write")
+                throw new InvalidOperationException("normal gateway recovery ignored the selected profile");
+            if (ResolveGatewayRecoveryProfile(false, null, "invalid") != "read-only")
+                throw new InvalidOperationException("invalid recovery profile did not fail closed to read-only");
 
             string state = Path.Combine(root, "settings.json");
             WriteAllTextAtomic(state, "{\"value\":1}", true);
