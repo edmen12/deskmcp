@@ -23,7 +23,7 @@ import { registerTaskTools } from './task-tools.js';
 import { registerTestTools } from './test-tools.js';
 
 export const SERVER_NAME = 'deskmcp-gateway';
-export const SERVER_VERSION = '0.9.9';
+export const SERVER_VERSION = '0.9.10';
 
 export function createDesktopMcpServer(
   bridge?: DesktopBackendBridge,
@@ -46,7 +46,7 @@ export function createDesktopMcpServer(
       throw new Error('Desktop policy, audit logger, observation store, process registry, and computer-use runtime are required.');
     }
     registerDesktopBackendBridgeTools(server, bridge, policy, audit, observations);
-    registerProcessTools(server, bridge, policy, audit, processSessions);
+    registerProcessTools(server, bridge, policy, audit, processSessions, agentDesktop);
     registerComputerUseTools(server, policy, audit, computerUse, agentDesktop);
     if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop, browser);
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);

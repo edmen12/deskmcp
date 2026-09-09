@@ -4,6 +4,26 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.10 — 2026-09-09
+
+### Changed
+
+- `desktop_start_process` now accepts an optional `agent_desktop_lease_id`. When present, DeskMCP validates the lease first, keeps the owned process session inside the normal ProcessHost ownership boundary, and constrains visible windows from the root process and descendants to the lease desktop.
+- Agent Desktop background process launch now fails closed if process-tree placement or final desktop verification fails. The just-started owned session is removed and its owned process tree is terminated instead of leaving GUI state on the wrong desktop.
+- Administrator launch with `agent_desktop_lease_id` is intentionally rejected for now so a cross-integrity child cannot silently escape Agent Desktop isolation.
+
+### Fixed
+
+- Fixed Agent Desktop GUI descendants such as AQP/MT5 being able to appear on a different Windows virtual desktop than the Agent Control lease. `DeskMCP.AgentDesktopHost` now follows the owned process tree and moves/verifies descendant top-level windows on the lease desktop instead of handling only the shell/root window.
+- Fixed a HUD race where switching back to Desktop 1 during overlay creation could make a still-valid Agent Desktop lease look changed/revoked. Lease validity now depends on the lease state itself; the currently viewed desktop only controls HUD visibility.
+
+### Validation
+
+- Gateway/runtime regression suite: 105 passed, 0 failed.
+- Agent Desktop focused regression suite: 5 passed, 0 failed.
+- Real Windows full-chain GUI E2E passed through MCP `desktop_start_process` → Agent Desktop lease → DeskMCP backend bridge → `DeskMCP.ProcessHost` → PowerShell → parent GUI → child WinForms GUI, with the final window verified on the target Agent Desktop.
+- Version consistency gate passes for 0.9.10.
+
 ## 0.9.9 — 2026-09-09
 
 ### Added

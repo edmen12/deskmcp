@@ -3,6 +3,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { AuditLogger, type AuditRecord } from '../src/audit.js';
 import { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
@@ -490,8 +491,23 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       profile: 'full-control',
       allowedRoots: [TEST_AREA]
     });
+    const agentLeaseId = '11111111-1111-4111-8111-111111111111';
+    let assertedAgentLeaseId: string | undefined;
+    let placedAgentProcess: { pid: number; leaseId: string } | undefined;
+    let failAgentPlacement = false;
+    const fakeAgentDesktop = {
+      async assertLease(leaseId: string) {
+        assertedAgentLeaseId = leaseId;
+        return {};
+      },
+      async placeProcessTreeWindows(pid: number, leaseId: string) {
+        placedAgentProcess = { pid, leaseId };
+        if (failAgentPlacement) throw new Error('simulated Agent Desktop placement failure');
+      }
+    } as unknown as AgentDesktopManager;
     const fullControlServer = await startHttpServer(
-      '127.0.0.1', 0, bridge, fullControlPolicy, audit, observations, processSessions
+      '127.0.0.1', 0, bridge, fullControlPolicy, audit, observations, processSessions,
+      undefined, undefined, undefined, undefined, undefined, undefined, fakeAgentDesktop
     );
     const fullControlClient = makeClient('0.9.0-full-control');
     try {
@@ -509,9 +525,61 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       }
       const startTool = fullControlTools.tools.find(tool => tool.name === 'desktop_start_process');
       assert.ok(startTool);
-      const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[] }> }).properties;
+      const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[]; type?: string }> }).properties;
       assert.deepEqual(startProperties?.window_mode?.enum, ['hidden', 'visible']);
       assert.deepEqual(startProperties?.elevation?.enum, ['standard', 'admin']);
+      assert.equal(startProperties?.agent_desktop_lease_id?.type, 'string');
+
+      const agentStarted = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: {
+          command: 'node -i',
+          timeout_ms: 1000,
+          ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {}),
+          agent_desktop_lease_id: agentLeaseId
+        }
+      });
+      assert.equal(agentStarted.isError, undefined);
+      assert.equal(assertedAgentLeaseId, agentLeaseId);
+      assert.equal(placedAgentProcess?.leaseId, agentLeaseId);
+      assert.ok((placedAgentProcess?.pid ?? 0) > 0);
+      assert.match(JSON.stringify(agentStarted.content), /Owned process tree constrained to the active Agent Desktop lease/);
+      const agentSessionMatch = JSON.stringify(agentStarted.content).match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+      assert.ok(agentSessionMatch);
+      const agentTerminated = await fullControlClient.callTool({
+        name: 'desktop_terminate_process',
+        arguments: { session_id: agentSessionMatch[0] }
+      });
+      assert.equal(agentTerminated.isError, undefined);
+      assert.equal(processSessions.size(), 0);
+
+      failAgentPlacement = true;
+      const placementFailed = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: {
+          command: 'node -i',
+          timeout_ms: 1000,
+          ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {}),
+          agent_desktop_lease_id: agentLeaseId
+        }
+      });
+      assert.equal(placementFailed.isError, true);
+      assert.match(JSON.stringify(placementFailed.content), /simulated Agent Desktop placement failure/);
+      assert.equal(processSessions.size(), 0);
+      failAgentPlacement = false;
+
+      const agentAdminDenied = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: {
+          command: 'node -e "process.exit(0)"',
+          timeout_ms: 1000,
+          elevation: 'admin',
+          agent_desktop_lease_id: agentLeaseId
+        }
+      });
+      assert.equal(agentAdminDenied.isError, true);
+      assert.match(JSON.stringify(agentAdminDenied.content), /Administrator process launch is not supported inside Agent Desktop background control/);
+      assert.equal(processSessions.size(), 0);
 
       const processCommand = 'node -i';
       const started = await fullControlClient.callTool({

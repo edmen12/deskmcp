@@ -128,4 +128,23 @@ export class AgentDesktopNativeBridge {
     if (options.showNoActivate) args.push('--show-no-activate');
     return this.run<AgentDesktopMoveProcessResult>(args, timeoutMs + 3000);
   }
+
+  async moveProcessTreeWindows(
+    processId: number,
+    desktopId: string,
+    options: { timeoutMs?: number; restore?: boolean; showNoActivate?: boolean } = {}
+  ): Promise<AgentDesktopMoveProcessResult> {
+    if (!Number.isSafeInteger(processId) || processId <= 0) throw new Error('Invalid Agent Desktop process-tree root id.');
+    if (options.restore && options.showNoActivate) throw new Error('Agent Desktop move cannot combine restore and showNoActivate.');
+    const timeoutMs = options.timeoutMs ?? 15000;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) throw new Error('Invalid Agent Desktop process-tree move timeout.');
+    const args = [
+      'move-process-tree', '--pid', String(processId),
+      '--desktop-id', normalizeDesktopId(desktopId),
+      '--timeout-ms', String(timeoutMs)
+    ];
+    if (options.restore) args.push('--restore');
+    if (options.showNoActivate) args.push('--show-no-activate');
+    return this.run<AgentDesktopMoveProcessResult>(args, timeoutMs + 3000);
+  }
 }

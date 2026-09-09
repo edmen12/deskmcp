@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { AuditLogger } from './audit.js';
 import type { DesktopBackendBridge, DesktopBackendToolResult } from './desktop-backend-bridge.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
@@ -139,13 +140,14 @@ export function registerProcessTools(
   bridge: DesktopBackendBridge,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  sessions: ProcessSessionRegistry
+  sessions: ProcessSessionRegistry,
+  agentDesktop?: AgentDesktopManager
 ): void {
   server.registerTool(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in full-control or fully-unlocked mode and return an opaque Gateway-owned session ID instead of a Windows PID.',
+      description: 'Start a terminal process in full-control or fully-unlocked mode and return an opaque Gateway-owned session ID instead of a Windows PID. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -155,6 +157,9 @@ export function registerProcessTools(
         ),
         elevation: z.enum(['standard', 'admin']).optional().default('standard').describe(
           'Controls process privilege. admin uses the standard Windows UAC prompt and is valid with either hidden or visible window mode.'
+        ),
+        agent_desktop_lease_id: z.string().uuid().optional().describe(
+          'Bind this owned process tree to an active Agent Desktop lease. GUI windows from the root process and descendants are moved and verified on that lease desktop.'
         )
       }),
       annotations: {
@@ -164,19 +169,27 @@ export function registerProcessTools(
         openWorldHint: true
       }
     },
-    async ({ command, timeout_ms, shell, window_mode, elevation }) => auditedProcessCall(
+    async ({ command, timeout_ms, shell, window_mode, elevation, agent_desktop_lease_id }) => auditedProcessCall(
       audit,
       policy,
       'desktop_start_process',
-      undefined,
+      agent_desktop_lease_id ? `agent-desktop:${agent_desktop_lease_id}` : undefined,
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        if (agent_desktop_lease_id) {
+          if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
+          if (elevation === 'admin') {
+            throw new PolicyDeniedError('Administrator process launch is not supported inside Agent Desktop background control. Exit Agent Control or launch without agent_desktop_lease_id.');
+          }
+          await agentDesktop.assertLease(agent_desktop_lease_id);
+        }
         if (sessions.atCapacity()) {
           await reconcileActiveProcessSessions(bridge, sessions);
         }
         const reservationId = sessions.reserveStart();
         let pid: number | undefined;
+        let sessionId: string | undefined;
         try {
           requireSupportedProcessPresentation(window_mode, elevation);
           const result = await bridge.startProcess(command, timeout_ms, shell, window_mode, elevation);
@@ -185,13 +198,20 @@ export function registerProcessTools(
             return result;
           }
           pid = extractStartedPid(result.text);
-          const sessionId = sessions.registerReserved(reservationId, pid, window_mode);
+          sessionId = sessions.registerReserved(reservationId, pid, window_mode);
+          if (agent_desktop_lease_id && !resultShowsCompletedProcess(result)) {
+            await agentDesktop!.placeProcessTreeWindows(pid, agent_desktop_lease_id);
+          }
           const sanitized = sanitizeProcessResult(result, pid, sessionId);
+          const placed = agent_desktop_lease_id
+            ? sanitized.text + '\\nOwned process tree constrained to the active Agent Desktop lease.'
+            : sanitized.text;
           return window_mode === 'visible'
-            ? { ...sanitized, text: sanitized.text + '\\nVisible console opened. Use the console window for interactive input.' }
-            : sanitized;
+            ? { ...sanitized, text: placed + '\\nVisible console opened. Use the console window for interactive input.' }
+            : { ...sanitized, text: placed };
         } catch (error) {
           sessions.releaseStart(reservationId);
+          if (sessionId) sessions.forget(sessionId);
           if (pid !== undefined) {
             await bridge.forceTerminateProcess(pid).catch(() => undefined);
           }
