@@ -383,7 +383,7 @@ export class DynamicMcpHub {
     const transport = new StreamableHTTPClientTransport(new URL(server.url), {
       requestInit: { headers: this.requestHeaders(server) }
     });
-    const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.7' });
+    const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.8' });
     let connected = false;
     try {
       await timeoutPromise(client.connect(transport), server.timeout_ms, `Connect to ${server.name}`);
