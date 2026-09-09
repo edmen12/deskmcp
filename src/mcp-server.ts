@@ -51,7 +51,7 @@ export function createDesktopMcpServer(
     if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop, browser);
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
     if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
-    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore);
+    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore, browser);
     if (browser) registerBrowserTools(server, policy, audit, browser);
     if (skillStore) registerSkillTools(server, policy, audit, skillStore);
   } else {

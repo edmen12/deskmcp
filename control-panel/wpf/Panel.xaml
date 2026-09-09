@@ -348,7 +348,7 @@
                   <StackPanel>
                     <TextBlock x:Name="AgentDesktopLabel" Text="Agent Desktop" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
                     <TextBlock x:Name="AgentDesktopStatusText" Text="Not bound" Foreground="#8E8E93" FontSize="10" Margin="0,2,10,0" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="AgentDesktopHint" Text="Switch to Desktop 2, then bind it as the Agent E2E workspace." Foreground="#8E8E93" FontSize="9" Margin="0,4,12,0" TextWrapping="Wrap" MaxWidth="225"/>
+                    <TextBlock x:Name="AgentDesktopHint" Text="Bind Desktop 2 or later into the Agent pool. DeskMCP returns you to Desktop 1 after each bind." Foreground="#8E8E93" FontSize="9" Margin="0,4,12,0" TextWrapping="Wrap" MaxWidth="225"/>
                   </StackPanel>
                   <Button Grid.Column="1" x:Name="AgentDesktopBindButton" Style="{StaticResource MiniButton}" Content="Bind Current" Padding="11,7" VerticalAlignment="Center"/>
                 </Grid>

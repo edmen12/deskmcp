@@ -16,15 +16,28 @@ export interface AgentDesktopBinding {
   readonly boundAtUtc: string;
 }
 
+interface AgentDesktopConfigDocument {
+  readonly schemaVersion: 2;
+  readonly bindings: readonly AgentDesktopBinding[];
+}
+
 export interface AgentDesktopControlState {
   readonly schemaVersion: 1;
   readonly generation: number;
   readonly active: boolean;
   readonly leaseId?: string;
+  readonly desktopId?: string;
+  readonly desktopNumber?: number;
   readonly taskLabel?: string;
   readonly taskId?: string;
   readonly startedAtUtc?: string;
   readonly revokedAtUtc?: string;
+}
+
+interface AgentDesktopControlDocument {
+  readonly schemaVersion: 2;
+  readonly generation: number;
+  readonly controls: readonly AgentDesktopControlState[];
 }
 
 export interface AgentDesktopHudState {
@@ -37,10 +50,18 @@ export interface AgentDesktopHudState {
   readonly heartbeatAtUtc: string;
 }
 
+interface AgentDesktopHudDocument {
+  readonly schemaVersion: 2;
+  readonly entries: readonly AgentDesktopHudState[];
+}
+
 export interface AgentDesktopStatus {
   readonly configured: boolean;
+  readonly bindings: readonly AgentDesktopBinding[];
   readonly binding?: AgentDesktopBinding;
+  readonly controls: readonly AgentDesktopControlState[];
   readonly control: AgentDesktopControlState;
+  readonly available_desktops: number;
   readonly hud_ready: boolean;
   readonly hud_visible: boolean;
 }
@@ -59,16 +80,57 @@ function validBinding(value: unknown): value is AgentDesktopBinding {
     && validIso(row.boundAtUtc);
 }
 
-function validControl(value: unknown): value is AgentDesktopControlState {
+function validConfig(value: unknown): value is AgentDesktopConfigDocument {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (row.schemaVersion !== 2 || !Array.isArray(row.bindings) || !row.bindings.every(validBinding)) return false;
+  const ids = new Set<string>();
+  const numbers = new Set<number>();
+  for (const binding of row.bindings as AgentDesktopBinding[]) {
+    const id = binding.desktopId.toLowerCase();
+    if (ids.has(id)) return false;
+    ids.add(id);
+    if (binding.desktopNumber !== undefined) {
+      if (numbers.has(binding.desktopNumber)) return false;
+      numbers.add(binding.desktopNumber);
+    }
+  }
+  return true;
+}
+
+function validControl(value: unknown, requireDesktop = false): value is AgentDesktopControlState {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (row.schemaVersion !== 1 || !Number.isSafeInteger(row.generation) || Number(row.generation) < 0 || typeof row.active !== 'boolean') return false;
   if (row.active) {
     if (typeof row.leaseId !== 'string' || !UUID_PATTERN.test(row.leaseId)) return false;
     if (!validIso(row.startedAtUtc)) return false;
+    if (requireDesktop) {
+      if (typeof row.desktopId !== 'string' || !UUID_PATTERN.test(row.desktopId)) return false;
+      if (!Number.isInteger(row.desktopNumber) || Number(row.desktopNumber) <= 0) return false;
+    }
   }
-  return (row.taskLabel === undefined || typeof row.taskLabel === 'string')
+  return (row.desktopId === undefined || (typeof row.desktopId === 'string' && UUID_PATTERN.test(row.desktopId)))
+    && (row.desktopNumber === undefined || (Number.isInteger(row.desktopNumber) && Number(row.desktopNumber) >= 0))
+    && (row.taskLabel === undefined || typeof row.taskLabel === 'string')
     && (row.taskId === undefined || (typeof row.taskId === 'string' && TASK_ID_PATTERN.test(row.taskId)));
+}
+
+function validControlDocument(value: unknown): value is AgentDesktopControlDocument {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (row.schemaVersion !== 2 || !Number.isSafeInteger(row.generation) || Number(row.generation) < 0 || !Array.isArray(row.controls)) return false;
+  if (!row.controls.every(control => validControl(control, true) && (control as AgentDesktopControlState).active)) return false;
+  const leases = new Set<string>();
+  const desktops = new Set<string>();
+  for (const control of row.controls as AgentDesktopControlState[]) {
+    const lease = control.leaseId!.toLowerCase();
+    const desktop = control.desktopId!.toLowerCase();
+    if (leases.has(lease) || desktops.has(desktop)) return false;
+    leases.add(lease);
+    desktops.add(desktop);
+  }
+  return true;
 }
 
 function validHud(value: unknown): value is AgentDesktopHudState {
@@ -86,6 +148,12 @@ function validHud(value: unknown): value is AgentDesktopHudState {
     && validIso(row.heartbeatAtUtc);
 }
 
+function validHudDocument(value: unknown): value is AgentDesktopHudDocument {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return row.schemaVersion === 2 && Array.isArray(row.entries) && row.entries.every(validHud);
+}
+
 async function readJson(pathname: string): Promise<unknown | undefined> {
   try { return JSON.parse(await readFile(pathname, 'utf8')) as unknown; }
   catch (error) {
@@ -99,6 +167,10 @@ async function atomicJson(pathname: string, value: unknown): Promise<void> {
   const temp = `${pathname}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   await rename(temp, pathname);
+}
+
+function inactiveControl(generation: number): AgentDesktopControlState {
+  return { schemaVersion: 1, generation, active: false };
 }
 
 export class AgentDesktopManager {
@@ -120,20 +192,14 @@ export class AgentDesktopManager {
 
   async init(): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const current = await this.readControl();
-    if (!current) {
-      await atomicJson(this.controlPath, { schemaVersion: 1, generation: 0, active: false } satisfies AgentDesktopControlState);
-      return;
-    }
-    if (current.active) {
-      await atomicJson(this.controlPath, {
-        schemaVersion: 1,
-        generation: current.generation + 1,
-        active: false,
-        revokedAtUtc: new Date().toISOString()
-      } satisfies AgentDesktopControlState);
-      await rm(this.hudPath, { force: true }).catch(() => undefined);
-    }
+    const current = await this.readControlDocument();
+    const nextGeneration = current.generation + (current.controls.length > 0 ? 1 : 0);
+    await atomicJson(this.controlPath, {
+      schemaVersion: 2,
+      generation: nextGeneration,
+      controls: []
+    } satisfies AgentDesktopControlDocument);
+    if (current.controls.length > 0) await rm(this.hudPath, { force: true }).catch(() => undefined);
   }
 
   private async serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -165,50 +231,84 @@ export class AgentDesktopManager {
     }
   }
 
-  async binding(): Promise<AgentDesktopBinding | undefined> {
+  async bindings(): Promise<readonly AgentDesktopBinding[]> {
     const raw = await readJson(this.configPath);
-    if (raw === undefined) return undefined;
-    if (!validBinding(raw)) throw new Error('Agent Desktop binding state is invalid. Re-bind it from the DeskMCP Control Panel.');
-    return raw;
+    if (raw === undefined) return [];
+    if (validBinding(raw)) return [raw];
+    if (!validConfig(raw)) throw new Error('Agent Desktop binding state is invalid. Re-bind Agent Desktops from the DeskMCP Control Panel.');
+    return [...raw.bindings].sort((a, b) => (a.desktopNumber ?? Number.MAX_SAFE_INTEGER) - (b.desktopNumber ?? Number.MAX_SAFE_INTEGER));
   }
 
-  private async readControl(): Promise<AgentDesktopControlState | undefined> {
+  async binding(): Promise<AgentDesktopBinding | undefined> {
+    return (await this.bindings())[0];
+  }
+
+  private async readControlDocument(): Promise<AgentDesktopControlDocument> {
     const raw = await readJson(this.controlPath);
-    if (raw === undefined) return undefined;
-    if (!validControl(raw)) throw new Error('Agent Desktop control state is invalid.');
-    return raw;
+    if (raw === undefined) return { schemaVersion: 2, generation: 0, controls: [] };
+    if (validControlDocument(raw)) return raw;
+    if (validControl(raw)) {
+      return {
+        schemaVersion: 2,
+        generation: raw.generation,
+        controls: raw.active ? [raw] : []
+      };
+    }
+    throw new Error('Agent Desktop control state is invalid.');
   }
 
-  private async hud(): Promise<AgentDesktopHudState | undefined> {
+  private async hudEntries(): Promise<readonly AgentDesktopHudState[]> {
     const raw = await readJson(this.hudPath);
-    if (raw === undefined) return undefined;
-    if (!validHud(raw)) return undefined;
-    return raw;
+    if (raw === undefined) return [];
+    if (validHud(raw)) return [raw];
+    if (validHudDocument(raw)) return raw.entries;
+    return [];
   }
 
   private async hudMatches(control: AgentDesktopControlState): Promise<boolean> {
     if (!control.active || !control.leaseId) return false;
-    const hud = await this.hud();
-    if (!hud || hud.leaseId !== control.leaseId || hud.generation !== control.generation || !hud.armed) return false;
+    const hud = (await this.hudEntries()).find(entry => entry.leaseId.toLowerCase() === control.leaseId!.toLowerCase());
+    if (!hud || hud.generation !== control.generation || !hud.armed) return false;
     const age = Date.now() - Date.parse(hud.heartbeatAtUtc);
     return age >= 0 && age <= HUD_HEARTBEAT_MAX_AGE_MS;
   }
 
-  async status(): Promise<AgentDesktopStatus> {
-    const [binding, control] = await Promise.all([
-      this.binding(),
-      this.readControl()
+  private async statusForLease(preferredLeaseId?: string): Promise<AgentDesktopStatus> {
+    const [bindings, document, hudEntries] = await Promise.all([
+      this.bindings(),
+      this.readControlDocument(),
+      this.hudEntries()
     ]);
-    const effective = control ?? { schemaVersion: 1, generation: 0, active: false } satisfies AgentDesktopControlState;
-    const hudReady = await this.hudMatches(effective);
-    const hud = hudReady ? await this.hud() : undefined;
+    const controls = [...document.controls];
+    const preferred = preferredLeaseId
+      ? controls.find(control => control.leaseId?.toLowerCase() === preferredLeaseId.toLowerCase())
+      : undefined;
+    const selected = preferred ?? controls[0] ?? inactiveControl(document.generation);
+    const now = Date.now();
+    const liveHud = hudEntries.filter(entry => {
+      const age = now - Date.parse(entry.heartbeatAtUtc);
+      return age >= 0 && age <= HUD_HEARTBEAT_MAX_AGE_MS;
+    });
+    const readyLeases = new Set(liveHud.filter(entry => entry.armed).map(entry => entry.leaseId.toLowerCase()));
+    const selectedReady = selected.active && selected.leaseId ? readyLeases.has(selected.leaseId.toLowerCase()) : false;
+    const selectedVisible = selectedReady && selected.leaseId
+      ? Boolean(liveHud.find(entry => entry.leaseId.toLowerCase() === selected.leaseId!.toLowerCase())?.visible)
+      : false;
+    const usedDesktopIds = new Set(controls.map(control => control.desktopId?.toLowerCase()).filter((value): value is string => Boolean(value)));
     return {
-      configured: Boolean(binding),
-      ...(binding ? { binding } : {}),
-      control: effective,
-      hud_ready: hudReady,
-      hud_visible: Boolean(hudReady && hud?.visible)
+      configured: bindings.length > 0,
+      bindings,
+      ...(bindings[0] ? { binding: bindings[0] } : {}),
+      controls,
+      control: selected,
+      available_desktops: bindings.filter(binding => !usedDesktopIds.has(binding.desktopId.toLowerCase())).length,
+      hud_ready: selectedReady,
+      hud_visible: selectedVisible
     };
+  }
+
+  status(): Promise<AgentDesktopStatus> {
+    return this.statusForLease();
   }
 
   async startControl(taskLabel?: string, taskId?: string): Promise<AgentDesktopStatus> {
@@ -216,58 +316,66 @@ export class AgentDesktopManager {
     const normalizedTaskId = taskId?.trim().toLowerCase();
     if (label && label.length > 200) throw new Error('Agent Desktop task label is too long.');
     if (normalizedTaskId && !TASK_ID_PATTERN.test(normalizedTaskId)) throw new Error('Invalid Agent Desktop task id.');
-    const binding = await this.binding();
-    if (!binding) throw new Error('Agent Desktop is not bound. Switch to the desktop you want to dedicate to the agent and bind it in DeskMCP Settings.');
     await this.native.info();
 
     const control = await this.serialize(() => this.withCrossProcessLock(async () => {
-      const existing = await this.readControl() ?? { schemaVersion: 1, generation: 0, active: false } satisfies AgentDesktopControlState;
-      if (existing.active) throw new Error('Agent Desktop is already under agent control. Stop the existing control lease first.');
+      const [bindings, document] = await Promise.all([this.bindings(), this.readControlDocument()]);
+      if (bindings.length === 0) throw new Error('No Agent Desktops are bound. Bind Desktop 2 or later in DeskMCP Settings.');
+      const used = new Set(document.controls.map(row => row.desktopId!.toLowerCase()));
+      const binding = bindings.find(row => !used.has(row.desktopId.toLowerCase()));
+      if (!binding) throw new Error('All bound Agent Desktops are busy. Bind another virtual desktop or wait for an existing Agent Control lease to exit.');
+      if (!Number.isInteger(binding.desktopNumber) || binding.desktopNumber! <= 0) throw new Error('Agent Desktop binding is missing a valid desktop number. Re-bind it from DeskMCP Settings.');
+      const nextGeneration = document.generation + 1;
       const next: AgentDesktopControlState = {
         schemaVersion: 1,
-        generation: existing.generation + 1,
+        generation: nextGeneration,
         active: true,
         leaseId: randomUUID(),
+        desktopId: binding.desktopId,
+        desktopNumber: binding.desktopNumber!,
         ...(label ? { taskLabel: label } : {}),
         ...(normalizedTaskId ? { taskId: normalizedTaskId } : {}),
         startedAtUtc: new Date().toISOString()
       };
-      await atomicJson(this.controlPath, next);
+      await atomicJson(this.controlPath, {
+        schemaVersion: 2,
+        generation: nextGeneration,
+        controls: [...document.controls, next]
+      } satisfies AgentDesktopControlDocument);
       return next;
     }));
 
     const deadline = Date.now() + HUD_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      if (await this.hudMatches(control)) return this.status();
+      if (await this.hudMatches(control)) return this.statusForLease(control.leaseId);
       await new Promise(resolve => setTimeout(resolve, 75));
     }
 
     await this.serialize(() => this.withCrossProcessLock(async () => {
-      const live = await this.readControl();
-      if (live?.active && live.leaseId === control.leaseId && live.generation === control.generation) {
+      const document = await this.readControlDocument();
+      const remaining = document.controls.filter(row => row.leaseId?.toLowerCase() !== control.leaseId?.toLowerCase());
+      if (remaining.length !== document.controls.length) {
         await atomicJson(this.controlPath, {
-          schemaVersion: 1,
-          generation: live.generation + 1,
-          active: false,
-          revokedAtUtc: new Date().toISOString()
-        } satisfies AgentDesktopControlState);
+          schemaVersion: 2,
+          generation: document.generation + 1,
+          controls: remaining
+        } satisfies AgentDesktopControlDocument);
       }
     }));
-    throw new Error('Agent Desktop native safety guard did not become ready. Control was revoked instead of running without local safety supervision.');
+    throw new Error('Agent Desktop native safety guard did not become ready. This lease was revoked instead of running without local safety supervision.');
   }
 
   async stopControl(leaseId: string): Promise<AgentDesktopStatus> {
     if (!UUID_PATTERN.test(leaseId)) throw new Error('Invalid Agent Desktop lease id.');
     await this.serialize(() => this.withCrossProcessLock(async () => {
-      const live = await this.readControl();
-      if (!live?.active) return;
-      if (live.leaseId !== leaseId) throw new Error('Agent Desktop lease does not match the active control session.');
+      const document = await this.readControlDocument();
+      const live = document.controls.find(row => row.leaseId?.toLowerCase() === leaseId.toLowerCase());
+      if (!live) return;
       await atomicJson(this.controlPath, {
-        schemaVersion: 1,
-        generation: live.generation + 1,
-        active: false,
-        revokedAtUtc: new Date().toISOString()
-      } satisfies AgentDesktopControlState);
+        schemaVersion: 2,
+        generation: document.generation + 1,
+        controls: document.controls.filter(row => row !== live)
+      } satisfies AgentDesktopControlDocument);
     }));
     return this.status();
   }
@@ -277,15 +385,15 @@ export class AgentDesktopManager {
     if (!TASK_ID_PATTERN.test(normalizedTaskId)) throw new Error('Invalid Agent Desktop task id.');
     let stoppedLeaseId: string | undefined;
     await this.serialize(() => this.withCrossProcessLock(async () => {
-      const live = await this.readControl();
-      if (!live?.active || live.taskId !== normalizedTaskId || !live.leaseId) return;
+      const document = await this.readControlDocument();
+      const live = document.controls.find(row => row.taskId === normalizedTaskId && row.leaseId);
+      if (!live?.leaseId) return;
       stoppedLeaseId = live.leaseId;
       await atomicJson(this.controlPath, {
-        schemaVersion: 1,
-        generation: live.generation + 1,
-        active: false,
-        revokedAtUtc: new Date().toISOString()
-      } satisfies AgentDesktopControlState);
+        schemaVersion: 2,
+        generation: document.generation + 1,
+        controls: document.controls.filter(row => row !== live)
+      } satisfies AgentDesktopControlDocument);
     }));
     return {
       stopped: Boolean(stoppedLeaseId),
@@ -294,11 +402,21 @@ export class AgentDesktopManager {
     };
   }
 
+  async isLeaseActive(leaseId: string): Promise<boolean> {
+    if (!UUID_PATTERN.test(leaseId)) return false;
+    const document = await this.readControlDocument();
+    return document.controls.some(row => row.leaseId?.toLowerCase() === leaseId.toLowerCase());
+  }
+
   async assertLease(leaseId: string): Promise<{ binding: AgentDesktopBinding; control: AgentDesktopControlState }> {
     if (!UUID_PATTERN.test(leaseId)) throw new Error('Invalid Agent Desktop lease id.');
-    const [binding, control] = await Promise.all([this.binding(), this.readControl()]);
-    if (!binding) throw new Error('Agent Desktop binding is missing.');
-    if (!control?.active || control.leaseId !== leaseId) throw new Error('Agent Desktop control was revoked or replaced.');
+    const [bindings, document] = await Promise.all([this.bindings(), this.readControlDocument()]);
+    const control = document.controls.find(row => row.leaseId?.toLowerCase() === leaseId.toLowerCase());
+    if (!control) throw new Error('Agent Desktop control was revoked or replaced.');
+    const binding = control.desktopId
+      ? bindings.find(row => row.desktopId.toLowerCase() === control.desktopId!.toLowerCase())
+      : bindings[0];
+    if (!binding) throw new Error('Agent Desktop binding is missing for the active lease.');
     if (!await this.hudMatches(control)) throw new Error('Agent Desktop safety HUD heartbeat is missing or stale. Control is fail-closed.');
     return { binding, control };
   }
@@ -307,7 +425,7 @@ export class AgentDesktopManager {
     const { binding } = await this.assertLease(leaseId);
     const info = await this.native.windowInfo(hwnd);
     if (info.desktopId.toLowerCase() !== binding.desktopId.toLowerCase()) {
-      throw new Error('Target window is not on the bound Agent Desktop.');
+      throw new Error('Target window is not on this Agent Desktop.');
     }
     await this.assertLease(leaseId);
   }

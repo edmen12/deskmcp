@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -143,6 +143,83 @@ test('Task-linked Agent Desktop control only auto-stops for the matching task', 
     assert.equal(matched.stopped, true);
     assert.equal(matched.leaseId, leaseId);
     assert.equal(matched.status.control.active, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('Agent Desktop pool allocates distinct bound desktops before reporting busy', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-pool-'));
+  try {
+    const native = {
+      async info() { return { officialApi: true, virtualDesktopAccessor: true }; }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+    const now = new Date().toISOString();
+    const desktopA = randomUUID();
+    const desktopB = randomUUID();
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [
+        { schemaVersion: 1, desktopId: desktopA, desktopNumber: 1, boundAtUtc: now },
+        { schemaVersion: 1, desktopId: desktopB, desktopNumber: 2, boundAtUtc: now }
+      ]
+    });
+
+    const armUntil = async (count: number): Promise<void> => {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const raw = JSON.parse(await readFile(path.join(root, 'control.json'), 'utf8')) as {
+          schemaVersion?: number;
+          controls?: Array<{ generation: number; leaseId: string }>;
+        };
+        const controls = raw.schemaVersion === 2 && Array.isArray(raw.controls) ? raw.controls : [];
+        if (controls.length >= count) {
+          await writeJson(path.join(root, 'hud-state.json'), {
+            schemaVersion: 2,
+            entries: controls.map(control => ({
+              schemaVersion: 1,
+              generation: control.generation,
+              leaseId: control.leaseId,
+              armed: true,
+              visible: false,
+              processId: 1234,
+              heartbeatAtUtc: new Date().toISOString()
+            }))
+          });
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      throw new Error('Timed out waiting for Agent Desktop pool control state.');
+    };
+
+    const firstPromise = manager.startControl('Agent A');
+    await armUntil(1);
+    const first = await firstPromise;
+    assert.equal(first.control.desktopId, desktopA);
+    assert.equal(first.control.desktopNumber, 1);
+
+    const secondPromise = manager.startControl('Agent B');
+    await armUntil(2);
+    const second = await secondPromise;
+    assert.equal(second.control.desktopId, desktopB);
+    assert.equal(second.control.desktopNumber, 2);
+    assert.notEqual(second.control.leaseId, first.control.leaseId);
+
+    const status = await manager.status();
+    assert.equal(status.bindings.length, 2);
+    assert.equal(status.controls.length, 2);
+    assert.equal(status.available_desktops, 0);
+    await assert.rejects(manager.startControl('Agent C'), /all bound agent desktops are busy/i);
+
+    await manager.stopControl(first.control.leaseId!);
+    const afterStop = await manager.status();
+    assert.equal(afterStop.controls.length, 1);
+    assert.equal(afterStop.available_desktops, 1);
+    assert.equal(afterStop.controls[0]?.leaseId, second.control.leaseId);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

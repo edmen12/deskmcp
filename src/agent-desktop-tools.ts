@@ -3,6 +3,7 @@ import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { BrowserRuntime } from './browser-runtime.js';
 import { type TaskContextStore, workspaceFingerprint } from './task-context.js';
 
 function failure(prefix: string, error: unknown) {
@@ -18,13 +19,14 @@ export function registerAgentDesktopTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   manager: AgentDesktopManager,
-  taskStore?: TaskContextStore
+  taskStore?: TaskContextStore,
+  browser?: BrowserRuntime
 ): void {
   server.registerTool(
     'desktop_agent_desktop',
     {
       title: 'Manage Agent Desktop',
-      description: 'Start, inspect, or stop a user-bound Agent Desktop control lease. A native blue safety HUD must be visible and heartbeating before control is granted. Start may bind the lease to a verified Task Room task; completing that task automatically revokes control and closes DeskMCP browser sessions owned by the lease. Binding the desktop itself is a local user action in the DeskMCP Control Panel and cannot be performed by an agent.',
+      description: 'Start, inspect, or stop a user-bound Agent Desktop control lease. DeskMCP allocates the first free desktop from the locally bound Agent Desktop pool, so multiple agents can control different virtual desktops concurrently. A native blue safety HUD must be heartbeating before control is granted. Browser sessions bound to a lease stay open for the lifetime of that Agent Control lease and are closed only when that lease exits or is revoked. Binding desktops is a local user action in the DeskMCP Control Panel.',
       inputSchema: z.object({
         action: z.enum(['status', 'start', 'stop']),
         lease_id: z.string().uuid().optional(),
@@ -61,7 +63,17 @@ export function registerAgentDesktopTools(
           result = await manager.startControl(effectiveLabel, linkedTaskId);
         } else {
           if (!lease_id) throw new PolicyDeniedError('Stopping Agent Desktop control requires the active lease_id.');
-          result = await manager.stopControl(lease_id);
+          const status = await manager.stopControl(lease_id);
+          let browserCleanup: Record<string, unknown> | undefined;
+          if (browser) {
+            try {
+              const cleanup = await browser.closeAgentDesktopLease(lease_id);
+              browserCleanup = { closed_sessions: cleanup.closed_sessions };
+            } catch (error) {
+              browserCleanup = { cleanup_error: error instanceof Error ? error.message : String(error) };
+            }
+          }
+          result = { ...status, ...(browserCleanup ? { browser_cleanup: browserCleanup } : {}) };
         }
         await audit.finish(operation, 'allow');
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
