@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -11,6 +12,64 @@ namespace DeskMCP.ProcessHost;
 internal static class ElevationDisclosure
 {
     private const int DisplayMilliseconds = 1300;
+    private const uint AbmGetState = 0x00000004;
+    private const uint AbmGetTaskbarPos = 0x00000005;
+    private const uint AbsAutoHide = 0x00000001;
+    private const uint AbeBottom = 3;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AppBarData
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public NativeRect rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern UIntPtr SHAppBarMessage(uint dwMessage, ref AppBarData pData);
+
+    private static int ResolveBottomGapPx(float scaleY)
+    {
+        int visualGapPx = Math.Max(1, (int)Math.Round(14.0f * Math.Max(0.5f, scaleY)));
+        try
+        {
+            AppBarData state = new AppBarData { cbSize = Marshal.SizeOf<AppBarData>() };
+            bool autoHide = (SHAppBarMessage(AbmGetState, ref state).ToUInt64() & AbsAutoHide) != 0;
+            if (!autoHide) return visualGapPx;
+
+            AppBarData position = new AppBarData { cbSize = Marshal.SizeOf<AppBarData>() };
+            if (SHAppBarMessage(AbmGetTaskbarPos, ref position) == UIntPtr.Zero || position.uEdge != AbeBottom)
+                return visualGapPx;
+
+            double safeScale = Math.Max(0.5, scaleY);
+            double taskbarHeightPx = Math.Max(0.0, position.rc.Bottom - position.rc.Top);
+            double taskbarHeightDip = taskbarHeightPx / safeScale;
+            if (taskbarHeightDip < 20.0 || taskbarHeightDip > 120.0) taskbarHeightDip = 48.0;
+            return Math.Max(visualGapPx, (int)Math.Round((taskbarHeightDip + 14.0) * safeScale));
+        }
+        catch { return visualGapPx; }
+    }
+
+    private static Point ComputeBottomRightLocation(Rectangle workingArea, Size windowSize, int edgeGapPx, int bottomGapPx)
+    {
+        int left = workingArea.Right - windowSize.Width - edgeGapPx;
+        int top = workingArea.Bottom - windowSize.Height - bottomGapPx;
+        return new Point(
+            Math.Max(workingArea.Left + edgeGapPx, left),
+            Math.Max(workingArea.Top + edgeGapPx, top));
+    }
 
     internal static bool IsEnabled()
     {
@@ -59,6 +118,19 @@ internal static class ElevationDisclosure
             redacted.Contains("Bearer123", StringComparison.Ordinal))
             return 1;
         if (!redacted.Contains("tool.exe", StringComparison.Ordinal)) return 1;
+
+        Point regularPosition = ComputeBottomRightLocation(
+            new Rectangle(0, 0, 1920, 1040),
+            new Size(470, 166),
+            14,
+            14);
+        if (regularPosition != new Point(1436, 860)) return 1;
+        Point autoHidePosition = ComputeBottomRightLocation(
+            new Rectangle(0, 0, 1920, 1080),
+            new Size(470, 166),
+            14,
+            62);
+        if (autoHidePosition != new Point(1436, 852)) return 1;
 
         string? previousSettingsDir = Environment.GetEnvironmentVariable("DESKTOP_MCP_SETTINGS_DIR");
         string root = Path.Combine(Path.GetTempPath(), "deskmcp-disclosure-selftest-" + Guid.NewGuid().ToString("N"));
@@ -115,8 +187,19 @@ internal static class ElevationDisclosure
             ForeColor = Color.White;
             Opacity = 0.98;
 
-            Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
-            Location = new Point(area.Left + Math.Max(20, (area.Width - Width) / 2), area.Top + 38);
+            Screen screen = Screen.FromPoint(Cursor.Position);
+            Rectangle area = screen.WorkingArea;
+            Location = new Point(area.Left + 1, area.Top + 1);
+            float scaleY = 1.0f;
+            try
+            {
+                using Graphics graphics = CreateGraphics();
+                scaleY = Math.Max(0.5f, graphics.DpiY / 96.0f);
+            }
+            catch { }
+            int edgeGapPx = Math.Max(1, (int)Math.Round(14.0f * scaleY));
+            int bottomGapPx = ResolveBottomGapPx(scaleY);
+            Location = ComputeBottomRightLocation(area, Size, edgeGapPx, bottomGapPx);
 
             Label title = NewLabel("Administrator permission request", 15F, FontStyle.Bold, Color.FromArgb(245, 245, 247));
             title.Location = new Point(24, 18); title.Size = new Size(410, 26);
