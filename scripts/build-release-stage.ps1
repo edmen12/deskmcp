@@ -265,6 +265,7 @@ $stageInfo = [ordered]@{
     agentDesktopContract=1
     panelSingleFileContract=1
     processHostSingleFileContract=1
+    trayIconEmbeddedContract=1
     virtualDesktopAccessorCommit=(Get-Content -LiteralPath $agentDesktopVdaCommit -Raw).Trim()
     panelPeMachine=('0x{0:X4}' -f $panelMachine)
     processHostPeMachine=('0x{0:X4}' -f $processHostMachine)
