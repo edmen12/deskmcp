@@ -12,6 +12,7 @@ import {
 } from '../src/computer-use-backend.js';
 import { ComputerObservationRegistry } from '../src/computer-use-observation.js';
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
+import { prepareAgentDesktopAction } from '../src/computer-use-tools.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { TEST_AREA } from '../src/paths.js';
 
@@ -217,4 +218,39 @@ test('tree-form WinApp inspect output is flattened into the stable MCP schema', 
   assert.equal(projected[1]?.value, 'hello');
   assert.equal('processId' in (projected[1] ?? {}), false);
   assert.equal('hwnd' in (projected[0] ?? {}), false);
+});
+
+
+test('Agent Desktop background mode permits only non-injecting UI actions', () => {
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'invoke', selector: 'ApplyButton' }),
+    { type: 'invoke', selector: 'ApplyButton' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'set_value', selector: 'AgentInput', value: 'ok' }),
+    { type: 'set_value', selector: 'AgentInput', value: 'ok' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'scroll', selector: 'List', direction: 'down' }),
+    { type: 'scroll', selector: 'List', direction: 'down' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'send_keys', keys: 'enter', transport: 'post-message' }),
+    { type: 'send_keys', keys: 'enter', transport: 'post-message', allowSystemKeys: false }
+  );
+});
+
+test('Agent Desktop background mode rejects physical input instead of stealing the user desktop', () => {
+  const blocked = [
+    { type: 'click', selector: 'ApplyButton' },
+    { type: 'hover', selector: 'ApplyButton' },
+    { type: 'drag', from: 'A', to: 'B' },
+    { type: 'scroll', wheel: 3 },
+    { type: 'send_keys', keys: 'hello', transport: 'send-input' },
+    { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true }
+  ] as const;
+
+  for (const action of blocked) {
+    assert.throws(() => prepareAgentDesktopAction(action), /requires_foreground_input/i);
+  }
 });

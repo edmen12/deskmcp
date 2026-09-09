@@ -15,6 +15,7 @@ const sharpPackage = isMac ? 'sharp-darwin-arm64' : target === 'win-arm64' ? 'sh
 const architectureLabel = isMac ? 'macOS ARM64' : target === 'win-arm64' ? 'Windows ARM64' : 'Windows x64';
 const runtimeNotice = isMac ? '' : `- **.NET 10 ${architectureLabel} self-contained runtime** — the release carries \`licenses/dotnet/LICENSE.txt\` and \`licenses/dotnet/ThirdPartyNotices.txt\` copied from the exact SDK used to publish the desktop application.\n`;
 const winAppNotice = isMac ? '' : `- **Microsoft WinApp CLI v0.5.0** — MIT; DeskMCP bundles the pinned standalone \`winapp.exe\` + \`libSkiaSharp.dll\` computer-use backend and preserves its MIT notice at \`licenses/winappcli/LICENSE.txt\`.\n`;
+const virtualDesktopNotice = isMac ? '' : `- **VirtualDesktopAccessor** — MIT; DeskMCP builds the pinned source commit recorded in \`virtual-desktop-accessor/SOURCE_COMMIT.txt\`, preserves the upstream MIT notice at \`virtual-desktop-accessor/LICENSE.txt\`, and records the shipped DLL checksum in \`virtual-desktop-accessor/SHA256SUMS.txt\`.\n`;
 fs.mkdirSync(sourceLicenses, { recursive: true });
 fs.mkdirSync(stageLicenses, { recursive: true });
 
@@ -101,6 +102,7 @@ const notices = `# Third-Party Notices\n\n` +
 `- **Node.js ${nodeVersion}** — distributed with its upstream \`node/LICENSE\`, which includes Node.js and bundled third-party notices.\n` +
 runtimeNotice +
 winAppNotice +
+virtualDesktopNotice +
 `- **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream \`LICENSE\`, \`NOTICE\`, third-party licenses text, and SPDX document remain under \`tunnel-client/v0.0.13/bin/\`.\n` +
 `- **@wonderwhy-er/desktop-commander 0.2.47** — MIT. Its package-local license remains in the bundled production \`node_modules\`.\n` +
 `- **${sharpPackage} 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.\n\n` +
@@ -117,7 +119,7 @@ winAppNotice +
 `For \`jszip\` and \`pizzip\`, this distribution elects the MIT option expressly offered by their dual-license files.\n\n` +
 `License expressions requiring special attention or explicit choice:\n${specialLines}\n\n` +
 `## Preservation rule\n\n` +
-`Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, WinApp CLI's MIT notice, or tunnel-client notice/SPDX files when optimizing a release payload.\n`;
+`Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, WinApp CLI's MIT notice, VirtualDesktopAccessor's MIT/provenance/checksum files, or tunnel-client notice/SPDX files when optimizing a release payload.\n`;
 if (target === 'win-x64') fs.writeFileSync(path.join(projectRoot, 'THIRD_PARTY_NOTICES.md'), notices);
 fs.writeFileSync(path.join(stageLicenses, 'THIRD_PARTY_NOTICES.md'), notices);
 fs.writeFileSync(path.join(stageRoot, 'THIRD_PARTY_NOTICES.md'), notices);

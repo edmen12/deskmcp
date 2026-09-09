@@ -26,8 +26,6 @@ match('control-panel/wpf/DeskMCP.ControlPanel.csproj', /<AssemblyVersion>([^<]+)
 match('control-panel/wpf/DeskMCP.ControlPanel.csproj', /<FileVersion>([^<]+)<\/FileVersion>/, 'WPF FileVersion', expectedAssembly);
 match('installer/DeskMCPInstaller.cs', /AssemblyVersion\("([^"]+)"\)/, 'Setup AssemblyVersion', expectedAssembly);
 match('installer/DeskMCPInstaller.cs', /AssemblyFileVersion\("([^"]+)"\)/, 'Setup FileVersion', expectedAssembly);
-match('installer/DeskMCPUninstaller.cs', /AssemblyVersion\("([^"]+)"\)/, 'Uninstaller AssemblyVersion', expectedAssembly);
-match('installer/DeskMCPUninstaller.cs', /AssemblyFileVersion\("([^"]+)"\)/, 'Uninstaller FileVersion', expectedAssembly);
 if (!read('src/mcp-server.ts').includes("SERVER_NAME = 'deskmcp-gateway'")) throw new Error('MCP server name is not deskmcp-gateway');
 if (!read('src/desktop-backend-bridge.ts').includes(`name: 'deskmcp-gateway', version: '${expected}'`)) throw new Error('DeskMCP backend bridge client metadata is inconsistent');
 console.log(`VERSION_CONSISTENCY_OK=${expected}`);

@@ -95,7 +95,8 @@ export function registerBrowserTools(
           width: z.number().int().min(320).max(7680),
           height: z.number().int().min(240).max(4320)
         }).optional(),
-        timeout_ms: timeoutSchema
+        timeout_ms: timeoutSchema,
+        agent_desktop_lease_id: z.string().uuid().optional()
       }),
       annotations: {
         readOnlyHint: false,
@@ -120,7 +121,8 @@ export function registerBrowserTools(
             headless: input.headless,
             ...(input.profile_id ? { profile_id: input.profile_id } : {}),
             ...(input.viewport ? { viewport: input.viewport } : {}),
-            ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {})
+            ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {}),
+            ...(input.agent_desktop_lease_id ? { agent_desktop_lease_id: input.agent_desktop_lease_id } : {})
           });
         } else if (input.action === 'list') {
           const sessions = await browser.list();

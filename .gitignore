@@ -37,6 +37,8 @@ control-panel/wpf/bin/
 control-panel/wpf/obj/
 process-host/bin/
 process-host/obj/
+agent-desktop-host/bin/
+agent-desktop-host/obj/
 .vs/
 .vscode/
 .idea/

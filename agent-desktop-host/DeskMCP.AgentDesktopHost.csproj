@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>DeskMCP.AgentDesktopHost</AssemblyName>
+    <RootNamespace>DeskMCP.AgentDesktopHost</RootNamespace>
+    <Version>0.9.7</Version>
+    <AssemblyVersion>0.9.7.0</AssemblyVersion>
+    <FileVersion>0.9.7.0</FileVersion>
+    <Product>DeskMCP</Product>
+    <AssemblyTitle>DeskMCP Agent Desktop Host</AssemblyTitle>
+    <Description>Restricted native bridge for DeskMCP Agent Desktop virtual-desktop operations</Description>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

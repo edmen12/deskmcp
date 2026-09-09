@@ -7,6 +7,7 @@ import {
 } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
+import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { ArtifactExpiredError, type ArtifactStore } from './artifact-store.js';
 import type { BrowserRuntime } from './browser-runtime.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
@@ -144,7 +145,8 @@ export async function startHttpServer(
   artifactStore?: ArtifactStore,
   dynamicMcpHub?: DynamicMcpHub,
   browser?: BrowserRuntime,
-  skillStore?: SkillStore
+  skillStore?: SkillStore,
+  agentDesktop?: AgentDesktopManager
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -166,7 +168,8 @@ export async function startHttpServer(
       artifactStore,
       dynamicMcpHub,
       browser,
-      skillStore
+      skillStore,
+      agentDesktop
     )
   );
   const nodeHandler = toNodeHandler(mcpHandler, {
@@ -196,6 +199,7 @@ export async function startHttpServer(
         recoverableTasksEnabled: Boolean(taskStore),
         artifactsEnabled: Boolean(artifactStore),
         dynamicMcpHubEnabled: Boolean(dynamicMcpHub),
+        agentDesktopEnabled: Boolean(agentDesktop),
         browserAutomation: publicBrowserInfo(browser),
         skillsEnabled: Boolean(skillStore),
         auditEnabled: Boolean(audit),

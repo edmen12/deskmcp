@@ -8,6 +8,7 @@ $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $PanelProject = Join-Path $ProjectRoot 'control-panel\wpf\DeskMCP.ControlPanel.csproj'
 $PanelPublish = Join-Path $RuntimeRoot ('publish\control-panel-' + $Target)
 $ProcessHostPublish = Join-Path $RuntimeRoot ('process-host\' + $Target)
+$AgentDesktopRuntime = Join-Path $RuntimeRoot ('agent-desktop-runtime\' + $Target)
 $NodeZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.NodeArchive)
 $NodeUrl = 'https://nodejs.org/dist/v' + $TargetConfig.NodeVersion + '/' + $TargetConfig.NodeArchive
 $TunnelZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.TunnelAsset)
@@ -81,10 +82,13 @@ try { Invoke-Native 'npm.cmd' @('run','build') } finally { Pop-Location }
 if (Test-Path -LiteralPath $PanelPublish) { Remove-Item -LiteralPath $PanelPublish -Recurse -Force }
 Invoke-Native $dotnet @(
     'publish',$PanelProject,'-c','Release','-r',$TargetConfig.DotnetRid,
-    '--self-contained','true','-p:PublishSingleFile=false','-o',$PanelPublish,'--nologo'
+    '--self-contained','true','-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-o',$PanelPublish,'--nologo'
 )
 $publishedPanel = Join-Path $PanelPublish 'DeskMCP.exe'
 Require (Test-Path -LiteralPath $publishedPanel) 'Control Panel publish output is missing.'
+foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
+    Require (-not (Test-Path -LiteralPath (Join-Path $PanelPublish $forbiddenPanelPayload))) ('Control Panel publish is not single-file: ' + $forbiddenPanelPayload)
+}
 $panelMachine = Get-PeMachine $publishedPanel
 Require ($panelMachine -eq $TargetConfig.PeMachine) ('Control Panel PE architecture mismatch: 0x{0:X4}' -f $panelMachine)
 
@@ -93,14 +97,37 @@ $processHostExe = Join-Path $ProcessHostPublish 'DeskMCP.ProcessHost.exe'
 $processHostMachine = Get-PeMachine $processHostExe
 Require ($processHostMachine -eq $TargetConfig.PeMachine) ('ProcessHost PE architecture mismatch: 0x{0:X4}' -f $processHostMachine)
 
+& (Join-Path $PSScriptRoot 'build-agent-desktop-runtime.ps1') -Target $Target
+$agentDesktopHostExe = Join-Path $AgentDesktopRuntime 'DeskMCP.AgentDesktopHost.exe'
+$agentDesktopVdaDir = Join-Path $AgentDesktopRuntime 'virtual-desktop-accessor'
+$agentDesktopVdaDll = Join-Path $agentDesktopVdaDir 'VirtualDesktopAccessor.dll'
+$agentDesktopVdaLicense = Join-Path $agentDesktopVdaDir 'LICENSE.txt'
+$agentDesktopVdaCommit = Join-Path $agentDesktopVdaDir 'SOURCE_COMMIT.txt'
+$agentDesktopVdaSums = Join-Path $agentDesktopVdaDir 'SHA256SUMS.txt'
+foreach ($required in @($agentDesktopHostExe,$agentDesktopVdaDll,$agentDesktopVdaLicense,$agentDesktopVdaCommit,$agentDesktopVdaSums)) {
+    Require (Test-Path -LiteralPath $required) ('Agent Desktop runtime payload is missing: ' + $required)
+}
+$agentDesktopHostMachine = Get-PeMachine $agentDesktopHostExe
+$agentDesktopVdaMachine = Get-PeMachine $agentDesktopVdaDll
+Require ($agentDesktopHostMachine -eq $TargetConfig.PeMachine) ('Agent Desktop Host PE architecture mismatch: 0x{0:X4}' -f $agentDesktopHostMachine)
+Require ($agentDesktopVdaMachine -eq $TargetConfig.PeMachine) ('VirtualDesktopAccessor PE architecture mismatch: 0x{0:X4}' -f $agentDesktopVdaMachine)
+
 if (Test-Path -LiteralPath $StageRoot) { Remove-Item -LiteralPath $StageRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 Copy-Item -Path (Join-Path $PanelPublish '*') -Destination $StageRoot -Recurse -Force
-foreach ($name in @('DeskMCP.ProcessHost.exe','DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
-    Copy-Item -LiteralPath (Join-Path $ProcessHostPublish $name) -Destination (Join-Path $StageRoot $name) -Force
+Copy-Item -LiteralPath $processHostExe -Destination (Join-Path $StageRoot 'DeskMCP.ProcessHost.exe') -Force
+foreach ($forbiddenProcessHostPayload in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
+    Require (-not (Test-Path -LiteralPath (Join-Path $ProcessHostPublish $forbiddenProcessHostPayload))) ('ProcessHost publish is not single-file: ' + $forbiddenProcessHostPayload)
 }
+Copy-Item -LiteralPath $agentDesktopHostExe -Destination (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.exe') -Force
+Copy-Item -LiteralPath $agentDesktopVdaDir -Destination (Join-Path $StageRoot 'virtual-desktop-accessor') -Recurse -Force
 Require (Test-Path -LiteralPath (Join-Path $StageRoot 'Panel.xaml')) 'Panel.xaml payload missing.'
 Require (Test-Path -LiteralPath (Join-Path $StageRoot 'DeskMCP.ProcessHost.exe')) 'ProcessHost payload missing.'
+Require (Test-Path -LiteralPath (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.exe')) 'Agent Desktop Host payload missing.'
+Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\VirtualDesktopAccessor.dll')) 'VirtualDesktopAccessor payload missing.'
+Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\LICENSE.txt')) 'VirtualDesktopAccessor MIT license payload missing.'
+Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\SOURCE_COMMIT.txt')) 'VirtualDesktopAccessor source provenance is missing.'
+Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\SHA256SUMS.txt')) 'VirtualDesktopAccessor checksum manifest is missing.'
 $projectLicense = Join-Path $ProjectRoot 'LICENSE'
 Require (Test-Path -LiteralPath $projectLicense) 'Apache-2.0 project LICENSE is missing.'
 Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $StageRoot 'LICENSE') -Force
@@ -225,7 +252,29 @@ Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\@emn
 $noticeGenerator = Join-Path $ProjectRoot 'scripts\generate-third-party-notices.mjs'
 Require (Test-Path -LiteralPath $noticeGenerator) 'Third-party notice generator is missing.'
 Invoke-Native $hostNode @($noticeGenerator,$ProjectRoot,$StageRoot,$Target,$TargetConfig.NodeVersion)
-$stageInfo = [ordered]@{ target=$Target; architecture=$TargetConfig.Architecture; dotnetRid=$TargetConfig.DotnetRid; nodeVersion=$TargetConfig.NodeVersion; tunnelVersion=$TargetConfig.TunnelVersion; winAppVersion=$TargetConfig.WinAppVersion; agentSafeIsolationContract=2; processJobObjectContract=1; computerUseContract=1; panelPeMachine=('0x{0:X4}' -f $panelMachine); processHostPeMachine=('0x{0:X4}' -f $processHostMachine); nodePeMachine=('0x{0:X4}' -f $nodeMachine); tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine); winAppPeMachine=('0x{0:X4}' -f $winAppMachine); winAppSkiaPeMachine=('0x{0:X4}' -f $winAppSkiaMachine) }
+$stageInfo = [ordered]@{
+    target=$Target
+    architecture=$TargetConfig.Architecture
+    dotnetRid=$TargetConfig.DotnetRid
+    nodeVersion=$TargetConfig.NodeVersion
+    tunnelVersion=$TargetConfig.TunnelVersion
+    winAppVersion=$TargetConfig.WinAppVersion
+    agentSafeIsolationContract=2
+    processJobObjectContract=1
+    computerUseContract=1
+    agentDesktopContract=1
+    panelSingleFileContract=1
+    processHostSingleFileContract=1
+    virtualDesktopAccessorCommit=(Get-Content -LiteralPath $agentDesktopVdaCommit -Raw).Trim()
+    panelPeMachine=('0x{0:X4}' -f $panelMachine)
+    processHostPeMachine=('0x{0:X4}' -f $processHostMachine)
+    agentDesktopHostPeMachine=('0x{0:X4}' -f $agentDesktopHostMachine)
+    virtualDesktopAccessorPeMachine=('0x{0:X4}' -f $agentDesktopVdaMachine)
+    nodePeMachine=('0x{0:X4}' -f $nodeMachine)
+    tunnelPeMachine=('0x{0:X4}' -f $tunnelMachine)
+    winAppPeMachine=('0x{0:X4}' -f $winAppMachine)
+    winAppSkiaPeMachine=('0x{0:X4}' -f $winAppSkiaMachine)
+}
 $stageInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Encoding UTF8
 $files = Get-ChildItem -LiteralPath $StageRoot -Recurse -File
 $bytes = ($files | Measure-Object Length -Sum).Sum

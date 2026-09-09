@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
+import type { AgentDesktopManager } from './agent-desktop-state.js';
+import { registerAgentDesktopTools } from './agent-desktop-tools.js';
 import type { ArtifactStore } from './artifact-store.js';
 import { registerArtifactTools } from './artifact-tools.js';
 import type { BrowserRuntime } from './browser-runtime.js';
@@ -34,7 +36,8 @@ export function createDesktopMcpServer(
   artifactStore?: ArtifactStore,
   dynamicMcpHub?: DynamicMcpHub,
   browser?: BrowserRuntime,
-  skillStore?: SkillStore
+  skillStore?: SkillStore,
+  agentDesktop?: AgentDesktopManager
 ): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
@@ -44,10 +47,11 @@ export function createDesktopMcpServer(
     }
     registerDesktopBackendBridgeTools(server, bridge, policy, audit, observations);
     registerProcessTools(server, bridge, policy, audit, processSessions);
-    registerComputerUseTools(server, policy, audit, computerUse);
+    registerComputerUseTools(server, policy, audit, computerUse, agentDesktop);
     if (taskStore) registerTaskTools(server, policy, audit, taskStore);
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
     if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
+    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop);
     if (browser) registerBrowserTools(server, policy, audit, browser);
     if (skillStore) registerSkillTools(server, policy, audit, skillStore);
   } else {

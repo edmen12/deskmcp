@@ -79,6 +79,7 @@ internal sealed partial class ControlPanelRuntime
     private readonly TranslateTransform profileIndicatorTransform;
     private readonly Forms.NotifyIcon notify;
     private readonly DispatcherTimer timer;
+    private AgentDesktopControlCoordinator agentDesktopControl;
     private readonly Application app;
     private readonly string settingsPath;
     private readonly string startupLinkPath;
@@ -128,6 +129,8 @@ internal sealed partial class ControlPanelRuntime
     private DateTime nextGatewayRetry = DateTime.MinValue;
     private DispatcherTimer toastTimer;
     private static readonly TimeSpan GatewayHealthDeadline = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan ProfileSwitchDeadline = TimeSpan.FromSeconds(60);
+    private const int MaxProfileSwitchRetries = 1;
     private static readonly TimeSpan TunnelReadinessDeadline = TimeSpan.FromSeconds(45);
 
     private const int HotkeyId = 0x4D43;
@@ -175,6 +178,9 @@ internal sealed partial class ControlPanelRuntime
     private string persistentProfile = "read-only";
     private bool profileChangeInFlight;
     private string requestedProfile;
+    private string profileChangePreviousPersistentProfile;
+    private DateTime profileChangeStartedUtc = DateTime.MinValue;
+    private int profileSwitchRetryCount;
     private string pendingElevatedProfile = "full-control";
     private RegisteredWaitHandle activationWaitRegistration;
     private bool allowClose;
@@ -297,6 +303,22 @@ internal sealed partial class ControlPanelRuntime
         timer = new DispatcherTimer();
         timer.Interval = TimeSpan.FromSeconds(12);
         timer.Tick += delegate { UpdateStatus(); };
+
+        try
+        {
+            agentDesktopControl = new AgentDesktopControlCoordinator(
+                dataRoot,
+                baseDir,
+                projectRoot,
+                window,
+                delegate(string message, bool error) { ShowToast(message, error); });
+            agentDesktopControl.StateChanged += delegate { window.Dispatcher.BeginInvoke(new Action(UpdateAgentDesktopUi)); };
+        }
+        catch (Exception error)
+        {
+            agentDesktopControl = null;
+            try { File.AppendAllText(Path.Combine(logsDir, "agent-desktop-error.log"), DateTime.Now.ToString("s") + " " + error.Message + Environment.NewLine); } catch { }
+        }
 
         WireWindowEvents();
         WireButtons();
@@ -906,7 +928,8 @@ internal sealed partial class ControlPanelRuntime
                 if (task.IsFaulted)
                 {
                     ScheduleGatewayRetry();
-                    if (profileChangeInFlight && requestedProfile == profile) { profileChangeInFlight = false; requestedProfile = null; }
+                    if (profileChangeInFlight && String.Equals(requestedProfile, profile, StringComparison.Ordinal))
+                        FailProfileChange(selectedProfile, "Permission switch failed because Gateway could not restart.");
                     LogRuntimeError("Gateway restart failed.", task.Exception);
                 }
                 UpdateStatus();
@@ -1202,22 +1225,30 @@ internal sealed partial class ControlPanelRuntime
                     selectedProfile = runningProfile;
                     if (String.Equals(runningProfile, requestedProfile, StringComparison.Ordinal))
                     {
-                        profileChangeInFlight = false;
-                        requestedProfile = null;
+                        CompleteProfileChange(runningProfile);
                     }
-                    else profileSwitchPending = true;
+                    else if (ProfileSwitchTimedOut(DateTime.UtcNow))
+                    {
+                        FailProfileChange(runningProfile, "Permission switch timed out. Gateway remains on the last healthy profile.");
+                    }
+                    else
+                    {
+                        profileSwitchPending = true;
+                        if (!gatewayStartInFlight && !gatewayRecoveryInFlight &&
+                            profileSwitchRetryCount < MaxProfileSwitchRetries &&
+                            RuntimeReliability.IsKnownProfile(requestedProfile) &&
+                            RestartGatewayAsync(requestedProfile))
+                        {
+                            profileSwitchRetryCount++;
+                        }
+                    }
                 }
                 else if ((runningProfile == "full-control" || runningProfile == "fully-unlocked") && selectedProfile != runningProfile)
                 {
                     selectedProfile = runningProfile;
-                    profileChangeInFlight = true;
-                    requestedProfile = persistentProfile;
+                    BeginProfileChange(persistentProfile, persistentProfile);
                     if (RestartGatewayAsync(persistentProfile)) profileSwitchPending = true;
-                    else
-                    {
-                        profileChangeInFlight = false;
-                        requestedProfile = null;
-                    }
+                    else FailProfileChange(runningProfile, "Could not restore the persistent permission profile because Gateway is busy.");
                 }
                 else if (selectedProfile != runningProfile)
                 {
@@ -1374,6 +1405,60 @@ internal sealed partial class ControlPanelRuntime
         overlay.BeginAnimation(UIElement.OpacityProperty, fade); scale.BeginAnimation(ScaleTransform.ScaleXProperty, shrink); scale.BeginAnimation(ScaleTransform.ScaleYProperty, shrink);
     }
 
+    private static bool IsPersistentProfileName(string profile)
+    {
+        return profile == "read-only" || profile == "workspace-write";
+    }
+
+    private void BeginProfileChange(string profile, string previousPersistentProfile)
+    {
+        profileChangeInFlight = true;
+        requestedProfile = profile;
+        profileChangePreviousPersistentProfile = previousPersistentProfile;
+        profileChangeStartedUtc = DateTime.UtcNow;
+        profileSwitchRetryCount = 0;
+    }
+
+    private void ClearProfileChangeTracking()
+    {
+        profileChangeInFlight = false;
+        requestedProfile = null;
+        profileChangePreviousPersistentProfile = null;
+        profileChangeStartedUtc = DateTime.MinValue;
+        profileSwitchRetryCount = 0;
+    }
+
+    private void CompleteProfileChange(string runningProfile)
+    {
+        if (RuntimeReliability.IsKnownProfile(runningProfile)) selectedProfile = runningProfile;
+        ClearProfileChangeTracking();
+    }
+
+    private void FailProfileChange(string runningProfile, string message)
+    {
+        string targetProfile = requestedProfile;
+        string previousPersistentProfile = profileChangePreviousPersistentProfile;
+        if (IsPersistentProfileName(targetProfile) && IsPersistentProfileName(previousPersistentProfile) &&
+            !String.Equals(persistentProfile, previousPersistentProfile, StringComparison.Ordinal))
+        {
+            persistentProfile = previousPersistentProfile;
+            SaveSettings();
+        }
+        if (RuntimeReliability.IsKnownProfile(runningProfile)) selectedProfile = runningProfile;
+        ClearProfileChangeTracking();
+        if (!String.IsNullOrWhiteSpace(message)) ShowToast(message, true);
+    }
+
+    private bool ProfileSwitchTimedOut(DateTime nowUtc)
+    {
+        return profileChangeInFlight && RuntimeReliability.DeadlineExceeded(profileChangeStartedUtc, nowUtc, ProfileSwitchDeadline);
+    }
+
+    private string ResolveGatewayRecoveryProfile()
+    {
+        return RuntimeReliability.ResolveGatewayRecoveryProfile(profileChangeInFlight, requestedProfile, selectedProfile);
+    }
+
     private void ApplyProfile(string profile)
     {
         if (profileChangeInFlight)
@@ -1383,25 +1468,17 @@ internal sealed partial class ControlPanelRuntime
         }
 
         string previousPersistentProfile = persistentProfile;
-        bool persistentChange = profile != "full-control" && profile != "fully-unlocked";
+        bool persistentChange = IsPersistentProfileName(profile);
         if (persistentChange)
         {
             persistentProfile = profile;
             SaveSettings();
         }
 
-        profileChangeInFlight = true;
-        requestedProfile = profile;
+        BeginProfileChange(profile, previousPersistentProfile);
         if (!RestartGatewayAsync(profile))
         {
-            profileChangeInFlight = false;
-            requestedProfile = null;
-            if (persistentChange)
-            {
-                persistentProfile = previousPersistentProfile;
-                SaveSettings();
-            }
-            ShowToast("Gateway is busy. Permission was not changed.", true);
+            FailProfileChange(selectedProfile, "Gateway is busy. Permission was not changed.");
             UpdateStatus();
             return;
         }
@@ -1821,6 +1898,8 @@ internal sealed partial class ControlPanelRuntime
         if (quitting || !onboardingCompleted || updateSecurityHold) return;
         bool tunnelReady = tunnelStatus != null && tunnelStatus.Ready;
         DateTime now = DateTime.UtcNow;
+        if (ProfileSwitchTimedOut(now))
+            FailProfileChange(selectedProfile, "Permission switch timed out because Gateway did not become healthy.");
         if (health == null)
         {
             if (OwnedGatewayRunning())
@@ -1853,8 +1932,9 @@ internal sealed partial class ControlPanelRuntime
             if (gatewayStartInFlight || gatewayRecoveryInFlight) return;
             if (now >= nextGatewayRetry)
             {
+                string recoveryProfile = ResolveGatewayRecoveryProfile();
                 gatewayStartInFlight = true;
-                Task.Run(delegate { StartGateway(selectedProfile); })
+                Task.Run(delegate { StartGateway(recoveryProfile); })
                     .ContinueWith(delegate(Task task)
                     {
                         window.Dispatcher.BeginInvoke(new Action(delegate
@@ -2370,6 +2450,7 @@ internal sealed partial class ControlPanelRuntime
         Find<Button>("SettingsButton").Click += delegate { ToggleSettings(); };
         Find<Button>("SettingsBackButton").Click += delegate { if (settingsExpanded) ToggleSettings(); };
         Find<Button>("WorkspaceChangeButton").Click += delegate { ChooseWorkspace(); };
+        Find<Button>("AgentDesktopBindButton").Click += delegate { BindCurrentAgentDesktop(); };
         Find<Button>("FirstRunChooseWorkspaceButton").Click += delegate { FirstRunChooseWorkspace(); };
         Find<Button>("FirstRunWorkspaceNextButton").Click += delegate { onboardingStep = 1; UpdateFirstRunStep(); };
         Find<Button>("FirstRunTunnelSkipButton").Click += delegate { FirstRunSkipTunnel(); };
@@ -2395,6 +2476,68 @@ internal sealed partial class ControlPanelRuntime
             Directory.CreateDirectory(logsDir);
             OpenPath(logsDir);
         };
+    }
+
+    private void UpdateAgentDesktopUi()
+    {
+        TextBlock status = Find<TextBlock>("AgentDesktopStatusText");
+        Button bind = Find<Button>("AgentDesktopBindButton");
+        if (agentDesktopControl == null)
+        {
+            if (status != null) status.Text = "Unavailable";
+            if (bind != null) { bind.Content = "Unavailable"; bind.IsEnabled = false; }
+            return;
+        }
+
+        bool active = false;
+        string display = "Not bound";
+        try
+        {
+            active = agentDesktopControl.IsControlActive;
+            display = agentDesktopControl.BindingDisplay;
+        }
+        catch
+        {
+            display = "Needs attention";
+        }
+
+        if (status != null)
+        {
+            status.Text = active ? display + " · Agent controlling" : display;
+            status.Foreground = BrushFrom(active ? "#FF0A84FF" : (isDarkTheme ? "#FF98989F" : "#FF8E8E93"));
+        }
+        if (bind != null)
+        {
+            bind.Content = active ? "Controlling" : (display == "Not bound" ? "Bind Current" : "Rebind");
+            bind.IsEnabled = !active;
+        }
+    }
+
+    private async void BindCurrentAgentDesktop()
+    {
+        if (agentDesktopControl == null)
+        {
+            ShowToast("Agent Desktop is unavailable on this installation.", true);
+            return;
+        }
+
+        Button bind = Find<Button>("AgentDesktopBindButton");
+        if (bind != null) bind.IsEnabled = false;
+        try
+        {
+            AgentDesktopBindingDocument binding = await agentDesktopControl.BindCurrentDesktopAsync();
+            UpdateAgentDesktopUi();
+            string label = binding.DesktopNumber.HasValue ? "Desktop " + (binding.DesktopNumber.Value + 1) : "the current desktop";
+            ShowToast("Agent Desktop bound to " + label + ".", false);
+        }
+        catch (Exception error)
+        {
+            ShowToast(error.Message, true);
+        }
+        finally
+        {
+            UpdateAgentDesktopUi();
+        }
     }
 
     private static void OpenPath(string path)
@@ -2446,6 +2589,7 @@ internal sealed partial class ControlPanelRuntime
         quitting = true;
         timer.Stop();
         UnregisterGlobalHotkey();
+        try { if (agentDesktopControl != null) agentDesktopControl.Shutdown(true); } catch { }
         if (stopServices)
         {
             try { await Task.Run(delegate { StopGateway(); StopOwnedTunnel(); }); } catch { }
@@ -2468,6 +2612,9 @@ internal sealed partial class ControlPanelRuntime
         menu.Items.Add("-");
         Forms.ToolStripItem tunnel = menu.Items.Add("Open Tunnel UI");
         menu.Items.Add("-");
+        Forms.ToolStripItem bindAgentDesktop = menu.Items.Add("Bind Current Desktop as Agent Desktop");
+        Forms.ToolStripItem exitAgentControl = menu.Items.Add("Exit Agent Control");
+        menu.Items.Add("-");
         Forms.ToolStripItem quitPanel = menu.Items.Add("Quit Control Panel (Keep Services Running)");
         Forms.ToolStripItem quitAll = menu.Items.Add("Quit DeskMCP");
         notify.ContextMenuStrip = menu;
@@ -2481,6 +2628,19 @@ internal sealed partial class ControlPanelRuntime
         restart.Click += delegate { RestartGatewayAsync(selectedProfile); };
         stop.Click += delegate { StopGatewayAsync(); };
         tunnel.Click += delegate { OpenPath("http://127.0.0.1:8080/ui"); };
+        bindAgentDesktop.Click += delegate { BindCurrentAgentDesktop(); };
+        exitAgentControl.Click += delegate
+        {
+            if (agentDesktopControl != null) agentDesktopControl.ExitControl();
+            UpdateAgentDesktopUi();
+        };
+        menu.Opening += delegate
+        {
+            bool available = agentDesktopControl != null;
+            bool active = available && agentDesktopControl.IsControlActive;
+            bindAgentDesktop.Enabled = available && !active;
+            exitAgentControl.Enabled = available && active;
+        };
         quitPanel.Click += delegate { QuitPanel(false); };
         quitAll.Click += delegate { QuitPanel(true); };
     }
@@ -2499,6 +2659,8 @@ internal sealed partial class ControlPanelRuntime
 
     public void Run(bool showInitially)
     {
+        try { if (agentDesktopControl != null) agentDesktopControl.Start(); } catch { }
+        UpdateAgentDesktopUi();
         bool firstRun = !onboardingCompleted;
         if (firstRun)
         {
@@ -2714,6 +2876,9 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (UninstallExecution.ShouldRun())
+            return UninstallExecution.Run(args);
+
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         string xamlPath = Path.Combine(baseDir, "Panel.xaml");
         string programDataRoot = ControlPanelRuntime.ResolveStateDirectory("DESKTOP_MCP_DATA_ROOT", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP"));

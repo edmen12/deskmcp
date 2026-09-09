@@ -7,6 +7,7 @@ import {
   stat
 } from 'node:fs/promises';
 import path from 'node:path';
+import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { ArtifactInfo, ArtifactStore } from './artifact-store.js';
 import {
   ChromeCdpDriver,
@@ -48,6 +49,7 @@ export interface BrowserSessionSummary {
   readonly profile_id: string;
   readonly persistent_profile: boolean;
   readonly headless: boolean;
+  readonly agent_desktop: boolean;
   readonly created_at: string;
   readonly active: boolean;
   readonly pages?: readonly BrowserPageSummary[];
@@ -59,6 +61,7 @@ export interface BrowserStartOptions {
   readonly profile_id?: string;
   readonly viewport?: { readonly width: number; readonly height: number };
   readonly timeout_ms?: number;
+  readonly agent_desktop_lease_id?: string;
 }
 
 export interface BrowserStartResult extends BrowserSessionSummary {
@@ -81,6 +84,8 @@ interface BrowserSessionRecord {
   readonly persistentProfile: boolean;
   readonly headless: boolean;
   readonly port: number;
+  readonly browserProcessId?: number;
+  readonly agentDesktopLeaseId?: string;
   readonly createdAt: string;
 }
 
@@ -126,7 +131,13 @@ function psSingleQuoted(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function browserLaunchCommand(executable: string, profileDir: string, headless: boolean, viewport: { width: number; height: number }): string {
+function browserLaunchCommand(
+  executable: string,
+  profileDir: string,
+  headless: boolean,
+  viewport: { width: number; height: number },
+  agentDesktop: boolean
+): string {
   const args = [
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=0',
@@ -138,11 +149,13 @@ function browserLaunchCommand(executable: string, profileDir: string, headless: 
     '--disable-sync',
     '--metrics-recording-only',
     `--window-size=${viewport.width},${viewport.height}`,
+    ...(agentDesktop ? ['--start-minimized'] : []),
     ...(headless ? ['--headless=new'] : []),
     'about:blank'
   ];
   const processArgs = args.map(value => psSingleQuoted(`"${value}"`)).join(',');
-  return `$browserArgs = @(${processArgs}); $browserProcess = Start-Process -FilePath ${psSingleQuoted(executable)} -ArgumentList $browserArgs -PassThru; $browserProcess.WaitForExit(); exit $browserProcess.ExitCode`;
+  const pidFile = path.join(profileDir, 'BrowserProcessId');
+  return `$browserArgs = @(${processArgs}); $browserProcess = Start-Process -FilePath ${psSingleQuoted(executable)} -ArgumentList $browserArgs -PassThru; [IO.File]::WriteAllText(${psSingleQuoted(pidFile)}, [string]$browserProcess.Id); $browserProcess.WaitForExit(); exit $browserProcess.ExitCode`;
 }
 
 function validateSessionId(value: string): string {
@@ -169,6 +182,25 @@ async function pollDevToolsActivePort(profileDir: string, timeoutMs: number): Pr
   }
   const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : '';
   throw new Error(`Browser did not publish a CDP port within ${timeoutMs}ms.${detail}`);
+}
+
+async function pollBrowserProcessId(profileDir: string, timeoutMs: number): Promise<number> {
+  const pidFile = path.join(profileDir, 'BrowserProcessId');
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const text = await readFile(pidFile, 'utf8');
+      const pid = Number.parseInt(text.trim(), 10);
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+      lastError = new Error('BrowserProcessId did not contain a valid process id.');
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 75));
+  }
+  const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : '';
+  throw new Error(`Browser did not publish its process id within ${timeoutMs}ms.${detail}`);
 }
 
 export class OwnedBrowserProcessController implements BrowserProcessController {
@@ -231,7 +263,8 @@ export class BrowserRuntime {
     private readonly processController: BrowserProcessController,
     private readonly artifacts: ArtifactStore,
     private readonly cdp: BrowserCdpDriver = new ChromeCdpDriver(),
-    private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim()
+    private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
+    private readonly agentDesktop?: AgentDesktopManager
   ) {}
 
   async init(): Promise<void> {
@@ -295,21 +328,36 @@ export class BrowserRuntime {
       const viewport = normalizeViewport(options.viewport);
       const timeout = normalizeTimeout(options.timeout_ms);
       const initialUrl = normalizeInitialUrl(options.url);
-      const headless = options.headless !== false;
+      const agentDesktopLeaseId = options.agent_desktop_lease_id?.trim();
+      const agentDesktop = Boolean(agentDesktopLeaseId);
+      if (agentDesktop && !this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+      if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
+      const headless = agentDesktop ? false : options.headless !== false;
       const sessionId = randomUUID();
       const profileDir = path.join(this.root, 'profiles', profile.id);
       await mkdir(profileDir, { recursive: true, mode: 0o700 });
-      await rm(path.join(profileDir, 'DevToolsActivePort'), { force: true }).catch(() => undefined);
+      await Promise.all([
+        rm(path.join(profileDir, 'DevToolsActivePort'), { force: true }).catch(() => undefined),
+        rm(path.join(profileDir, 'BrowserProcessId'), { force: true }).catch(() => undefined)
+      ]);
       this.profilesInUse.set(profile.id, sessionId);
 
       let processSessionId: string | undefined;
       try {
-        processSessionId = await this.processController.start(browserLaunchCommand(executable, profileDir, headless, viewport));
-        const port = await pollDevToolsActivePort(profileDir, timeout);
+        processSessionId = await this.processController.start(browserLaunchCommand(executable, profileDir, headless, viewport, agentDesktop));
+        const [port, browserProcessId] = await Promise.all([
+          pollDevToolsActivePort(profileDir, timeout),
+          agentDesktop ? pollBrowserProcessId(profileDir, timeout) : Promise.resolve(undefined)
+        ]);
+        if (agentDesktopLeaseId) {
+          if (browserProcessId === undefined) throw new Error('Agent Desktop browser process id was not published.');
+          await this.agentDesktop!.placeProcessWindows(browserProcessId, agentDesktopLeaseId);
+        }
         const pages = await this.cdp.listPages(port, Math.min(timeout, 10000));
         if (pages.length === 0) throw new Error('Browser started but no controllable page was found.');
         const first = pages[0]!;
         if (initialUrl) {
+          if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
           await this.cdp.act(port, first.page_id, [{ type: 'goto', url: initialUrl, wait_until: 'domcontentloaded', timeout_ms: timeout }], timeout);
         }
         const currentPages = await this.cdp.listPages(port, Math.min(timeout, 10000));
@@ -322,6 +370,8 @@ export class BrowserRuntime {
           persistentProfile: profile.persistent,
           headless,
           port,
+          ...(browserProcessId !== undefined ? { browserProcessId } : {}),
+          ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {}),
           createdAt: new Date().toISOString()
         };
         this.sessions.set(sessionId, record);
@@ -330,6 +380,7 @@ export class BrowserRuntime {
           profile_id: profile.id,
           persistent_profile: profile.persistent,
           headless,
+          agent_desktop: agentDesktop,
           created_at: record.createdAt,
           active: true,
           page_id: selected.page_id,
@@ -357,6 +408,7 @@ export class BrowserRuntime {
         profile_id: record.profileId,
         persistent_profile: record.persistentProfile,
         headless: record.headless,
+        agent_desktop: Boolean(record.agentDesktopLeaseId),
         created_at: record.createdAt,
         active: true,
         ...(pages ? { pages } : {})
@@ -394,6 +446,10 @@ export class BrowserRuntime {
   ): Promise<BrowserSnapshotResult> {
     await this.reconcile();
     const record = this.session(sessionId);
+    if (record.agentDesktopLeaseId) {
+      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+    }
     const effectivePageId = await this.cdp.act(record.port, pageId, actions, options.timeout_ms ?? 15000);
     return this.snapshot(record.sessionId, effectivePageId, options);
   }
