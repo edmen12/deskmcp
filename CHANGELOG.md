@@ -4,6 +4,19 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.9 — 2026-09-09
+
+### Fixed
+
+- Restored the official DeskMCP tray icon in Windows single-file builds. The tray now loads the original `DeskMCP.ico` from an embedded WPF resource instead of depending on an external `brand\DeskMCP.ico` file that is omitted by single-file publish.
+- Added an embedded Tray icon release contract and runtime self-test so x64/ARM64 release-stage validation fails if the official Tray icon resource is missing.
+
+### Validation
+
+- WPF release build passes with 0 warnings and 0 errors.
+- Embedded Tray icon self-test passes without any external `brand\DeskMCP.ico` beside the single-file executable.
+- Gateway/runtime regression suite: 102 passed, 0 failed.
+
 ## 0.9.8 — 2026-09-09
 
 ### Added
