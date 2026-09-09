@@ -3,6 +3,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { ArtifactStore } from '../src/artifact-store.js';
 import type {
   BrowserAction,
@@ -35,6 +36,7 @@ class FakeProcessController implements BrowserProcessController {
     const profileDir = match[1].replaceAll("''", "'");
     await mkdir(profileDir, { recursive: true });
     await writeFile(path.join(profileDir, 'DevToolsActivePort'), '43210\n/devtools/browser/test\n', 'utf8');
+    await writeFile(path.join(profileDir, 'BrowserProcessId'), '4242\n', 'utf8');
     assert.ok(profileDir.startsWith(path.join(this.runtimeRoot, 'profiles')));
     const id = `process-${this.next++}`;
     this.activeIds.add(id);
@@ -195,4 +197,40 @@ test('browser reconciliation removes sessions whose owned process has disappeare
   assert.equal(sessions.length, 0);
   const closed = await browser.close(started.session_id);
   assert.equal(closed.closed, false);
+});
+
+
+test('closing an Agent Desktop lease only closes browser sessions owned by that lease', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const browserRoot = path.join(root, 'browser');
+  const controller = new FakeProcessController(browserRoot);
+  const cdp = new FakeCdpDriver();
+  const agentDesktop = {
+    async assertLease() { return {}; },
+    async placeProcessWindows() { }
+  } as unknown as AgentDesktopManager;
+  const browser = new BrowserRuntime(browserRoot, controller, artifacts, cdp, executable, agentDesktop);
+  await browser.init();
+
+  const leaseA = '11111111-1111-4111-8111-111111111111';
+  const leaseB = '22222222-2222-4222-8222-222222222222';
+  const sessionA = await browser.start({ profile_id: 'lease-a', agent_desktop_lease_id: leaseA });
+  const sessionB = await browser.start({ profile_id: 'lease-b', agent_desktop_lease_id: leaseB });
+  assert.equal((await browser.list()).length, 2);
+
+  const cleanup = await browser.closeAgentDesktopLease(leaseA);
+  assert.equal(cleanup.lease_id, leaseA);
+  assert.equal(cleanup.closed_sessions, 1);
+  assert.deepEqual(controller.terminated, ['process-1']);
+  const remaining = await browser.list();
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0]?.session_id, sessionB.session_id);
+  assert.notEqual(remaining[0]?.session_id, sessionA.session_id);
+
+  await browser.closeAll();
 });

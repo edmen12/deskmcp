@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { AuditLogger } from '../src/audit.js';
+import type { BrowserRuntime } from '../src/browser-runtime.js';
 import { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { DesktopPolicy, type PermissionProfile } from '../src/desktop-policy.js';
 import { startHttpServer } from '../src/http-server.js';
@@ -25,7 +27,8 @@ function contentJson<T>(result: Awaited<ReturnType<Client['callTool']>>): T {
 
 async function withTaskClient<T>(
   profile: PermissionProfile,
-  operation: (client: Client, root: string) => Promise<T>
+  operation: (client: Client, root: string) => Promise<T>,
+  extras: { agentDesktop?: AgentDesktopManager; browser?: BrowserRuntime } = {}
 ): Promise<T> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-task-tools-'));
   const policy = await DesktopPolicy.create({ profile, allowedRoots: [root] });
@@ -45,7 +48,12 @@ async function withTaskClient<T>(
     observations,
     sessions,
     undefined,
-    tasks
+    tasks,
+    undefined,
+    undefined,
+    extras.browser,
+    undefined,
+    extras.agentDesktop
   );
   const client = new Client(
     { name: 'deskmcp-task-tools-test', version: '0.1.0' },
@@ -198,4 +206,86 @@ test('context discovery does not leak task ids and explicit reattach can recover
     assert.equal(get.isError, undefined);
     assert.match(contentText(get), /Recovery anchor/);
   });
+});
+
+
+test('completing a linked Task Room auto-revokes Agent Desktop and closes lease browser sessions', async () => {
+  const leaseId = '33333333-3333-4333-8333-333333333333';
+  let stoppedTaskId: string | undefined;
+  let closedLeaseId: string | undefined;
+  const agentDesktop = {
+    async stopControlForTask(taskId: string) {
+      stoppedTaskId = taskId;
+      return {
+        stopped: true,
+        leaseId,
+        status: {
+          configured: true,
+          control: { schemaVersion: 1, generation: 2, active: false },
+          hud_ready: false,
+          hud_visible: false
+        }
+      };
+    }
+  } as unknown as AgentDesktopManager;
+  const browser = {
+    async closeAgentDesktopLease(value: string) {
+      closedLeaseId = value;
+      return { lease_id: value, closed_sessions: 2 };
+    }
+  } as unknown as BrowserRuntime;
+
+  await withTaskClient('workspace-write', async client => {
+    const createdContext = await client.callTool({
+      name: 'desktop_task_manage',
+      arguments: { action: 'context_create', context_label: 'auto cleanup' }
+    });
+    const context = contentJson<{ context: { context_handle: string } }>(createdContext).context;
+    const createdTask = await client.callTool({
+      name: 'desktop_task_manage',
+      arguments: {
+        action: 'create',
+        context_handle: context.context_handle,
+        title: 'Auto cleanup task',
+        goal: 'Close Agent Desktop lifecycle resources on completion',
+        completion_conditions: ['cleanup verified']
+      }
+    });
+    const taskId = contentJson<{ task: { id: string } }>(createdTask).task.id;
+
+    const review = await client.callTool({
+      name: 'desktop_task_manage',
+      arguments: {
+        action: 'final_review',
+        context_handle: context.context_handle,
+        task_id: taskId,
+        review_status: 'pass',
+        summary: 'Ready to complete.',
+        verified_facts: ['Cleanup path is ready.']
+      }
+    });
+    assert.equal(review.isError, undefined);
+
+    const complete = await client.callTool({
+      name: 'desktop_task_manage',
+      arguments: { action: 'complete', context_handle: context.context_handle, task_id: taskId }
+    });
+    assert.equal(complete.isError, undefined);
+    const result = contentJson<{
+      task: { status: string };
+      agent_desktop_cleanup: {
+        linked: boolean;
+        control_stopped: boolean;
+        lease_id: string;
+        browser_sessions_closed: number;
+      };
+    }>(complete);
+    assert.equal(result.task.status, 'completed');
+    assert.equal(result.agent_desktop_cleanup.linked, true);
+    assert.equal(result.agent_desktop_cleanup.control_stopped, true);
+    assert.equal(result.agent_desktop_cleanup.lease_id, leaseId);
+    assert.equal(result.agent_desktop_cleanup.browser_sessions_closed, 2);
+    assert.equal(stoppedTaskId, taskId);
+    assert.equal(closedLeaseId, leaseId);
+  }, { agentDesktop, browser });
 });

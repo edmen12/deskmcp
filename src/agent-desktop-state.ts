@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { AgentDesktopNativeBridge } from './agent-desktop-native.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const TASK_ID_PATTERN = /^tsk_[0-9a-f]{16}$/u;
 const HUD_HEARTBEAT_MAX_AGE_MS = 2500;
 const HUD_READY_TIMEOUT_MS = 3500;
 const LOCK_TIMEOUT_MS = 2500;
@@ -21,6 +22,7 @@ export interface AgentDesktopControlState {
   readonly active: boolean;
   readonly leaseId?: string;
   readonly taskLabel?: string;
+  readonly taskId?: string;
   readonly startedAtUtc?: string;
   readonly revokedAtUtc?: string;
 }
@@ -65,7 +67,8 @@ function validControl(value: unknown): value is AgentDesktopControlState {
     if (typeof row.leaseId !== 'string' || !UUID_PATTERN.test(row.leaseId)) return false;
     if (!validIso(row.startedAtUtc)) return false;
   }
-  return row.taskLabel === undefined || typeof row.taskLabel === 'string';
+  return (row.taskLabel === undefined || typeof row.taskLabel === 'string')
+    && (row.taskId === undefined || (typeof row.taskId === 'string' && TASK_ID_PATTERN.test(row.taskId)));
 }
 
 function validHud(value: unknown): value is AgentDesktopHudState {
@@ -208,9 +211,11 @@ export class AgentDesktopManager {
     };
   }
 
-  async startControl(taskLabel?: string): Promise<AgentDesktopStatus> {
+  async startControl(taskLabel?: string, taskId?: string): Promise<AgentDesktopStatus> {
     const label = taskLabel?.trim();
+    const normalizedTaskId = taskId?.trim().toLowerCase();
     if (label && label.length > 200) throw new Error('Agent Desktop task label is too long.');
+    if (normalizedTaskId && !TASK_ID_PATTERN.test(normalizedTaskId)) throw new Error('Invalid Agent Desktop task id.');
     const binding = await this.binding();
     if (!binding) throw new Error('Agent Desktop is not bound. Switch to the desktop you want to dedicate to the agent and bind it in DeskMCP Settings.');
     await this.native.info();
@@ -224,6 +229,7 @@ export class AgentDesktopManager {
         active: true,
         leaseId: randomUUID(),
         ...(label ? { taskLabel: label } : {}),
+        ...(normalizedTaskId ? { taskId: normalizedTaskId } : {}),
         startedAtUtc: new Date().toISOString()
       };
       await atomicJson(this.controlPath, next);
@@ -264,6 +270,28 @@ export class AgentDesktopManager {
       } satisfies AgentDesktopControlState);
     }));
     return this.status();
+  }
+
+  async stopControlForTask(taskId: string): Promise<{ stopped: boolean; leaseId?: string; status: AgentDesktopStatus }> {
+    const normalizedTaskId = taskId.trim().toLowerCase();
+    if (!TASK_ID_PATTERN.test(normalizedTaskId)) throw new Error('Invalid Agent Desktop task id.');
+    let stoppedLeaseId: string | undefined;
+    await this.serialize(() => this.withCrossProcessLock(async () => {
+      const live = await this.readControl();
+      if (!live?.active || live.taskId !== normalizedTaskId || !live.leaseId) return;
+      stoppedLeaseId = live.leaseId;
+      await atomicJson(this.controlPath, {
+        schemaVersion: 1,
+        generation: live.generation + 1,
+        active: false,
+        revokedAtUtc: new Date().toISOString()
+      } satisfies AgentDesktopControlState);
+    }));
+    return {
+      stopped: Boolean(stoppedLeaseId),
+      ...(stoppedLeaseId ? { leaseId: stoppedLeaseId } : {}),
+      status: await this.status()
+    };
   }
 
   async assertLease(leaseId: string): Promise<{ binding: AgentDesktopBinding; control: AgentDesktopControlState }> {

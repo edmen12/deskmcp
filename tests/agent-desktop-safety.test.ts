@@ -98,3 +98,52 @@ test('Agent Desktop rejects a heartbeat that is visible but not armed', async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test('Task-linked Agent Desktop control only auto-stops for the matching task', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-'));
+  try {
+    const manager = new AgentDesktopManager(root, {} as AgentDesktopNativeBridge);
+    await manager.init();
+    const leaseId = randomUUID();
+    const now = new Date().toISOString();
+    const taskId = 'tsk_0123456789abcdef';
+
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 1,
+      desktopId: randomUUID(),
+      desktopNumber: 1,
+      boundAtUtc: now
+    });
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 1,
+      generation: 7,
+      active: true,
+      leaseId,
+      taskId,
+      taskLabel: 'Bound task',
+      startedAtUtc: now
+    });
+    await writeJson(path.join(root, 'hud-state.json'), {
+      schemaVersion: 1,
+      generation: 7,
+      leaseId,
+      armed: true,
+      visible: true,
+      processId: 1234,
+      heartbeatAtUtc: new Date().toISOString()
+    });
+
+    const wrong = await manager.stopControlForTask('tsk_fedcba9876543210');
+    assert.equal(wrong.stopped, false);
+    assert.equal(wrong.status.control.active, true);
+    assert.equal(wrong.status.control.leaseId, leaseId);
+
+    const matched = await manager.stopControlForTask(taskId);
+    assert.equal(matched.stopped, true);
+    assert.equal(matched.leaseId, leaseId);
+    assert.equal(matched.status.control.active, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
