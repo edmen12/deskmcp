@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using Microsoft.Win32;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -743,13 +744,14 @@ internal sealed partial class ControlPanelRuntime
     {
         try
         {
-            Uri resourceUri = new Uri("pack://application:,,,/brand/DeskMCP.ico", UriKind.Absolute);
-            System.Windows.Resources.StreamResourceInfo resource = Application.GetResourceStream(resourceUri);
-            if (resource != null && resource.Stream != null)
+            Assembly assembly = Assembly.GetExecutingAssembly();
+            using (Stream stream = assembly.GetManifestResourceStream("DeskMCP.Brand.DeskMCP.ico"))
             {
-                using (resource.Stream)
-                using (Drawing.Icon icon = new Drawing.Icon(resource.Stream, 32, 32))
-                    return (Drawing.Icon)icon.Clone();
+                if (stream != null)
+                {
+                    using (Drawing.Icon icon = new Drawing.Icon(stream, 32, 32))
+                        return (Drawing.Icon)icon.Clone();
+                }
             }
         }
         catch { }
@@ -2544,13 +2546,13 @@ internal sealed partial class ControlPanelRuntime
 
         if (status != null)
         {
-            status.Text = active ? display + " · Agent controlling" : display;
+            status.Text = display;
             status.Foreground = BrushFrom(active ? "#FF0A84FF" : (isDarkTheme ? "#FF98989F" : "#FF8E8E93"));
         }
         if (bind != null)
         {
-            bind.Content = active ? "Controlling" : (display == "Not bound" ? "Bind Current" : "Rebind");
-            bind.IsEnabled = !active;
+            bind.Content = "Bind Current";
+            bind.IsEnabled = true;
         }
     }
 
@@ -2569,7 +2571,7 @@ internal sealed partial class ControlPanelRuntime
             AgentDesktopBindingDocument binding = await agentDesktopControl.BindCurrentDesktopAsync();
             UpdateAgentDesktopUi();
             string label = binding.DesktopNumber.HasValue ? "Desktop " + (binding.DesktopNumber.Value + 1) : "the current desktop";
-            ShowToast("Agent Desktop bound to " + label + ".", false);
+            ShowToast("Agent Desktop bound to " + label + ". Returned to Desktop 1.", false);
         }
         catch (Exception error)
         {
@@ -2678,9 +2680,8 @@ internal sealed partial class ControlPanelRuntime
         menu.Opening += delegate
         {
             bool available = agentDesktopControl != null;
-            bool active = available && agentDesktopControl.IsControlActive;
-            bindAgentDesktop.Enabled = available && !active;
-            exitAgentControl.Enabled = available && active;
+            bindAgentDesktop.Enabled = available;
+            exitAgentControl.Enabled = available && agentDesktopControl.IsCurrentDesktopControlled;
         };
         quitPanel.Click += delegate { QuitPanel(false); };
         quitAll.Click += delegate { QuitPanel(true); };
