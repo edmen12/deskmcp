@@ -10,18 +10,22 @@ import {
   open,
   readFile,
   readdir,
-  rename,
   rm,
   stat,
   writeFile
 } from 'node:fs/promises';
 import path from 'node:path';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 import type { DesktopPolicy } from './desktop-policy.js';
 
 const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
 const MAX_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_ARTIFACT_STORE_BYTES = 512 * 1024 * 1024;
 const MAX_READ_BYTES = 256 * 1024;
+const ARTIFACT_LOCK_TIMEOUT_MS = 5_000;
+const ARTIFACT_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const ARTIFACT_ID_PATTERN = /^art_[0-9a-f]{32}$/u;
 
 export interface ArtifactMetadata {
@@ -153,6 +157,28 @@ export class ArtifactExpiredError extends Error {
   }
 }
 
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+  if (normalized === 'localhost' || normalized === '::1') return true;
+  const match = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(normalized);
+  return Boolean(match && match.slice(1).every(part => Number(part) >= 0 && Number(part) <= 255));
+}
+
+function validateArtifactBaseUrl(value: string, label: string): string {
+  const normalized = value.trim().replace(/\/+$/u, '');
+  let parsed: URL;
+  try { parsed = new URL(normalized); }
+  catch { throw new Error(`${label} must be a valid HTTP(S) URL.`); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${label} must use HTTP or HTTPS.`);
+  }
+  if (parsed.username || parsed.password) throw new Error(`${label} must not contain URL credentials.`);
+  if (parsed.protocol === 'http:' && !isLoopbackHostname(parsed.hostname)) {
+    throw new Error(`${label} may use HTTP only for loopback hosts; remote artifact URLs require HTTPS.`);
+  }
+  return normalized;
+}
+
 export class ArtifactStore {
   private readonly signingSecret = randomBytes(32);
   private configuredBaseUrl: string | undefined;
@@ -161,15 +187,14 @@ export class ArtifactStore {
 
   constructor(
     readonly root: string,
-    configuredBaseUrl = process.env.DESKTOP_MCP_ARTIFACT_BASE_URL?.trim()
+    configuredBaseUrl = process.env.DESKTOP_MCP_ARTIFACT_BASE_URL?.trim(),
+    private readonly maxStoreBytes = DEFAULT_MAX_ARTIFACT_STORE_BYTES
   ) {
+    if (!Number.isSafeInteger(maxStoreBytes) || maxStoreBytes < 1) {
+      throw new Error('Artifact store byte budget must be a positive safe integer.');
+    }
     if (configuredBaseUrl) {
-      const normalized = configuredBaseUrl.replace(/\/+$/u, '');
-      const parsed = new URL(normalized);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error('DESKTOP_MCP_ARTIFACT_BASE_URL must use HTTP or HTTPS.');
-      }
-      this.configuredBaseUrl = normalized;
+      this.configuredBaseUrl = validateArtifactBaseUrl(configuredBaseUrl, 'DESKTOP_MCP_ARTIFACT_BASE_URL');
     }
   }
 
@@ -179,9 +204,7 @@ export class ArtifactStore {
   }
 
   setLocalBaseUrl(value: string): void {
-    const trimmed = value.trim().replace(/\/+$/u, '');
-    if (!/^https?:\/\//iu.test(trimmed)) throw new Error('Artifact local base URL must be HTTP(S).');
-    this.localBaseUrl = trimmed;
+    this.localBaseUrl = validateArtifactBaseUrl(value, 'Artifact local base URL');
   }
 
   private artifactDir(id: string): string {
@@ -196,15 +219,33 @@ export class ArtifactStore {
     return path.join(this.artifactDir(id), 'metadata.json');
   }
 
+  private get mutationLockPath(): string {
+    return path.join(this.root, '.artifact-store.lock');
+  }
+
+  private async acquireMutationLock(): Promise<PidDirectoryLockLease> {
+    return acquirePidDirectoryLock(this.mutationLockPath, {
+      label: 'Artifact store',
+      timeoutMs: ARTIFACT_LOCK_TIMEOUT_MS,
+      initializationGraceMs: ARTIFACT_LOCK_INITIALIZATION_GRACE_MS
+    });
+  }
+
   private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.mutationChain;
     let release!: () => void;
     this.mutationChain = new Promise<void>(resolve => { release = resolve; });
     await previous;
+    let lock: PidDirectoryLockLease | undefined;
     try {
+      lock = await this.acquireMutationLock();
       return await operation();
     } finally {
-      release();
+      try {
+        if (lock) await lock.release();
+      } finally {
+        release();
+      }
     }
   }
 
@@ -263,6 +304,33 @@ export class ArtifactStore {
     return payload;
   }
 
+  private async storedPayloadBytesLocked(): Promise<number> {
+    const entries = await readdir(this.root, { withFileTypes: true }).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    });
+    let total = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !ARTIFACT_ID_PATTERN.test(entry.name)) continue;
+      const payloadInfo = await stat(this.payloadPath(entry.name)).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (!payloadInfo) continue;
+      if (!payloadInfo.isFile()) throw new Error(`Artifact payload is not a regular file: ${entry.name}.`);
+      total += payloadInfo.size;
+      if (!Number.isSafeInteger(total)) throw new Error('Artifact store size exceeds safe integer range.');
+    }
+    return total;
+  }
+
+  private async assertCapacityLocked(additionalBytes: number): Promise<void> {
+    const current = await this.storedPayloadBytesLocked();
+    if (current + additionalBytes > this.maxStoreBytes) {
+      throw new Error(`Artifact store byte budget exceeded (${current} + ${additionalBytes} > ${this.maxStoreBytes}). Delete artifacts or wait for expiry before publishing more.`);
+    }
+  }
+
   async publishFromPath(
     sourcePath: string,
     policy: DesktopPolicy,
@@ -277,6 +345,7 @@ export class ArtifactStore {
       if (sourceStat.size > MAX_ARTIFACT_BYTES) {
         throw new Error(`Artifact source exceeds ${MAX_ARTIFACT_BYTES} bytes.`);
       }
+      await this.assertCapacityLocked(sourceStat.size);
       const seconds = retentionSeconds(options.retention_seconds);
       const id = newArtifactId();
       const dir = this.artifactDir(id);
@@ -302,7 +371,7 @@ export class ArtifactStore {
         };
         const temp = path.join(dir, '.metadata.tmp');
         await writeFile(temp, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-        await rename(temp, this.metadataPath(id));
+        await renameFileWithRetry(temp, this.metadataPath(id));
         return this.withUrl(metadata);
       } catch (error) {
         await rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -321,6 +390,7 @@ export class ArtifactStore {
       await this.cleanupLocked();
       if (data.byteLength <= 0) throw new Error('Artifact payload is empty.');
       if (data.byteLength > MAX_ARTIFACT_BYTES) throw new Error(`Artifact payload exceeds ${MAX_ARTIFACT_BYTES} bytes.`);
+      await this.assertCapacityLocked(data.byteLength);
       const seconds = retentionSeconds(options.retention_seconds);
       const id = newArtifactId();
       const dir = this.artifactDir(id);

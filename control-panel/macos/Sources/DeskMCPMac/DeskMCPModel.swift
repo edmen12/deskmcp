@@ -136,6 +136,7 @@ final class DeskMCPModel: ObservableObject {
             guard let self else { return }
             self.gatewaySupervisor.reset()
             await self.stopGateway()
+            _ = await self.stopDetachedGatewayIfPresent()
             self.startGateway()
         }
     }
@@ -173,6 +174,9 @@ final class DeskMCPModel: ObservableObject {
         process.arguments = ["dist/src/index.js"]
         process.currentDirectoryURL = paths.gatewayRoot
         var environment = ProcessInfo.processInfo.environment
+        // Tunnel credentials belong only to tunnel-client. Do not let a shell-
+        // launched Control Panel accidentally leak them into the Gateway.
+        environment.removeValue(forKey: "CONTROL_PLANE_API_KEY")
         environment["DESKTOP_MCP_PROFILE"] = profile.rawValue
         environment["DESKTOP_MCP_ALLOWED_ROOTS"] = workspace
         environment["DESKTOP_MCP_AUDIT_LOG"] = paths.logs.appendingPathComponent("audit.jsonl").path
@@ -214,6 +218,30 @@ final class DeskMCPModel: ObservableObject {
         if gatewayProcess?.processIdentifier == pid { gatewayProcess = nil }
         if intentionallyStoppingGatewayPID == pid { intentionallyStoppingGatewayPID = nil }
         gatewayReady = false
+    }
+
+    private func stopDetachedGatewayIfPresent() async -> Bool {
+        guard gatewayProcess == nil, let paths else { return false }
+        let stopEntry = paths.gatewayRoot.appendingPathComponent("dist/src/stop.js")
+        guard FileManager.default.isExecutableFile(atPath: paths.node.path),
+              FileManager.default.fileExists(atPath: stopEntry.path) else { return false }
+        let process = Process()
+        process.executableURL = paths.node
+        process.arguments = ["dist/src/stop.js", "8765"]
+        process.currentDirectoryURL = paths.gatewayRoot
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "CONTROL_PLANE_API_KEY")
+        process.environment = environment
+        do {
+            try process.run()
+            guard await waitForExit(process, timeout: 5), process.terminationStatus == 0 else {
+                if process.isRunning { await terminateOwnedProcess(process, timeout: 1) }
+                return false
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func configureTunnel(id: String) throws {
@@ -317,8 +345,13 @@ final class DeskMCPModel: ObservableObject {
             if (response as? HTTPURLResponse)?.statusCode == 200 {
                 let health = try JSONDecoder().decode(GatewayHealth.self, from: data)
                 gatewayReady = true
-                gatewayStatus = "Running"
-                if let running = health.policy?.profile,
+                let owned = gatewayProcess?.isRunning == true
+                gatewayStatus = owned ? "Running" : "External Gateway"
+                // Only an owned Gateway may drive the Panel's selected profile.
+                // A detached/older Gateway can still answer /health after a Panel
+                // crash, but must not overwrite the user's current selection.
+                if owned,
+                   let running = health.policy?.profile,
                    let parsed = DeskMCPProfile(rawValue: running),
                    parsed != profile {
                     profile = parsed
@@ -328,20 +361,51 @@ final class DeskMCPModel: ObservableObject {
             gatewayStatus = gatewayProcess?.isRunning == true ? "Starting" : "Offline"
         }
 
-        tunnelReady = false
+        var readyRequestOK = false
+        var readyBody = ""
+        var statusBody = ""
+        var metricsBody = ""
         do {
             var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/readyz")!)
             request.timeoutInterval = 1
             let (data, response) = try await URLSession.shared.data(for: request)
-            tunnelReady = (response as? HTTPURLResponse)?.statusCode == 200
-                && String(decoding: data, as: UTF8.self)
-                    .trimmingCharacters(in: .whitespacesAndNewlines) == "ready"
+            readyRequestOK = (response as? HTTPURLResponse)?.statusCode == 200
+            readyBody = String(decoding: data, as: UTF8.self)
         } catch { }
+        do {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/api/status")!)
+            request.timeoutInterval = 1
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let body = String(decoding: data, as: UTF8.self)
+            if (response as? HTTPURLResponse)?.statusCode == 401 {
+                statusBody = "status 401 unauthorized " + body
+            } else {
+                statusBody = body
+            }
+        } catch { }
+        do {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/metrics")!)
+            request.timeoutInterval = 1
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if (response as? HTTPURLResponse)?.statusCode == 200 {
+                metricsBody = String(decoding: data, as: UTF8.self)
+            }
+        } catch { }
+
+        let tunnelEvaluation = TunnelRuntimeStatusPolicy.evaluate(
+            expectedTunnelID: tunnelID,
+            readyRequestOK: readyRequestOK,
+            readyBody: readyBody,
+            statusBody: statusBody,
+            metricsBody: metricsBody,
+            now: Date()
+        )
+        tunnelReady = tunnelEvaluation.ready
 
         if tunnelReady {
             tunnelStatus = "Ready"
         } else if tunnelProcess?.isRunning == true {
-            tunnelStatus = "Connecting"
+            tunnelStatus = tunnelEvaluation.detail
         } else if !Self.validTunnelID(tunnelID) {
             tunnelStatus = "Set Tunnel ID"
         } else {
@@ -358,6 +422,18 @@ final class DeskMCPModel: ObservableObject {
     private func supervisorTick() async {
         await refreshStatus()
         let now = Self.now
+        if gatewayReady && gatewayProcess == nil && intentionallyStoppingGatewayPID == nil {
+            gatewayStatus = "Reclaiming Gateway"
+            if await stopDetachedGatewayIfPresent() {
+                gatewayReady = false
+                gatewayStatus = "Restarting"
+                gatewaySupervisor.reset()
+            } else {
+                gatewayStatus = "External Gateway"
+                _ = gatewaySupervisor.recordFailure(now: now)
+            }
+            return
+        }
         let gatewayDecision = gatewaySupervisor.evaluate(
             shouldRun: intentionallyStoppingGatewayPID == nil,
             isRunning: gatewayProcess?.isRunning == true,

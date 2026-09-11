@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$SetupPath,
     [string]$Version,
-    [string]$Target = 'win-x64'
+    [string]$Target = 'win-x64',
+    [switch]$ReleaseStageSmokePassed,
+    [switch]$InstallerSmokePassed
 )
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -13,6 +15,8 @@ $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $inventory = Join-Path $StageRoot 'licenses\production-node-packages.csv'
 if (-not (Test-Path -LiteralPath $SetupPath)) { throw 'Setup artifact is missing.' }
 if (-not (Test-Path -LiteralPath $inventory)) { throw 'License inventory is missing.' }
+if (-not $ReleaseStageSmokePassed) { throw 'Release-stage smoke must be explicitly attested before release metadata can claim it passed.' }
+if (-not $InstallerSmokePassed) { throw 'Installer smoke must be explicitly attested before release metadata can claim it passed.' }
 $artifact = Get-Item -LiteralPath $SetupPath
 $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupPath).Hash.ToLowerInvariant()
 $signature = Get-AuthenticodeSignature -LiteralPath $SetupPath

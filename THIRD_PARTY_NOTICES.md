@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This notice is generated from the actual Windows x64 release stage for DeskMCP 0.9.9. DeskMCP itself is licensed under Apache License 2.0; see the repository root `LICENSE`. Third-party components retain the licenses documented below.
+This notice is generated from the actual Windows x64 release stage for DeskMCP 0.9.10. DeskMCP itself is licensed under Apache License 2.0; see the repository root `LICENSE`. Third-party components retain the licenses documented below.
 
 ## Bundled runtimes and major components
 
@@ -30,7 +30,7 @@ The complete machine-generated inventory is `licenses/production-node-packages.c
 Package/license counts for this stage:
 - MIT: 431
 - ISC: 33
-- Apache-2.0: 10
+- Apache-2.0: 11
 - BSD-3-Clause: 7
 - BSD-2-Clause: 4
 - BlueOak-1.0.0: 4

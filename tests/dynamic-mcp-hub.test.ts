@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -114,4 +114,72 @@ test('disabled dynamic MCP server cannot be called', async () => {
   } finally {
     await upstream.close();
   }
+});
+
+
+test('dynamic MCP registry serializes concurrent mutations across Hub instances', async () => {
+  await withHub(async ({ hub }) => {
+    const second = new DynamicMcpHub(hub.root);
+    await second.init();
+    await Promise.all([
+      hub.addServer({ name: 'alpha', url: 'https://alpha.example.com/mcp', enabled: false }),
+      second.addServer({ name: 'beta', url: 'https://beta.example.com/mcp', enabled: false })
+    ]);
+    const names = (await hub.listServers() as Array<{ name: string }>).map(item => item.name).sort();
+    assert.deepEqual(names, ['alpha', 'beta']);
+  });
+});
+
+test('dynamic MCP refresh never writes stale discovery into a replaced same-name server', async () => {
+  const upstream = await startHttpServer('127.0.0.1', 0);
+  try {
+    await withHub(async ({ hub }) => {
+      await hub.addServer({ name: 'replaceable', url: `${upstream.url}/mcp`, timeout_ms: 5000 });
+      let releasePersist!: () => void;
+      let reachedPersist!: () => void;
+      const persistGate = new Promise<void>(resolve => { releasePersist = resolve; });
+      const persistReached = new Promise<void>(resolve => { reachedPersist = resolve; });
+      const refreshing = new DynamicMcpHub(hub.root, {
+        beforePersistRefresh: async () => {
+          reachedPersist();
+          await persistGate;
+        }
+      });
+      await refreshing.init();
+
+      const refreshPromise = refreshing.refresh('replaceable');
+      await persistReached;
+      await hub.removeServer('replaceable');
+      await hub.addServer({ name: 'replaceable', url: 'https://replacement.example.com/mcp', enabled: false });
+      releasePersist();
+
+      const result = await refreshPromise;
+      assert.equal(result[0]?.ok, false);
+      assert.match(result[0]?.error ?? '', /configuration changed.*stale discovery was not persisted/i);
+      const servers = await hub.listServers() as Array<{ name: string; url: string; tool_count: number }>;
+      const replacement = servers.find(server => server.name === 'replaceable');
+      assert.equal(replacement?.url, 'https://replacement.example.com/mcp');
+      assert.equal(replacement?.tool_count, 0);
+    });
+  } finally {
+    await upstream.close();
+  }
+});
+
+test('dynamic MCP registry fails closed on cached tool identity tampering', async () => {
+  await withHub(async ({ hub }) => {
+    await hub.addServer({ name: 'cached', url: 'https://example.com/mcp', enabled: false });
+    const registryPath = path.join(hub.root, 'servers.json');
+    const registry = JSON.parse(await readFile(registryPath, 'utf8')) as {
+      servers: Array<{ name: string; tools: unknown[] }>;
+    };
+    registry.servers[0]!.tools = [{
+      qualified_name: 'other:desktop_ping',
+      server: 'cached',
+      tool_name: 'desktop_ping',
+      input_schema: { type: 'object' }
+    }];
+    await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+    await assert.rejects(hub.listServers(), /cached tool identity mismatch/i);
+  });
 });

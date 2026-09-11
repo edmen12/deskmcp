@@ -47,6 +47,45 @@ test('AuditLogger writes paired metadata-only JSONL records', async () => {
 });
 
 
+test('AuditLogger serializes rotation across independent logger instances', async () => {
+  const rotatingPath = path.join(TEST_AREA, 'audit-cross-instance-rotate.jsonl');
+  for (let index = 0; index <= 20; index++) {
+    await rm(index === 0 ? rotatingPath : `${rotatingPath}.${index}`, { force: true });
+  }
+  await rm(`${rotatingPath}.lock`, { recursive: true, force: true });
+  const left = new AuditLogger(rotatingPath, 1024, 20);
+  const right = new AuditLogger(rotatingPath, 1024, 20);
+  await left.init();
+  await right.init();
+
+  await Promise.all(Array.from({ length: 18 }, async (_, index) => {
+    const logger = index % 2 === 0 ? left : right;
+    const op = await logger.begin('desktop_read_file', 'read', 'read-only', `C:\\safe\\parallel-${index}.txt`);
+    await logger.finish(op, 'allow');
+  }));
+
+  let combined = '';
+  for (let index = 0; index <= 20; index++) {
+    const file = index === 0 ? rotatingPath : `${rotatingPath}.${index}`;
+    combined += await readFile(file, 'utf8').catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw error;
+    });
+  }
+  const records = parseRecords(combined);
+  assert.equal(records.length, 36);
+  const counts = new Map<string, number>();
+  for (const record of records) counts.set(record.requestId, (counts.get(record.requestId) ?? 0) + 1);
+  assert.equal(counts.size, 18);
+  assert.equal([...counts.values()].every(count => count === 2), true);
+
+  for (let index = 0; index <= 20; index++) {
+    await rm(index === 0 ? rotatingPath : `${rotatingPath}.${index}`, { force: true });
+  }
+  await rm(`${rotatingPath}.lock`, { recursive: true, force: true });
+});
+
+
 test('AuditLogger rotates bounded logs while preserving metadata-only records', async () => {
   const rotatingPath = path.join(TEST_AREA, 'audit-rotate.jsonl');
   for (const suffix of ['', '.1', '.2']) await rm(rotatingPath + suffix, { force: true });

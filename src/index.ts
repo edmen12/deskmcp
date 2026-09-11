@@ -51,7 +51,7 @@ const agentDesktop = new AgentDesktopManager(
 await agentDesktop.init();
 const browser = new BrowserRuntime(
   resolveDeskMcpStateRoot('browser'),
-  new OwnedBrowserProcessController(bridge, processSessions),
+  new OwnedBrowserProcessController(bridge, processSessions, agentDesktop),
   artifactStore,
   undefined,
   undefined,

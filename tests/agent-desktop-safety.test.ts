@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,8 +9,41 @@ import type { AgentDesktopNativeBridge } from '../src/agent-desktop-native.js';
 import { AgentDesktopManager } from '../src/agent-desktop-state.js';
 
 async function writeJson(pathname: string, value: unknown): Promise<void> {
-  await writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  const temp = `${pathname}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+  await rename(temp, pathname);
 }
+
+async function deadPid(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
+  const pid = child.pid;
+  assert.ok(pid);
+  await new Promise<void>((resolve, reject) => {
+    child.once('exit', () => resolve());
+    child.once('error', reject);
+  });
+  return pid;
+}
+
+test('Agent Desktop init reclaims a dead-owner control lock instead of remaining permanently busy', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-stale-lock-'));
+  try {
+    const lockDir = path.join(root, 'control.lock');
+    await mkdir(lockDir);
+    await writeJson(path.join(lockDir, 'owner.json'), {
+      schema_version: 1,
+      pid: await deadPid(),
+      token: randomUUID(),
+      created_at: new Date(Date.now() - 60_000).toISOString()
+    });
+
+    const manager = new AgentDesktopManager(root, {} as AgentDesktopNativeBridge);
+    await manager.init();
+    await assert.rejects(stat(lockDir), (error: NodeJS.ErrnoException) => error.code === 'ENOENT');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('Agent Desktop lease stays valid while native guard is armed but HUD is hidden on Desktop 1', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-'));

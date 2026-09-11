@@ -105,6 +105,27 @@ test('reattach by discovery requires exact context id plus exact label confirmat
   });
 });
 
+test('concurrent context reattach preserves both capabilities across store instances', async () => {
+  await withStore(async (store, root) => {
+    const second = new TaskContextStore(root);
+    await second.init();
+    const room = await store.createContext(WORKSPACE_A, 'shared recovery room');
+    const task = await store.createTask(room.context_handle, WORKSPACE_A, {
+      title: 'Shared recovery task',
+      goal: 'Preserve every concurrently issued context capability.',
+      completion_conditions: ['both reattach handles remain valid']
+    });
+
+    const [left, right] = await Promise.all([
+      store.reattachContext(WORKSPACE_A, { task_id: task.id }),
+      second.reattachContext(WORKSPACE_A, { task_id: task.id })
+    ]);
+    assert.notEqual(left.context_handle, right.context_handle);
+    assert.equal((await store.getTask(left.context_handle, WORKSPACE_A, task.id)).id, task.id);
+    assert.equal((await second.getTask(right.context_handle, WORKSPACE_A, task.id)).id, task.id);
+  });
+});
+
 test('same task room preserves one serialized mutation queue for concurrent agents', async () => {
   await withStore(async store => {
     const room = await store.createContext(WORKSPACE_A, 'concurrent room');

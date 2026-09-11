@@ -1,8 +1,10 @@
-import { appendFile, mkdir, rename, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import { PROJECT_ROOT } from './paths.js';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 import type { PermissionProfile } from './desktop-policy.js';
 
 export type AuditOutcome = 'allow' | 'deny' | 'fail';
@@ -38,6 +40,9 @@ export interface AuditOperation {
   readonly target?: string;
 }
 
+const AUDIT_LOCK_TIMEOUT_MS = 5_000;
+const AUDIT_LOCK_INITIALIZATION_GRACE_MS = 5_000;
+
 export class AuditLogger {
   readonly filePath: string;
   private writeChain: Promise<void> = Promise.resolve();
@@ -65,6 +70,18 @@ export class AuditLogger {
     return `${this.filePath}.${index}`;
   }
 
+  private get mutationLockPath(): string {
+    return `${this.filePath}.lock`;
+  }
+
+  private async acquireMutationLock(): Promise<PidDirectoryLockLease> {
+    return acquirePidDirectoryLock(this.mutationLockPath, {
+      label: 'Audit log',
+      timeoutMs: AUDIT_LOCK_TIMEOUT_MS,
+      initializationGraceMs: AUDIT_LOCK_INITIALIZATION_GRACE_MS
+    });
+  }
+
   private async rotateIfNeeded(nextBytes: number): Promise<void> {
     let currentBytes = 0;
     try { currentBytes = (await stat(this.filePath)).size; }
@@ -75,12 +92,12 @@ export class AuditLogger {
 
     await rm(this.rotatedPath(this.maxBackups), { force: true });
     for (let index = this.maxBackups - 1; index >= 1; index--) {
-      try { await rename(this.rotatedPath(index), this.rotatedPath(index + 1)); }
+      try { await renameFileWithRetry(this.rotatedPath(index), this.rotatedPath(index + 1)); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
     }
-    try { await rename(this.filePath, this.rotatedPath(1)); }
+    try { await renameFileWithRetry(this.filePath, this.rotatedPath(1)); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -89,8 +106,14 @@ export class AuditLogger {
   private async append(record: AuditRecord): Promise<void> {
     const line = `${JSON.stringify(record)}\n`;
     const operation = this.writeChain.then(async () => {
-      await this.rotateIfNeeded(Buffer.byteLength(line, 'utf8'));
-      await appendFile(this.filePath, line, 'utf8');
+      let lock: PidDirectoryLockLease | undefined;
+      try {
+        lock = await this.acquireMutationLock();
+        await this.rotateIfNeeded(Buffer.byteLength(line, 'utf8'));
+        await appendFile(this.filePath, line, 'utf8');
+      } finally {
+        if (lock) await lock.release();
+      }
     });
     this.writeChain = operation.catch(() => undefined);
     await operation;

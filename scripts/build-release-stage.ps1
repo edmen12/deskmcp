@@ -91,6 +91,24 @@ foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.
 }
 $panelMachine = Get-PeMachine $publishedPanel
 Require ($panelMachine -eq $TargetConfig.PeMachine) ('Control Panel PE architecture mismatch: 0x{0:X4}' -f $panelMachine)
+$hostTarget = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
+if ($Target -eq $hostTarget) {
+    Invoke-Native $publishedPanel @('--agent-control-lock-self-test')
+    $interopScript = Join-Path $ProjectRoot 'scripts\test-agent-control-lock-interop.mjs'
+    $previousControlPanelExe = $env:DESKMCP_CONTROL_PANEL_EXE
+    try {
+        $env:DESKMCP_CONTROL_PANEL_EXE = $publishedPanel
+        Invoke-Native $hostNode @($interopScript)
+    }
+    finally {
+        if ($null -eq $previousControlPanelExe) { Remove-Item Env:DESKMCP_CONTROL_PANEL_EXE -ErrorAction SilentlyContinue }
+        else { $env:DESKMCP_CONTROL_PANEL_EXE = $previousControlPanelExe }
+    }
+    Write-Output 'AGENT_CONTROL_LOCK_RELEASE_INTEROP=PASS'
+}
+else {
+    Write-Output ('AGENT_CONTROL_LOCK_RELEASE_INTEROP=SKIP cross-architecture target=' + $Target + ' host=' + $hostTarget)
+}
 
 & (Join-Path $PSScriptRoot 'build-process-host.ps1') -Target $Target
 $processHostExe = Join-Path $ProcessHostPublish 'DeskMCP.ProcessHost.exe'

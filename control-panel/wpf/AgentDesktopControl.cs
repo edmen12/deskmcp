@@ -850,8 +850,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
 
     private void RevokeControl(string leaseId)
     {
-        FileStream controlLock = AcquireControlLock();
-        try
+        using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
         {
             AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath) ?? new AgentDesktopControlPoolDocument
             {
@@ -867,17 +866,11 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             state.Generation = checked(state.Generation + 1);
             WriteControlPool(state);
         }
-        finally
-        {
-            try { controlLock.Dispose(); } catch { }
-            try { if (File.Exists(lockPath)) File.Delete(lockPath); } catch { }
-        }
     }
 
     private void RevokeAllControls()
     {
-        FileStream controlLock = AcquireControlLock();
-        try
+        using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
         {
             AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath) ?? new AgentDesktopControlPoolDocument
             {
@@ -892,28 +885,6 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 Generation = nextGeneration,
                 Controls = new List<AgentDesktopControlDocument>()
             });
-        }
-        finally
-        {
-            try { controlLock.Dispose(); } catch { }
-            try { if (File.Exists(lockPath)) File.Delete(lockPath); } catch { }
-        }
-    }
-
-    private FileStream AcquireControlLock()
-    {
-        DateTime deadline = DateTime.UtcNow.AddMilliseconds(LockTimeoutMs);
-        while (true)
-        {
-            try
-            {
-                return new FileStream(lockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128, FileOptions.WriteThrough);
-            }
-            catch (IOException)
-            {
-                if (DateTime.UtcNow >= deadline) throw new IOException("Agent Desktop control lock is busy.");
-                Thread.Sleep(25);
-            }
         }
     }
 

@@ -148,24 +148,49 @@ internal sealed partial class ControlPanelRuntime
         return Path.Combine(dataRoot, "updates", "pending-verification.json");
     }
 
+    private static bool IsTrustedUpdateDirectory(string directory)
+    {
+        try
+        {
+            FileAttributes attributes = File.GetAttributes(directory);
+            return (attributes & FileAttributes.Directory) != 0 && (attributes & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+    }
+
+    private static void EnsureTrustedUpdateDirectory(string directory)
+    {
+        if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+        if (!IsTrustedUpdateDirectory(directory))
+            throw new IOException("Update directory is a reparse point or is otherwise unsafe: " + directory);
+    }
+
+    private static void CleanupUpdateDirectoryNoReparse(string directory)
+    {
+        foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+        {
+            if (file.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) ||
+                file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                DeleteQuietly(file);
+        }
+        foreach (string child in Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly))
+        {
+            if (!IsTrustedUpdateDirectory(child)) continue;
+            CleanupUpdateDirectoryNoReparse(child);
+            try { if (Directory.GetFileSystemEntries(child).Length == 0) Directory.Delete(child); } catch { }
+        }
+    }
+
     private void CleanupStaleUpdateDownloads()
     {
         string root = Path.Combine(dataRoot, "updates");
         if (!Directory.Exists(root)) return;
         try
         {
-            foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-            {
-                if (file.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) ||
-                    file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                    DeleteQuietly(file);
-            }
-            string[] directories = Directory.GetDirectories(root, "*", SearchOption.AllDirectories);
-            Array.Sort(directories, delegate(string a, string b) { return b.Length.CompareTo(a.Length); });
-            foreach (string directory in directories)
-            {
-                try { if (Directory.GetFileSystemEntries(directory).Length == 0) Directory.Delete(directory); } catch { }
-            }
+            if (!IsTrustedUpdateDirectory(root))
+                throw new IOException("Update root is a reparse point; stale-download cleanup was skipped.");
+            CleanupUpdateDirectoryNoReparse(root);
         }
         catch (Exception ex) { LogRuntimeError("Stale update download cleanup failed.", ex); }
     }
@@ -367,8 +392,12 @@ internal sealed partial class ControlPanelRuntime
         if (!IsCandidateForInstalledClient(candidate, CurrentProductVersion(), InstalledUpdateTarget(), out validationReason)) throw new InvalidDataException(validationReason);
 
         string versionPart = String.IsNullOrWhiteSpace(candidate.version) ? "unknown" : "v" + candidate.version;
-        string updateDir = Path.Combine(dataRoot, "updates", versionPart, candidate.target ?? InstalledUpdateTarget());
-        Directory.CreateDirectory(updateDir);
+        string updatesRoot = Path.Combine(dataRoot, "updates");
+        EnsureTrustedUpdateDirectory(updatesRoot);
+        string versionDir = Path.Combine(updatesRoot, versionPart);
+        EnsureTrustedUpdateDirectory(versionDir);
+        string updateDir = Path.Combine(versionDir, candidate.target ?? InstalledUpdateTarget());
+        EnsureTrustedUpdateDirectory(updateDir);
         long expectedSize = candidate.sizeBytes.Value;
         EnsureUpdateDownloadCapacity(updateDir, expectedSize);
         string finalPath = Path.Combine(updateDir, candidate.artifact);

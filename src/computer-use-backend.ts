@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +8,7 @@ import { PROJECT_ROOT } from './paths.js';
 
 export const WINAPP_VERSION = 'v0.5.0';
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
 
 export interface ComputerWindow {
   readonly hwnd: number;
@@ -80,6 +81,38 @@ function extractJson(value: string): unknown {
   } catch {
     throw new Error('Computer backend returned invalid JSON.');
   }
+}
+
+function recordValue(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} is invalid.`);
+  return value as Record<string, unknown>;
+}
+
+function parseComputerWindows(value: unknown): ComputerWindow[] {
+  if (!Array.isArray(value)) throw new Error('Computer backend window list is invalid.');
+  return value.map((raw, index) => {
+    const item = recordValue(raw, `Computer backend window ${index}`);
+    if (
+      !Number.isSafeInteger(item.hwnd) || Number(item.hwnd) <= 0
+      || !Number.isSafeInteger(item.processId) || Number(item.processId) <= 0
+      || typeof item.processName !== 'string' || item.processName.length === 0 || item.processName.length > 1024
+      || typeof item.width !== 'number' || !Number.isFinite(item.width) || item.width <= 0 || item.width > 100_000
+      || typeof item.height !== 'number' || !Number.isFinite(item.height) || item.height <= 0 || item.height > 100_000
+      || typeof item.isForeground !== 'boolean'
+      || (item.title !== undefined && typeof item.title !== 'string')
+      || (item.className !== undefined && typeof item.className !== 'string')
+    ) throw new Error(`Computer backend window ${index} fields are invalid.`);
+    return {
+      hwnd: Number(item.hwnd),
+      processId: Number(item.processId),
+      processName: item.processName,
+      ...(typeof item.title === 'string' ? { title: item.title } : {}),
+      ...(typeof item.className === 'string' ? { className: item.className } : {}),
+      width: item.width,
+      height: item.height,
+      isForeground: item.isForeground
+    };
+  });
 }
 
 export function sanitizeUiElementForMcp(value: UiElementSummary): UiElementSummary {
@@ -227,20 +260,32 @@ export class WinAppComputerBackend {
   async listWindows(app?: string): Promise<ComputerWindow[]> {
     const args = ['ui', 'list-windows'];
     if (app) args.push('-a', app);
-    const raw = await this.runJson<ComputerWindow[]>(args);
-    return raw.filter(window => Number.isSafeInteger(window.hwnd) && window.hwnd > 0 && window.width > 0 && window.height > 0);
+    return parseComputerWindows(await this.runJson<unknown>(args));
   }
 
   async inspect(hwnd: number, interactiveOnly = true, maxElements = 80): Promise<WindowInspection> {
     const args = ['ui', 'inspect', '-w', String(hwnd), '--depth', interactiveOnly ? '8' : '5'];
     if (interactiveOnly) args.push('--interactive');
-    const raw = await this.runJson<{ windows?: Array<{ hwnd: number; title?: string; elements?: unknown[] }> }>(args, 12_000);
-    const window = raw.windows?.find(item => item.hwnd === hwnd) ?? raw.windows?.[0];
+    const raw = recordValue(await this.runJson<unknown>(args, 12_000), 'Computer backend inspection');
+    if (!Array.isArray(raw.windows)) throw new Error('Computer backend inspection windows are invalid.');
+    const windows = raw.windows.map((value, index) => {
+      const item = recordValue(value, `Computer backend inspection window ${index}`);
+      if (!Number.isSafeInteger(item.hwnd) || Number(item.hwnd) <= 0) throw new Error('Computer backend inspection HWND is invalid.');
+      if (item.title !== undefined && typeof item.title !== 'string') throw new Error('Computer backend inspection title is invalid.');
+      if (item.elements !== undefined && !Array.isArray(item.elements)) throw new Error('Computer backend inspection elements are invalid.');
+      return {
+        hwnd: Number(item.hwnd),
+        ...(typeof item.title === 'string' ? { title: item.title } : {}),
+        elements: Array.isArray(item.elements) ? item.elements : []
+      };
+    });
+    const window = windows.find(item => item.hwnd === hwnd) ?? windows[0];
     if (!window) throw new Error('Target window no longer exists.');
+    if (window.hwnd !== hwnd) throw new Error('Computer backend inspection did not return the requested window.');
     return {
       hwnd: window.hwnd,
       ...(window.title ? { title: window.title } : {}),
-      elements: flattenUiElementsForMcp(window.elements ?? [], maxElements)
+      elements: flattenUiElementsForMcp(window.elements, maxElements)
     };
   }
 
@@ -252,13 +297,26 @@ export class WinAppComputerBackend {
       const args = ['ui', 'screenshot', '-w', String(hwnd), '--output', output];
       if (options.captureScreen) args.push('--capture-screen');
       else if (options.focus) args.push('--focus');
-      const metadata = await this.runJson<{ width: number; height: number; hwnd: number; windowTitle?: string }>(args, 15_000);
+      const metadata = recordValue(await this.runJson<unknown>(args, 15_000), 'Computer backend screenshot metadata');
+      if (
+        !Number.isSafeInteger(metadata.hwnd) || Number(metadata.hwnd) !== hwnd
+        || typeof metadata.width !== 'number' || !Number.isFinite(metadata.width) || metadata.width <= 0 || metadata.width > 100_000
+        || typeof metadata.height !== 'number' || !Number.isFinite(metadata.height) || metadata.height <= 0 || metadata.height > 100_000
+        || (metadata.windowTitle !== undefined && typeof metadata.windowTitle !== 'string')
+      ) throw new Error('Computer backend screenshot metadata fields are invalid.');
+      const info = await stat(output);
+      if (!info.isFile()) throw new Error('Computer backend screenshot output is not a regular file.');
+      if (info.size <= 0 || info.size > MAX_SCREENSHOT_BYTES) throw new Error('Computer backend screenshot exceeded the DeskMCP safety limit.');
+      const data = await readFile(output);
+      if (data.length < 8 || !data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+        throw new Error('Computer backend screenshot is not a valid PNG payload.');
+      }
       return {
-        data: await readFile(output),
+        data,
         width: metadata.width,
         height: metadata.height,
-        hwnd: metadata.hwnd,
-        ...(metadata.windowTitle ? { title: metadata.windowTitle } : {})
+        hwnd: Number(metadata.hwnd),
+        ...(typeof metadata.windowTitle === 'string' && metadata.windowTitle ? { title: metadata.windowTitle } : {})
       };
     } finally {
       await rm(output, { force: true }).catch(() => undefined);

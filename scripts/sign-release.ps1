@@ -57,7 +57,7 @@ Write-Output 'STEP=post-sign-installer-smoke'
 & (Join-Path $PSScriptRoot 'test-installer-release.ps1') -Target $Target
 if ($LASTEXITCODE -ne 0) { throw "Post-sign installer smoke failed: $LASTEXITCODE" }
 Write-Output 'STEP=release-metadata'
-& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $Setup -Version $Version -Target $Target
+& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $Setup -Version $Version -Target $Target -ReleaseStageSmokePassed -InstallerSmokePassed
 if ($LASTEXITCODE -ne 0) { throw "Release metadata generation failed: $LASTEXITCODE" }
 Write-Output 'STEP=release-readiness'
 & (Join-Path $PSScriptRoot 'check-release-readiness.ps1') -RequireSigned -Target $Target

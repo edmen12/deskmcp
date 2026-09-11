@@ -4,6 +4,7 @@ interface ObservationRecord {
   readonly id: string;
   readonly windowId: string;
   readonly generation: number;
+  readonly globalGeneration: number;
   readonly createdAt: number;
 }
 
@@ -17,6 +18,7 @@ export class ComputerObservationError extends Error {
 export class ComputerObservationRegistry {
   private readonly records = new Map<string, ObservationRecord>();
   private readonly generations = new Map<string, number>();
+  private globalGeneration = 0;
 
   constructor(
     readonly maxRecords = 256,
@@ -42,6 +44,7 @@ export class ComputerObservationRegistry {
       id,
       windowId,
       generation: this.generations.get(windowId) ?? 0,
+      globalGeneration: this.globalGeneration,
       createdAt: now
     });
     return id;
@@ -65,10 +68,16 @@ export class ComputerObservationRegistry {
         'Computer observation is stale because another UI action already changed this window. Take a fresh desktop_ui_snapshot.'
       );
     }
+    if (record.globalGeneration !== this.globalGeneration) {
+      throw new ComputerObservationError(
+        'Computer observation is stale because global mouse or keyboard input changed desktop state. Take a fresh desktop_ui_snapshot.'
+      );
+    }
   }
 
-  advance(windowId: string): void {
+  advance(windowId: string, globalInput = false): void {
     this.generations.set(windowId, (this.generations.get(windowId) ?? 0) + 1);
+    if (globalInput) this.globalGeneration += 1;
   }
 
   forgetWindow(windowId: string): void {
@@ -81,6 +90,7 @@ export class ComputerObservationRegistry {
   clear(): void {
     this.records.clear();
     this.generations.clear();
+    this.globalGeneration = 0;
   }
 
   private prune(now: number): void {

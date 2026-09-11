@@ -26,6 +26,7 @@ internal sealed class InstallOptions
     public bool CreateShortcuts;
     public bool LaunchAfterInstall;
     public bool SimulateFailureAfterBackup;
+    public bool SimulateFailureAfterActivation;
 }
 
 internal static class InstallerEngine
@@ -59,10 +60,14 @@ internal static class InstallerEngine
         string finalDir = Path.GetFullPath(options.InstallDir);
         string parent = Path.GetDirectoryName(finalDir);
         Directory.CreateDirectory(parent);
+        if (Directory.Exists(finalDir) && IsReparseDirectory(finalDir))
+            throw new IOException("DeskMCP install directory is a reparse point; refusing unsafe installation.");
         RecoverInterruptedInstall(finalDir);
         string tempDir = finalDir + ".install-" + Guid.NewGuid().ToString("N");
         string backupDir = finalDir + ".backup-" + Guid.NewGuid().ToString("N");
         bool backedUp = false;
+        bool activatedNew = false;
+        bool installCommitted = false;
         try
         {
             progress(3, "Verifying installation package…");
@@ -78,31 +83,50 @@ internal static class InstallerEngine
             if (options.SimulateFailureAfterBackup)
                 throw new InvalidOperationException("Simulated install failure after backup.");
             MoveDirectoryWithRetry(tempDir, finalDir, "activate the new DeskMCP installation");
+            activatedNew = true;
+            if (options.SimulateFailureAfterActivation)
+                throw new InvalidOperationException("Simulated install failure after activation.");
             progress(88, "Creating shortcuts…");
             if (options.CreateShortcuts) ConfigureShortcuts(finalDir, options.AutoStart);
             progress(93, "Registering DeskMCP…");
             if (options.RegisterUninstall) RegisterUninstaller(finalDir);
             if (backedUp) DeleteDirectoryBestEffort(backupDir);
+            installCommitted = true;
             progress(100, "DeskMCP is installed.");
-            if (options.LaunchAfterInstall)
-            {
-                ProcessStartInfo psi = new ProcessStartInfo(Path.Combine(finalDir, "DeskMCP.exe"));
-                psi.WorkingDirectory = finalDir;
-                psi.UseShellExecute = true;
-                Process.Start(psi);
-            }
         }
         catch
         {
-            if (backedUp && Directory.Exists(backupDir))
+            if (!installCommitted)
             {
-                try { DeleteDirectoryBestEffort(finalDir); MoveDirectoryWithRetry(backupDir, finalDir, "restore the previous DeskMCP installation"); } catch { }
+                if (backedUp && Directory.Exists(backupDir))
+                {
+                    try { DeleteDirectoryBestEffort(finalDir); MoveDirectoryWithRetry(backupDir, finalDir, "restore the previous DeskMCP installation"); } catch { }
+                }
+                else if (activatedNew)
+                {
+                    DeleteDirectoryBestEffort(finalDir);
+                }
             }
             throw;
         }
         finally
         {
             DeleteDirectoryBestEffort(tempDir);
+        }
+
+        if (options.LaunchAfterInstall)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(Path.Combine(finalDir, "DeskMCP.exe"));
+                psi.WorkingDirectory = finalDir;
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+            }
+            catch
+            {
+                progress(100, "DeskMCP is installed, but it could not be opened automatically.");
+            }
         }
     }
 
@@ -111,6 +135,8 @@ internal static class InstallerEngine
         string finalDir = Path.GetFullPath(installDir);
         string parent = Path.GetDirectoryName(finalDir);
         if (String.IsNullOrEmpty(parent) || !Directory.Exists(parent)) return;
+        if (Directory.Exists(finalDir) && IsReparseDirectory(finalDir))
+            throw new IOException("DeskMCP install directory is a reparse point; refusing unsafe recovery.");
         string name = Path.GetFileName(finalDir);
 
         foreach (string temp in Directory.GetDirectories(parent, name + ".install-*"))
@@ -140,7 +166,12 @@ internal static class InstallerEngine
 
     private static bool IsValidPayload(string root)
     {
-        try { VerifyPayload(root); return true; }
+        try
+        {
+            if (IsReparseDirectory(root)) return false;
+            VerifyPayload(root);
+            return true;
+        }
         catch { return false; }
     }
 
@@ -420,10 +451,22 @@ internal static class InstallerEngine
         throw new IOException("Could not " + action + " within 30 seconds while waiting for transient Windows file locks to clear. Last error: " + lastMessage, last);
     }
 
+    private static bool IsReparseDirectory(string path)
+    {
+        if (String.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return false;
+        FileAttributes attributes = File.GetAttributes(path);
+        return (attributes & FileAttributes.Directory) != 0 && (attributes & FileAttributes.ReparsePoint) != 0;
+    }
+
     private static void DeleteDirectoryBestEffort(string path)
     {
         if (String.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
-        try { Directory.Delete(path, true); } catch { }
+        try
+        {
+            if (IsReparseDirectory(path)) Directory.Delete(path, false);
+            else Directory.Delete(path, true);
+        }
+        catch { }
     }
 }
 internal sealed class RoundedButton : Button
@@ -809,7 +852,7 @@ internal static class InstallerProgram
                     }
                     catch (Exception ex) { WriteTestFailure("INSTALL_CURRENT_USER_ERROR", ex); return 14; }
                 }
-                if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup"))
+                if (args.Length >= 2 && (args[0] == "--install-test" || args[0] == "--install-test-fail-after-backup" || args[0] == "--install-test-fail-after-activation"))
                 {
                     try
                     {
@@ -820,6 +863,7 @@ internal static class InstallerProgram
                         test.CreateShortcuts = false;
                         test.LaunchAfterInstall = false;
                         test.SimulateFailureAfterBackup = args[0] == "--install-test-fail-after-backup";
+                        test.SimulateFailureAfterActivation = args[0] == "--install-test-fail-after-activation";
                         InstallerEngine.Install(test, delegate { });
                         return 0;
                     }

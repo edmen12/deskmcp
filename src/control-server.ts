@@ -1,7 +1,8 @@
 import net, { type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { unlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, unlink } from 'node:fs/promises';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 
 export interface RunningControlServer {
   readonly pipeName: string;
@@ -14,12 +15,34 @@ function validatePort(port: number): void {
   }
 }
 
+function unixControlDirectory(): string {
+  if (process.platform === 'win32') throw new Error('Unix control directory is unavailable on Windows.');
+  if (typeof process.getuid !== 'function') throw new Error('DeskMCP cannot determine the current Unix user id.');
+  return path.join(tmpdir(), `deskmcp-${process.getuid()}`);
+}
+
+async function ensureUnixControlDirectory(): Promise<void> {
+  if (process.platform === 'win32') return;
+  const directory = unixControlDirectory();
+  try {
+    await mkdir(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const info = await lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('DeskMCP Unix control directory is not a trusted directory.');
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new Error('DeskMCP Unix control directory is owned by another user.');
+  }
+  await chmod(directory, 0o700);
+}
+
 export function controlPipeName(port: number): string {
   validatePort(port);
   if (process.platform === 'win32') {
     return `\\\\.\\pipe\\desktop-mcp-gateway-${port}`;
   }
-  return path.join(tmpdir(), `desktop-mcp-gateway-${port}.sock`);
+  return path.join(unixControlDirectory(), `desktop-mcp-gateway-${port}.sock`);
 }
 function handleSocket(
   socket: Socket,
@@ -64,24 +87,76 @@ async function removeUnixSocket(pipeName: string): Promise<void> {
   }
 }
 
+async function unixSocketIsLive(pipeName: string): Promise<boolean> {
+  if (process.platform === 'win32') return false;
+  return new Promise<boolean>((resolve, reject) => {
+    const socket = net.createConnection(pipeName);
+    let settled = false;
+    const finish = (error: Error | undefined, live: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(live);
+    };
+    const timer = setTimeout(() => finish(new Error(`Timed out probing DeskMCP control socket: ${pipeName}`), false), 1000);
+    timer.unref?.();
+    socket.once('connect', () => finish(undefined, true));
+    socket.once('error', error => {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ECONNREFUSED') finish(undefined, false);
+      else finish(error, false);
+    });
+  });
+}
+
+async function acquireUnixStartupLock(pipeName: string): Promise<PidDirectoryLockLease | undefined> {
+  if (process.platform === 'win32') return undefined;
+  return acquirePidDirectoryLock(`${pipeName}.startup-lock`, {
+    label: 'DeskMCP local control socket startup',
+    timeoutMs: 5_000,
+    initializationGraceMs: 5_000
+  });
+}
+
 export async function startControlServer(
   port: number,
   onShutdown: () => void | Promise<void>
 ): Promise<RunningControlServer> {
+  await ensureUnixControlDirectory();
   const pipeName = controlPipeName(port);
-  await removeUnixSocket(pipeName);
-
   const server: Server = net.createServer(socket => {
     handleSocket(socket, onShutdown);
   });
+  let bound = false;
+  const startupLock = await acquireUnixStartupLock(pipeName);
+  try {
+    if (process.platform !== 'win32') {
+      if (await unixSocketIsLive(pipeName)) {
+        throw new Error(`DeskMCP local control socket is already active: ${pipeName}`);
+      }
+      await removeUnixSocket(pipeName);
+    }
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(pipeName, () => {
-      server.off('error', reject);
-      resolve();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(pipeName, () => {
+        server.off('error', reject);
+        resolve();
+      });
     });
-  });
+    bound = true;
+    if (process.platform !== 'win32') await chmod(pipeName, 0o600);
+  } catch (error) {
+    if (bound) {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      await removeUnixSocket(pipeName).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    if (startupLock) await startupLock.release();
+  }
 
   let closed = false;
   return {
@@ -89,10 +164,15 @@ export async function startControlServer(
     async close() {
       if (closed) return;
       closed = true;
-      await new Promise<void>((resolve, reject) => {
-        server.close(error => error ? reject(error) : resolve());
-      });
-      await removeUnixSocket(pipeName);
+      const closeLock = await acquireUnixStartupLock(pipeName);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close(error => error ? reject(error) : resolve());
+        });
+        await removeUnixSocket(pipeName);
+      } finally {
+        if (closeLock) await closeLock.release();
+      }
     }
   };
 }

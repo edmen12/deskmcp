@@ -85,7 +85,7 @@ export function prepareAgentDesktopAction(action: UiAction): UiAction {
         throw new RequiresForegroundInputError('system-wide key injection is never allowed in Agent Desktop background mode.');
       }
       if (action.transport === 'send-input') {
-        throw new RequiresForegroundInputError('SendInput is disabled in Agent Desktop background mode. Use post-message or set_value.');
+        throw new RequiresForegroundInputError('SendInput is disabled in Agent Desktop background mode. Use window-targeted keyboard delivery or set_value.');
       }
       return { ...action, transport: 'post-message', allowSystemKeys: false };
     case 'click':
@@ -94,6 +94,21 @@ export function prepareAgentDesktopAction(action: UiAction): UiAction {
       throw new RequiresForegroundInputError('physical mouse hover is disabled in Agent Desktop background mode.');
     case 'drag':
       throw new RequiresForegroundInputError('physical drag is disabled in Agent Desktop background mode.');
+  }
+}
+
+function usesGlobalDesktopInput(action: UiAction): boolean {
+  switch (action.type) {
+    case 'click':
+    case 'hover':
+    case 'drag':
+      return true;
+    case 'scroll':
+      return action.wheel !== undefined;
+    case 'send_keys':
+      return action.transport !== 'post-message';
+    default:
+      return false;
   }
 }
 
@@ -315,7 +330,7 @@ export function registerComputerUseTools(
         direction: z.enum(['up', 'down', 'left', 'right']).optional(),
         to: z.enum(['top', 'bottom']).optional(),
         wheel: z.number().int().min(-100).max(100).optional(),
-        transport: z.enum(['post-message', 'send-input']).optional(),
+        transport: z.literal('send-input').optional().describe('Remote callers may request normal SendInput only. DeskMCP may select a restricted window-targeted transport internally for Agent Desktop background mode.'),
         verbatim: z.boolean().optional().default(false),
         allow_system_keys: z.boolean().optional().default(false),
         from: z.string().min(1).max(512).optional(),
@@ -347,7 +362,7 @@ export function registerComputerUseTools(
       runtime.observations.consume(input.computer_observation_id, input.window_id);
       // Invalidate every sibling observation before attempting the action. Even a
       // backend error can be partial, so all clients must re-observe afterward.
-      runtime.observations.advance(input.window_id);
+      runtime.observations.advance(input.window_id, usesGlobalDesktopInput(action));
 
       await runtime.backend.act(target.hwnd, action);
       if (input.agent_desktop_lease_id) await agentDesktop!.assertLease(input.agent_desktop_lease_id);

@@ -3,12 +3,13 @@ import {
   mkdir,
   readFile,
   readdir,
-  rename,
   rm,
   stat,
   writeFile
 } from 'node:fs/promises';
 import path from 'node:path';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 
 export const TASK_SCHEMA_VERSION = 1;
 export const TASK_PHASES = ['check', 'execute', 'verify', 'closeout'] as const;
@@ -33,6 +34,8 @@ const MAX_REVIEW_ITEMS = 64;
 const MAX_EVENTS = 256;
 const MAX_EVENT_SUMMARY_BYTES = 4 * 1024;
 const MAX_STATE_FILE_BYTES = 8 * 1024 * 1024;
+const TASK_LOCK_TIMEOUT_MS = 5_000;
+const TASK_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const TASK_ID_PATTERN = /^tsk_[0-9a-f]{16}$/u;
 const STEP_ID_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
@@ -314,15 +317,33 @@ export class RecoverableTaskStore {
     return path.join(this.root, `${validateTaskId(id)}.json`);
   }
 
+  private get mutationLockPath(): string {
+    return path.join(this.root, '.tasks.lock');
+  }
+
+  private async acquireMutationLock(): Promise<PidDirectoryLockLease> {
+    return acquirePidDirectoryLock(this.mutationLockPath, {
+      label: 'Recoverable task store',
+      timeoutMs: TASK_LOCK_TIMEOUT_MS,
+      initializationGraceMs: TASK_LOCK_INITIALIZATION_GRACE_MS
+    });
+  }
+
   private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.mutationChain;
     let release!: () => void;
     this.mutationChain = new Promise<void>(resolve => { release = resolve; });
     await previous;
+    let lock: PidDirectoryLockLease | undefined;
     try {
+      lock = await this.acquireMutationLock();
       return await operation();
     } finally {
-      release();
+      try {
+        if (lock) await lock.release();
+      } finally {
+        release();
+      }
     }
   }
 
@@ -345,7 +366,7 @@ export class RecoverableTaskStore {
     if (byteLength(payload) > MAX_STATE_FILE_BYTES) throw new Error(`Task state exceeds ${MAX_STATE_FILE_BYTES} bytes.`);
     await writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     try {
-      await rename(temporary, target);
+      await renameFileWithRetry(temporary, target);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
       throw error;
@@ -539,6 +560,9 @@ export class RecoverableTaskStore {
 
       if (input.status === 'pass') {
         if (verifiedFacts.length === 0) throw new Error('Passing final review requires at least one verified fact.');
+        if (openRisks.length > 0 || missingChecks.length > 0) {
+          throw new Error('Passing final review requires zero open risks and zero missing checks. Use failed review until they are resolved.');
+        }
         const incomplete = task.steps.filter(step => step.status !== 'completed').map(step => step.id);
         if (incomplete.length > 0) {
           throw new Error(`Passing final review requires all task steps completed: ${incomplete.join(', ')}.`);
@@ -566,6 +590,9 @@ export class RecoverableTaskStore {
     return this.mutate(id, (task, now) => {
       if (task.status !== 'active') throw new Error(`Task status must be active, got ${task.status}.`);
       if (task.final_review?.status !== 'pass') throw new Error('final_review must pass before complete.');
+      if (task.final_review.open_risks.length > 0 || task.final_review.missing_checks.length > 0) {
+        throw new Error('Task cannot complete while final review still has open risks or missing checks.');
+      }
       if (task.phase !== 'closeout') throw new Error('Task must reach closeout before completion.');
       task.status = 'completed';
       task.summary = task.final_review.summary;
