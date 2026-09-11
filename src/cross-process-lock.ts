@@ -385,6 +385,7 @@ export async function acquirePidDirectoryLock(lockDir: string, options: PidDirec
       let pendingTransition: TransitionLease | undefined;
       let canonicalRetired = false;
       let released = false;
+      let releaseTail: Promise<void> = Promise.resolve();
 
       const transitionMatchesOwnedRelease = async (transition: TransitionLease): Promise<'missing' | 'owned' | 'changed'> => {
         const observed = await observeTransition(lockDir, initializationGraceMs);
@@ -403,21 +404,26 @@ export async function acquirePidDirectoryLock(lockDir: string, options: PidDirec
       return {
         token,
         release: async () => {
-          if (released) return;
+          const previousRelease = releaseTail;
+          let unlockRelease!: () => void;
+          releaseTail = new Promise<void>(resolve => { unlockRelease = resolve; });
+          await previousRelease;
+          try {
+            if (released) return;
 
-          if (canonicalRetired) {
-            await rm(retiredPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 20 });
-            if (pendingTransition) {
-              const state = await transitionMatchesOwnedRelease(pendingTransition);
-              if (state === 'owned') await releaseTransition(lockDir, pendingTransition);
-              else if (state === 'changed') {
-                throw new Error(`${options.label} pending release transition ownership changed before retry.`);
+            if (canonicalRetired) {
+              await rm(retiredPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 20 });
+              if (pendingTransition) {
+                const state = await transitionMatchesOwnedRelease(pendingTransition);
+                if (state === 'owned') await releaseTransition(lockDir, pendingTransition);
+                // Once the canonical lock has been retired, a missing or changed
+                // transition means this lease no longer owns that marker. Do not
+                // delete a replacement transition owned by another operation.
+                pendingTransition = undefined;
               }
-              pendingTransition = undefined;
+              released = true;
+              return;
             }
-            released = true;
-            return;
-          }
 
           const releaseDeadline = Date.now() + timeoutMs;
           let transition = pendingTransition;
@@ -470,6 +476,9 @@ export async function acquirePidDirectoryLock(lockDir: string, options: PidDirec
           await releaseTransition(lockDir, transition);
           pendingTransition = undefined;
           released = true;
+          } finally {
+            unlockRelease();
+          }
         }
       };
     }

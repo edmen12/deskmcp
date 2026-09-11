@@ -109,6 +109,75 @@ test('post-release failure does not strand the transition after canonical retire
   });
 });
 
+test('concurrent release calls serialize and remain idempotent', async () => {
+  await withFixture(async (_root, lockDir) => {
+    let enteredResolve!: () => void;
+    let continueResolve!: () => void;
+    const entered = new Promise<void>(resolve => { enteredResolve = resolve; });
+    const continueRelease = new Promise<void>(resolve => { continueResolve = resolve; });
+    let held = false;
+    const lease = await acquirePidDirectoryLock(lockDir, {
+      label: 'concurrent release',
+      timeoutMs: 1000,
+      pollMs: 5,
+      testHooks: {
+        afterReleaseDirectoryRetired: async () => {
+          if (held) return;
+          held = true;
+          enteredResolve();
+          await continueRelease;
+        }
+      }
+    });
+
+    const first = lease.release();
+    await entered;
+    const second = lease.release();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    continueResolve();
+    await Promise.all([first, second]);
+    await assert.doesNotReject(lease.release());
+    assert.equal(await inspectPidDirectoryLock(lockDir), 'missing');
+  });
+});
+
+test('release retry after canonical retirement never deletes a replacement transition', async () => {
+  await withFixture(async (_root, lockDir) => {
+    const transitionDir = `${lockDir}.transition`;
+    const transitionOwnerPath = path.join(transitionDir, 'owner.json');
+    let replacementToken = '';
+    let injected = false;
+    const lease = await acquirePidDirectoryLock(lockDir, {
+      label: 'replacement transition',
+      timeoutMs: 1000,
+      pollMs: 5,
+      testHooks: {
+        afterReleaseDirectoryRetired: async () => {
+          if (injected) return;
+          injected = true;
+          const original = JSON.parse(await readFile(transitionOwnerPath, 'utf8')) as Record<string, unknown>;
+          replacementToken = randomUUID();
+          await rm(transitionDir, { recursive: true, force: true });
+          await mkdir(transitionDir);
+          await writeFile(transitionOwnerPath, `${JSON.stringify({
+            ...original,
+            token: replacementToken,
+            created_at: new Date().toISOString()
+          })}\n`, 'utf8');
+          throw new Error('INJECTED_REPLACEMENT_TRANSITION');
+        }
+      }
+    });
+
+    await assert.rejects(lease.release(), /release failed and transition release also failed/i);
+    await assert.doesNotReject(lease.release());
+    const replacement = JSON.parse(await readFile(transitionOwnerPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(replacement.token, replacementToken);
+    await rm(transitionDir, { recursive: true, force: true });
+    assert.equal(await inspectPidDirectoryLock(lockDir), 'missing');
+  });
+});
+
 test('invalid owner metadata fails closed', async () => {
   await withFixture(async (_root, lockDir) => {
     await mkdir(lockDir);
