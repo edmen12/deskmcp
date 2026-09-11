@@ -1,8 +1,9 @@
 import { Client, StreamableHTTPClientTransport, type Tool } from '@modelcontextprotocol/client';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 
 const REGISTRY_SCHEMA_VERSION = 1;
 const MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
@@ -384,16 +385,7 @@ export class DynamicMcpHub {
     const temp = path.join(this.root, `.servers.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
     await writeFile(temp, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     try {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await rename(temp, this.registryPath);
-          break;
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (!['EACCES', 'EPERM', 'EBUSY'].includes(code ?? '') || attempt >= 5) throw error;
-          await new Promise(resolve => setTimeout(resolve, Math.min(25 * (2 ** attempt), 400)));
-        }
-      }
+      await renameFileWithRetry(temp, this.registryPath);
     } catch (error) {
       await rm(temp, { force: true }).catch(() => undefined);
       throw error;

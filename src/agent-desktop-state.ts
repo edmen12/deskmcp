@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 import type { AgentDesktopNativeBridge } from './agent-desktop-native.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -166,8 +167,13 @@ async function readJson(pathname: string): Promise<unknown | undefined> {
 
 async function atomicJson(pathname: string, value: unknown): Promise<void> {
   const temp = `${pathname}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-  await rename(temp, pathname);
+  try {
+    await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await renameFileWithRetry(temp, pathname);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function inactiveControl(generation: number): AgentDesktopControlState {

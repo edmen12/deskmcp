@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { renameFileWithRetry } from './fs-reliability.js';
 
 export type PidDirectoryLockState = 'missing' | 'initializing' | 'active' | 'stale' | 'recovering' | 'invalid';
 
@@ -118,7 +119,7 @@ async function writeJsonAtomically(directory: string, filename: string, payload:
   const tempPath = path.join(directory, `.${filename}.${token}.tmp`);
   try {
     await writeFile(tempPath, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await rename(tempPath, finalPath);
+    await renameFileWithRetry(tempPath, finalPath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw error;

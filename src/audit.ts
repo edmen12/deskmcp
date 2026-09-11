@@ -1,9 +1,10 @@
-import { appendFile, mkdir, rename, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import { PROJECT_ROOT } from './paths.js';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 import type { PermissionProfile } from './desktop-policy.js';
 
 export type AuditOutcome = 'allow' | 'deny' | 'fail';
@@ -91,12 +92,12 @@ export class AuditLogger {
 
     await rm(this.rotatedPath(this.maxBackups), { force: true });
     for (let index = this.maxBackups - 1; index >= 1; index--) {
-      try { await rename(this.rotatedPath(index), this.rotatedPath(index + 1)); }
+      try { await renameFileWithRetry(this.rotatedPath(index), this.rotatedPath(index + 1)); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
     }
-    try { await rename(this.filePath, this.rotatedPath(1)); }
+    try { await renameFileWithRetry(this.filePath, this.rotatedPath(1)); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }

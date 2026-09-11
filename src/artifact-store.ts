@@ -10,13 +10,13 @@ import {
   open,
   readFile,
   readdir,
-  rename,
   rm,
   stat,
   writeFile
 } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 import type { DesktopPolicy } from './desktop-policy.js';
 
 const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
@@ -371,7 +371,7 @@ export class ArtifactStore {
         };
         const temp = path.join(dir, '.metadata.tmp');
         await writeFile(temp, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-        await rename(temp, this.metadataPath(id));
+        await renameFileWithRetry(temp, this.metadataPath(id));
         return this.withUrl(metadata);
       } catch (error) {
         await rm(dir, { recursive: true, force: true }).catch(() => undefined);

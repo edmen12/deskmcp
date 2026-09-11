@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -395,7 +395,8 @@ test('browser set_files canonicalizes Workspace files and rejects paths outside 
       }
     });
     assert.equal(ok.isError, undefined);
-    assert.deepEqual(browser.lastActActions, [{ type: 'set_files', ref: 'e1', files: [allowed] }]);
+    const canonicalAllowed = await realpath(allowed);
+    assert.deepEqual(browser.lastActActions, [{ type: 'set_files', ref: 'e1', files: [canonicalAllowed] }]);
 
     const outsideRoot = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-browser-outside-'));
     try {

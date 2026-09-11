@@ -1,7 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 import {
   RecoverableTaskStore,
   type CheckpointInput,
@@ -253,8 +254,13 @@ export class TaskContextStore {
     const temporary = path.join(directory, `.context.${process.pid}.${Date.now()}.${randomBytes(4).toString('hex')}.tmp`);
     const payload = `${JSON.stringify(context, null, 2)}\n`;
     if (byteLength(payload) > MAX_CONTEXT_FILE_BYTES) throw new Error('Task context file exceeds size limit.');
-    await writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await rename(temporary, target);
+    try {
+      await writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      await renameFileWithRetry(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   private async listContextIds(): Promise<string[]> {

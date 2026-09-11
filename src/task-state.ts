@@ -3,13 +3,13 @@ import {
   mkdir,
   readFile,
   readdir,
-  rename,
   rm,
   stat,
   writeFile
 } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 
 export const TASK_SCHEMA_VERSION = 1;
 export const TASK_PHASES = ['check', 'execute', 'verify', 'closeout'] as const;
@@ -366,7 +366,7 @@ export class RecoverableTaskStore {
     if (byteLength(payload) > MAX_STATE_FILE_BYTES) throw new Error(`Task state exceeds ${MAX_STATE_FILE_BYTES} bytes.`);
     await writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     try {
-      await rename(temporary, target);
+      await renameFileWithRetry(temporary, target);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
       throw error;
