@@ -4,6 +4,33 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.11 — 2026-09-11
+
+### Changed
+
+- Unified crash-safe cross-process locking across shared Artifact, Dynamic MCP, Task Room, Skill, Audit, Browser profile, and Agent Desktop state.
+- Agent Desktop Node/WPF control locking now uses one PID + generation-token protocol with stale-owner recovery and cross-language interop validation.
+- Browser profile shutdown is fail-closed: profile ownership is retained if the owned browser process cannot be terminated, and concurrent lease release is serialized/idempotent.
+- Windows atomic metadata replacement retries transient filesystem contention instead of failing Agent Desktop/shared-state operations on a single `EPERM`, `EACCES`, or `EBUSY`.
+- Updater/Installer cleanup rejects or avoids reparse/junction traversal outside owned directories, and fresh-install post-activation failures remove the half-installed program directory.
+- Tunnel helper scripts resolve the verified release/runtime tunnel client instead of the removed legacy tools path.
+- Release metadata generation now requires explicit release-stage and installer-smoke attestations.
+- macOS service supervision distinguishes detached/external Gateway ownership from Panel-owned processes.
+
+### Fixed
+
+- Fixed cross-platform Browser `set_files` tests assuming the textual temporary path would equal its canonical filesystem path on GitHub runners.
+- Fixed a Browser/profile-lock race where concurrent release paths could observe a replaced transition and fail reconciliation after the canonical lock was already retired.
+- Fixed safe-test file writes allowing a local reparse/symlink to violate the fixed `test-area` containment promise.
+- Fixed release validation omitting several existing WPF runtime/update/tunnel/isolation self-tests from the standard validation gate.
+
+### Validation
+
+- Local DeskMCP 0.9.11 Gateway/runtime regression suite: 175 passed, 0 failed.
+- Windows x64, native Windows ARM64, and macOS ARM64 exact-main CI passed for the hardening merge before the release-version bump.
+- CodeQL Actions, JavaScript/TypeScript, C#, and Swift all passed on the hardening merge.
+- Exact-main unsigned Windows x64/ARM64 release candidates and macOS ARM64 Developer Preview were generated successfully before the 0.9.11 version bump; 0.9.11 candidates are rebuilt after this version-only release commit.
+
 ## 0.9.10 — 2026-09-09
 
 ### Changed
