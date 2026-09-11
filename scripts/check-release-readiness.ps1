@@ -113,6 +113,8 @@ if (Require-File $manifestPath 'Release manifest') {
     if ($manifest.target -eq $Target) { Pass ('Release manifest target: ' + $Target) } else { Block ('Release manifest target mismatch: ' + $manifest.target) }
     if ($manifest.architecture -eq $TargetConfig.Architecture) { Pass ('Release architecture: ' + $TargetConfig.Architecture) } else { Block ('Release architecture mismatch: ' + $manifest.architecture) }
     if ($manifest.artifact -eq (Split-Path $Setup -Leaf)) { Pass 'Release manifest artifact name matches Setup' } else { Block ('Release manifest artifact mismatch: ' + $manifest.artifact) }
+    if ($manifest.releaseStageSmoke -eq 'passed') { Pass 'Release-stage smoke attested in manifest' } else { Block 'Release manifest does not attest a passing release-stage smoke' }
+    if ($manifest.installerSmoke -eq 'passed') { Pass 'Installer smoke attested in manifest' } else { Block 'Release manifest does not attest a passing installer smoke' }
     if ($manifest.schemaVersion -eq 2) {
         Pass 'Release manifest update schema v2'
         if ($manifest.channel -eq 'stable') { Pass 'Update channel: stable' } else { Block ('Unexpected update channel: ' + $manifest.channel) }

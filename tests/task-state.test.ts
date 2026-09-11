@@ -72,8 +72,7 @@ test('recoverable task requires completed steps and evidence before completion',
     const reviewed = await store.finalReview(created.id, {
       status: 'pass',
       summary: 'All required checks passed.',
-      verified_facts: ['implementation test passed', 'regression test passed'],
-      open_risks: ['installer validation is outside this unit test']
+      verified_facts: ['implementation test passed', 'regression test passed']
     });
     assert.equal(reviewed.phase, 'closeout');
     assert.equal(reviewed.final_review?.status, 'pass');
@@ -84,6 +83,41 @@ test('recoverable task requires completed steps and evidence before completion',
     await assert.rejects(
       store.block(created.id, 'should not mutate'),
       /immutable/i
+    );
+  });
+});
+
+test('passing final review rejects any remaining open risks or missing checks', async () => {
+  await withStore(async store => {
+    const created = await store.create({
+      title: 'Strict final review',
+      goal: 'Do not declare completion while verification gaps remain.',
+      completion_conditions: ['review evidence is complete'],
+      steps: [{ id: 'verify', title: 'Verify result', phase: 'verify' }]
+    });
+    await store.checkpoint(created.id, {
+      step_id: 'verify',
+      status: 'completed',
+      summary: 'verification step completed'
+    });
+
+    await assert.rejects(
+      store.finalReview(created.id, {
+        status: 'pass',
+        summary: 'Looks good except for a known risk.',
+        verified_facts: ['core checks passed'],
+        open_risks: ['installer was not checked']
+      }),
+      /zero open risks and zero missing checks/i
+    );
+    await assert.rejects(
+      store.finalReview(created.id, {
+        status: 'pass',
+        summary: 'Looks good except for a missing check.',
+        verified_facts: ['core checks passed'],
+        missing_checks: ['macOS parity was not checked']
+      }),
+      /zero open risks and zero missing checks/i
     );
   });
 });
@@ -148,8 +182,10 @@ test('failed final review stays explicit and is cleared only after new checkpoin
   });
 });
 
-test('concurrent task checkpoints are serialized', async () => {
-  await withStore(async store => {
+test('concurrent task checkpoints are serialized across store instances', async () => {
+  await withStore(async (store, root) => {
+    const second = new RecoverableTaskStore(root);
+    await second.init();
     const created = await store.create({
       title: 'Concurrent clients',
       goal: 'Prevent two agents from claiming different current steps.',
@@ -162,7 +198,7 @@ test('concurrent task checkpoints are serialized', async () => {
 
     const results = await Promise.allSettled([
       store.checkpoint(created.id, { step_id: 'a', status: 'in_progress', summary: 'A running' }),
-      store.checkpoint(created.id, { step_id: 'b', status: 'in_progress', summary: 'B running' })
+      second.checkpoint(created.id, { step_id: 'b', status: 'in_progress', summary: 'B running' })
     ]);
     assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
     assert.equal(results.filter(result => result.status === 'rejected').length, 1);

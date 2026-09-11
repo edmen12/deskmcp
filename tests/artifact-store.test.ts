@@ -100,3 +100,47 @@ test('configured artifact base URL rejects non-HTTP schemes', () => {
     /must use HTTP or HTTPS/i
   );
 });
+
+
+test('configured artifact base URL requires HTTPS for non-loopback hosts and rejects URL credentials', () => {
+  const root = path.join(os.tmpdir(), 'deskmcp-artifact-url-policy');
+  assert.throws(
+    () => new ArtifactStore(root, 'http://example.com/artifacts'),
+    /HTTP only for loopback hosts|remote artifact URLs require HTTPS/i
+  );
+  assert.throws(
+    () => new ArtifactStore(root, 'https://user:secret@example.com/artifacts'),
+    /must not contain URL credentials/i
+  );
+  assert.doesNotThrow(() => new ArtifactStore(root, 'http://localhost:8765'));
+  assert.doesNotThrow(() => new ArtifactStore(root, 'http://127.0.0.2:8765'));
+  assert.doesNotThrow(() => new ArtifactStore(root, 'https://example.com/artifacts'));
+});
+
+test('local artifact base URL also rejects non-loopback HTTP', () => {
+  const store = new ArtifactStore(path.join(os.tmpdir(), 'deskmcp-artifact-local-url-policy'));
+  assert.throws(
+    () => store.setLocalBaseUrl('http://192.168.1.20:8765'),
+    /HTTP only for loopback hosts|remote artifact URLs require HTTPS/i
+  );
+  assert.doesNotThrow(() => store.setLocalBaseUrl('http://[::1]:8765'));
+});
+
+test('artifact store byte budget is enforced across concurrent Store instances', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-artifact-budget-'));
+  try {
+    const storeA = new ArtifactStore(root, undefined, 10);
+    const storeB = new ArtifactStore(root, undefined, 10);
+    await Promise.all([storeA.init(), storeB.init()]);
+    const results = await Promise.allSettled([
+      storeA.publishBytes('a.bin', new Uint8Array(6), 'application/octet-stream'),
+      storeB.publishBytes('b.bin', new Uint8Array(6), 'application/octet-stream')
+    ]);
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+    const rejected = results.find(result => result.status === 'rejected');
+    assert.ok(rejected && rejected.status === 'rejected');
+    assert.match(String(rejected.reason), /byte budget exceeded/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

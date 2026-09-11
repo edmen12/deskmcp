@@ -1,10 +1,31 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { PROJECT_ROOT, READ_TEST_FILE, TEST_AREA, WRITE_TEST_FILE } from './paths.js';
 
 function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
+}
+
+async function ensureTrustedTestArea(): Promise<void> {
+  const existing = await lstat(TEST_AREA).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (!existing) await mkdir(TEST_AREA, { recursive: false, mode: 0o700 });
+  const info = await lstat(TEST_AREA);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error('DeskMCP test-area is not a trusted directory.');
+  }
+}
+
+async function assertTrustedTestFile(file: string, allowMissing = false): Promise<void> {
+  const info = await lstat(file).catch(error => {
+    if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (!info) return;
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error('DeskMCP test file is not a trusted regular file.');
 }
 
 export function registerTestTools(server: McpServer): void {
@@ -44,6 +65,8 @@ export function registerTestTools(server: McpServer): void {
     },
     async () => {
       try {
+        await ensureTrustedTestArea();
+        await assertTrustedTestFile(READ_TEST_FILE);
         const value = await readFile(READ_TEST_FILE, 'utf8');
         return textResult(value);
       } catch (error) {
@@ -69,8 +92,10 @@ export function registerTestTools(server: McpServer): void {
       }
     },
     async ({ content }) => {
-      await mkdir(TEST_AREA, { recursive: true });
+      await ensureTrustedTestArea();
+      await assertTrustedTestFile(WRITE_TEST_FILE, true);
       await writeFile(WRITE_TEST_FILE, content, 'utf8');
+      await assertTrustedTestFile(WRITE_TEST_FILE);
       const verified = await readFile(WRITE_TEST_FILE, 'utf8');
       if (verified !== content) {
         return { ...textResult('Write verification failed.'), isError: true };

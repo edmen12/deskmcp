@@ -78,6 +78,14 @@ try {
     Write-Output ('INSTALLER_RELEASE_PORT=' + $TestPort)
     Write-Output 'INSTALLER_RELEASE_TUNNEL_RUNTIME=DISABLED'
 
+    $FreshFailureRoot = Join-Path $SmokeParent 'FreshFailure'
+    Write-Output 'TEST=fresh-install-post-activation-failure-cleanup'
+    $freshFailed=Start-Process -FilePath $Setup -ArgumentList @('--install-test-fail-after-activation',('"'+$FreshFailureRoot+'"')) -Wait -PassThru
+    Require ($freshFailed.ExitCode -eq 10) "Fresh post-activation failure exit=$($freshFailed.ExitCode)"
+    Require (-not(Test-Path -LiteralPath $FreshFailureRoot)) 'Failed fresh install left an activated final directory behind.'
+    Require (@(Get-ChildItem -LiteralPath $SmokeParent -Directory -Filter 'FreshFailure.install-*' -ErrorAction SilentlyContinue).Count -eq 0) 'Failed fresh install left a staging directory behind.'
+    Require (@(Get-ChildItem -LiteralPath $SmokeParent -Directory -Filter 'FreshFailure.backup-*' -ErrorAction SilentlyContinue).Count -eq 0) 'Failed fresh install left a backup directory behind.'
+
     Write-Output 'TEST=install'
     $p=Start-Process -FilePath $Setup -ArgumentList @('--install-test',('"'+$SmokeRoot+'"')) -Wait -PassThru
     Require ($p.ExitCode -eq 0) "Install exit=$($p.ExitCode)"

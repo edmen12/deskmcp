@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -153,6 +153,61 @@ test('SkillStore validates, installs, reads, versions, activates, and rolls back
     assert.equal(rolledBack.active_version_id, first.installed_version.version_id);
     const activated = await store.activate('review-safe', '2.0.0');
     assert.equal(activated.active_version_id, second.installed_version.version_id);
+  });
+});
+
+test('SkillStore preserves concurrent installs across store instances', async () => {
+  await withStore(async (store, root, scratch) => {
+    const second = new SkillStore(root);
+    await second.init();
+    const alpha = await createSkillPackage(path.join(scratch, 'parallel-alpha'), 'parallel-alpha', '1.0.0', 'alpha checklist');
+    const beta = await createSkillPackage(path.join(scratch, 'parallel-beta'), 'parallel-beta', '1.0.0', 'beta checklist');
+
+    await Promise.all([
+      store.install({ kind: 'local', path: alpha }),
+      second.install({ kind: 'local', path: beta })
+    ]);
+
+    const names = (await store.list()).map(skill => skill.name).sort();
+    assert.deepEqual(names, ['parallel-alpha', 'parallel-beta']);
+    assert.equal((await second.read('parallel-alpha', 'references/checklist.md')).content, 'alpha checklist\n');
+    assert.equal((await store.read('parallel-beta', 'references/checklist.md')).content, 'beta checklist\n');
+  });
+});
+
+test('SkillStore rejects installed package tampering before read, activation, or duplicate reuse', async () => {
+  await withStore(async (store, root, scratch) => {
+    const source = await createSkillPackage(path.join(scratch, 'tamper-source'), 'tamper-safe', '1.0.0', 'trusted checklist');
+    const installed = await store.install({ kind: 'local', path: source });
+    const target = path.join(
+      root,
+      'packages',
+      'tamper-safe',
+      installed.installed_version.version_id,
+      'references',
+      'checklist.md'
+    );
+    await writeFile(target, 'tampered after install\n', 'utf8');
+
+    await assert.rejects(store.read('tamper-safe', 'references/checklist.md'), /integrity check failed/i);
+    await assert.rejects(store.activate('tamper-safe', installed.installed_version.version_id), /integrity check failed/i);
+    await assert.rejects(store.install({ kind: 'local', path: source }), /integrity check failed/i);
+  });
+});
+
+test('SkillStore rejects an installed version root replaced by a symlink or junction', async () => {
+  await withStore(async (store, root, scratch) => {
+    const source = await createSkillPackage(path.join(scratch, 'root-link-source'), 'root-link-safe', '1.0.0', 'trusted checklist');
+    const installed = await store.install({ kind: 'local', path: source });
+    const versionRoot = path.join(root, 'packages', 'root-link-safe', installed.installed_version.version_id);
+    const relocated = path.join(scratch, 'relocated-installed-version');
+    await rename(versionRoot, relocated);
+    await symlink(relocated, versionRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await assert.rejects(
+      store.read('root-link-safe', 'references/checklist.md'),
+      /package root is a symbolic link/i
+    );
   });
 });
 

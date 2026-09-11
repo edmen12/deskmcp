@@ -457,7 +457,7 @@ $setupItem = Get-Item -LiteralPath $SetupExe
 $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupExe).Hash.ToLowerInvariant()
 $payloadItem = Get-Item -LiteralPath $PayloadZip
 Write-Output 'STEP=release-metadata'
-& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $SetupExe -Version $version -Target $Target
+& (Join-Path $PSScriptRoot 'write-release-metadata.ps1') -SetupPath $SetupExe -Version $version -Target $Target -ReleaseStageSmokePassed -InstallerSmokePassed
 Write-Output 'INSTALLER_BUILD_OK'
 Write-Output ('VERSION=' + $version)
 Write-Output ('TARGET=' + $Target)

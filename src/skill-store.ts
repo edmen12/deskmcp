@@ -16,6 +16,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parseDocument } from 'yaml';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 
 interface UnzipperEntry {
   readonly path: string;
@@ -45,6 +46,8 @@ const MAX_SKILL_MD_BYTES = 512 * 1024;
 const MAX_FILES = 512;
 const MAX_DEPTH = 8;
 const MAX_RESOURCE_READ_BYTES = 512 * 1024;
+const SKILL_LOCK_TIMEOUT_MS = 60_000;
+const SKILL_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const VERSION_ID_PATTERN = /^sha256-[0-9a-f]{16}$/u;
@@ -495,6 +498,72 @@ async function copyAndValidateDirectory(
   };
 }
 
+async function verifyInstalledDirectory(
+  installedRoot: string,
+  expected: SkillVersionRecord
+): Promise<Map<string, { readonly sha256: string; readonly size: number }>> {
+  const installedInfo = await lstat(installedRoot).catch(() => {
+    throw new Error(`Skill installed package integrity check failed: ${expected.version_id} is missing.`);
+  });
+  if (installedInfo.isSymbolicLink()) {
+    throw new Error(`Skill installed package integrity check failed: ${expected.version_id} package root is a symbolic link.`);
+  }
+  if (!installedInfo.isDirectory()) {
+    throw new Error(`Skill installed package integrity check failed: ${expected.version_id} is not a directory.`);
+  }
+  const canonicalRoot = await realpath(installedRoot);
+
+  const manifest: Array<{ relative: string; sha256: string; size: number }> = [];
+  let fileCount = 0;
+  let totalBytes = 0;
+
+  async function walk(current: string, relativeDir: string, depth: number): Promise<void> {
+    if (depth > MAX_DEPTH) throw new Error(`Skill installed package integrity check failed: maximum directory depth exceeded.`);
+    const entries = await readdir(current, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const relative = safePackagePath(
+        relativeDir ? `${relativeDir}/${entry.name}` : entry.name,
+        `Installed Skill package entry ${JSON.stringify(entry.name)}`
+      );
+      const candidate = path.join(current, entry.name);
+      const entryInfo = await lstat(candidate);
+      if (entryInfo.isSymbolicLink()) throw new Error(`Skill installed package integrity check failed: symbolic link detected at ${relative}.`);
+      const canonical = await realpath(candidate);
+      if (!isWithin(canonicalRoot, canonical)) throw new Error(`Skill installed package integrity check failed: ${relative} escapes the package root.`);
+      if (entryInfo.isDirectory()) {
+        await walk(canonical, relative, depth + 1);
+        continue;
+      }
+      if (!entryInfo.isFile()) throw new Error(`Skill installed package integrity check failed: unsupported entry ${relative}.`);
+      fileCount += 1;
+      totalBytes += entryInfo.size;
+      if (fileCount > MAX_FILES || entryInfo.size > MAX_FILE_BYTES || totalBytes > MAX_PACKAGE_BYTES) {
+        throw new Error(`Skill installed package integrity check failed: package safety limits were exceeded.`);
+      }
+      const bytes = await readFile(canonical);
+      manifest.push({ relative, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length });
+    }
+  }
+
+  await walk(canonicalRoot, '', 0);
+  if (!manifest.some(item => item.relative === 'SKILL.md')) {
+    throw new Error(`Skill installed package integrity check failed: SKILL.md is missing.`);
+  }
+  manifest.sort((a, b) => a.relative.localeCompare(b.relative));
+  const digest = createHash('sha256');
+  for (const item of manifest) digest.update(`${item.relative}\0${item.size}\0${item.sha256}\n`, 'utf8');
+  const digestSha256 = digest.digest('hex');
+  if (
+    digestSha256 !== expected.digest_sha256
+    || fileCount !== expected.file_count
+    || totalBytes !== expected.total_bytes
+  ) {
+    throw new Error(`Skill installed package integrity check failed for ${expected.version_id}: files changed after installation.`);
+  }
+  return new Map(manifest.map(item => [item.relative, { sha256: item.sha256, size: item.size }]));
+}
+
 async function chooseExtractedSkillRoot(extractedRoot: string): Promise<{ root: string; logicalName?: string }> {
   const direct = path.join(extractedRoot, 'SKILL.md');
   if ((await stat(direct).catch(() => undefined))?.isFile()) {
@@ -519,17 +588,28 @@ export class SkillStore {
   private get registryPath(): string { return path.join(this.root, 'registry.json'); }
   private get packagesRoot(): string { return path.join(this.root, 'packages'); }
   private get stagingRoot(): string { return path.join(this.root, '.staging'); }
+  private get mutationLockPath(): string { return path.join(this.root, '.skills.lock'); }
 
   async init(): Promise<void> {
     await mkdir(this.packagesRoot, { recursive: true, mode: 0o700 });
     await mkdir(this.stagingRoot, { recursive: true, mode: 0o700 });
-    try { await this.load(); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      await this.save({ schema_version: REGISTRY_SCHEMA_VERSION, skills: [] });
-    }
-    const stale = await readdir(this.stagingRoot).catch(() => [] as string[]);
-    for (const entry of stale) await rm(path.join(this.stagingRoot, entry), { recursive: true, force: true }).catch(() => undefined);
+    await this.serializeMutation(async () => {
+      try { await this.load(); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        await this.save({ schema_version: REGISTRY_SCHEMA_VERSION, skills: [] });
+      }
+      const stale = await readdir(this.stagingRoot).catch(() => [] as string[]);
+      for (const entry of stale) await rm(path.join(this.stagingRoot, entry), { recursive: true, force: true }).catch(() => undefined);
+    });
+  }
+
+  private async acquireMutationLock(): Promise<PidDirectoryLockLease> {
+    return acquirePidDirectoryLock(this.mutationLockPath, {
+      label: 'Skill store',
+      timeoutMs: SKILL_LOCK_TIMEOUT_MS,
+      initializationGraceMs: SKILL_LOCK_INITIALIZATION_GRACE_MS
+    });
   }
 
   private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -537,8 +617,17 @@ export class SkillStore {
     let release!: () => void;
     this.mutationChain = new Promise<void>(resolve => { release = resolve; });
     await previous;
-    try { return await operation(); }
-    finally { release(); }
+    let lock: PidDirectoryLockLease | undefined;
+    try {
+      lock = await this.acquireMutationLock();
+      return await operation();
+    } finally {
+      try {
+        if (lock) await lock.release();
+      } finally {
+        release();
+      }
+    }
   }
 
   private async load(): Promise<SkillRegistryFile> {
@@ -553,6 +642,13 @@ export class SkillStore {
 
   private versionPath(name: string, versionId: string): string {
     return path.join(this.packagesRoot, name, versionId);
+  }
+
+  private async assertVersionIntegrity(
+    skillName: string,
+    version: SkillVersionRecord
+  ): Promise<Map<string, { readonly sha256: string; readonly size: number }>> {
+    return verifyInstalledDirectory(this.versionPath(skillName, version.version_id), version);
   }
 
   private async prepareSource(source: SkillPackageSource): Promise<{
@@ -598,14 +694,16 @@ export class SkillStore {
   }
 
   async validate(source: SkillPackageSource): Promise<SkillValidationResult> {
-    const prepared = await this.prepareSource(source);
-    const validateRoot = path.join(this.stagingRoot, `validate-${randomUUID()}`);
-    try {
-      return await copyAndValidateDirectory(prepared.root, validateRoot, prepared.logicalName);
-    } finally {
-      await rm(validateRoot, { recursive: true, force: true }).catch(() => undefined);
-      await prepared.cleanup().catch(() => undefined);
-    }
+    return this.serializeMutation(async () => {
+      const prepared = await this.prepareSource(source);
+      const validateRoot = path.join(this.stagingRoot, `validate-${randomUUID()}`);
+      try {
+        return await copyAndValidateDirectory(prepared.root, validateRoot, prepared.logicalName);
+      } finally {
+        await rm(validateRoot, { recursive: true, force: true }).catch(() => undefined);
+        await prepared.cleanup().catch(() => undefined);
+      }
+    });
   }
 
   async install(source: SkillPackageSource, activate = true): Promise<SkillInstallResult> {
@@ -626,6 +724,7 @@ export class SkillStore {
         }
         const same = existing?.versions.find(version => version.digest_sha256 === validation.digest_sha256);
         if (same) {
+          await this.assertVersionIntegrity(existing!.name, same);
           let skill = existing!;
           let activated = false;
           if (activate && skill.active_version_id !== same.version_id) {
@@ -725,6 +824,7 @@ export class SkillStore {
     if (!Number.isInteger(maxChars) || maxChars < 1 || maxChars > 200_000) throw new Error('Skill max_chars must be between 1 and 200000.');
     const skill = await this.get(nameValue);
     const version = this.resolveVersion(skill, versionSelector);
+    const integrity = await this.assertVersionIntegrity(skill.name, version);
     const relative = normalizeRelativeResource(resourcePath);
     const root = this.versionPath(skill.name, version.version_id);
     const target = path.join(root, ...relative.split('/'));
@@ -735,6 +835,11 @@ export class SkillStore {
     if (!info.isFile()) throw new Error(`Skill resource is not a file: ${relative}.`);
     if (info.size > MAX_RESOURCE_READ_BYTES) throw new Error(`Skill resource exceeds ${MAX_RESOURCE_READ_BYTES} bytes.`);
     const bytes = await readFile(canonicalTarget);
+    const expectedResource = integrity.get(relative);
+    const actualResourceSha = createHash('sha256').update(bytes).digest('hex');
+    if (!expectedResource || expectedResource.size !== bytes.length || expectedResource.sha256 !== actualResourceSha) {
+      throw new Error(`Skill installed package integrity check failed for ${version.version_id}: ${relative} changed during read.`);
+    }
     if (bytes.includes(0)) throw new Error('Skill resource appears to be binary; use DeskMCP file/artifact tools for binary assets instead.');
     const text = bytes.toString('utf8');
     return {
@@ -753,6 +858,7 @@ export class SkillStore {
       const skill = registry.skills.find(item => item.name === name);
       if (!skill) throw new Error(`Skill not installed: ${name}.`);
       const selected = this.resolveVersion(skill, versionSelector);
+      await this.assertVersionIntegrity(skill.name, selected);
       if (skill.active_version_id === selected.version_id) return skill;
       const next: InstalledSkillRecord = {
         ...skill,
@@ -771,9 +877,9 @@ export class SkillStore {
       const skill = registry.skills.find(item => item.name === name);
       if (!skill) throw new Error(`Skill not installed: ${name}.`);
       if (!skill.previous_active_version_id) throw new Error(`Skill ${name} has no previous active version to roll back to.`);
-      if (!skill.versions.some(version => version.version_id === skill.previous_active_version_id)) {
-        throw new Error(`Skill ${name} previous active version is no longer installed.`);
-      }
+      const previous = skill.versions.find(version => version.version_id === skill.previous_active_version_id);
+      if (!previous) throw new Error(`Skill ${name} previous active version is no longer installed.`);
+      await this.assertVersionIntegrity(skill.name, previous);
       const next: InstalledSkillRecord = {
         ...skill,
         active_version_id: skill.previous_active_version_id,

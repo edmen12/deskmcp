@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { acquirePidDirectoryLock } from './cross-process-lock.js';
 import type { AgentDesktopNativeBridge } from './agent-desktop-native.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -192,14 +193,16 @@ export class AgentDesktopManager {
 
   async init(): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const current = await this.readControlDocument();
-    const nextGeneration = current.generation + (current.controls.length > 0 ? 1 : 0);
-    await atomicJson(this.controlPath, {
-      schemaVersion: 2,
-      generation: nextGeneration,
-      controls: []
-    } satisfies AgentDesktopControlDocument);
-    if (current.controls.length > 0) await rm(this.hudPath, { force: true }).catch(() => undefined);
+    await this.withCrossProcessLock(async () => {
+      const current = await this.readControlDocument();
+      const nextGeneration = current.generation + (current.controls.length > 0 ? 1 : 0);
+      await atomicJson(this.controlPath, {
+        schemaVersion: 2,
+        generation: nextGeneration,
+        controls: []
+      } satisfies AgentDesktopControlDocument);
+      if (current.controls.length > 0) await rm(this.hudPath, { force: true }).catch(() => undefined);
+    });
   }
 
   private async serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -211,23 +214,36 @@ export class AgentDesktopManager {
     finally { release(); }
   }
 
-  private async withCrossProcessLock<T>(operation: () => Promise<T>): Promise<T> {
+  private async waitForCompatibleControlLockPath(): Promise<void> {
     const deadline = Date.now() + LOCK_TIMEOUT_MS;
-    while (true) {
-      try {
-        const handle = await open(this.lockPath, 'wx', 0o600);
-        try {
-          await handle.writeFile(`${process.pid}\n`, 'utf8');
-          return await operation();
-        } finally {
-          await handle.close().catch(() => undefined);
-          await rm(this.lockPath, { force: true }).catch(() => undefined);
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        if (Date.now() >= deadline) throw new Error('Agent Desktop control lock is busy.');
-        await new Promise(resolve => setTimeout(resolve, 30));
+    for (;;) {
+      const info = await lstat(this.lockPath).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (!info || (info.isDirectory() && !info.isSymbolicLink())) return;
+      if (!info.isFile() || info.isSymbolicLink()) {
+        throw new Error('Agent Desktop control lock path is not a trusted directory; refusing unsafe takeover.');
       }
+      if (Date.now() >= deadline) {
+        throw new Error('Agent Desktop legacy control lock file is still present; refusing unsafe automatic deletion during a mixed-version upgrade.');
+      }
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+  }
+
+  private async withCrossProcessLock<T>(operation: () => Promise<T>): Promise<T> {
+    await this.waitForCompatibleControlLockPath();
+    const lock = await acquirePidDirectoryLock(this.lockPath, {
+      label: 'Agent Desktop control',
+      timeoutMs: LOCK_TIMEOUT_MS,
+      initializationGraceMs: 5_000,
+      pollMs: 30
+    });
+    try {
+      return await operation();
+    } finally {
+      await lock.release();
     }
   }
 

@@ -62,6 +62,22 @@ test('one UI action invalidates sibling observations from the same state', () =>
   assert.doesNotThrow(() => observations.consume(refreshed, 'window-a', 2_003));
 });
 
+test('global physical input invalidates observations for other windows', () => {
+  const observations = new ComputerObservationRegistry(16, 30_000);
+  const windowA = observations.issue('window-a', 1_000);
+  const windowB = observations.issue('window-b', 1_001);
+
+  observations.consume(windowA, 'window-a', 2_000);
+  observations.advance('window-a', true);
+
+  assert.throws(
+    () => observations.consume(windowB, 'window-b', 2_001),
+    /global mouse or keyboard input/i
+  );
+  const refreshed = observations.issue('window-b', 2_002);
+  assert.doesNotThrow(() => observations.consume(refreshed, 'window-b', 2_003));
+});
+
 test('computer observations expire quickly', () => {
   const observations = new ComputerObservationRegistry(16, 1_000);
   const id = observations.issue('window-a', 10_000);

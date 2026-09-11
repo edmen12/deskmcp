@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$exclude = @('\runtime\','\node_modules\','\dist\','\tools\tunnel-client\')
+$exclude = @('\runtime\','\node_modules\','\dist\')
 $extensions = @('.md','.ts','.ps1','.cmd','.bat','.cs','.xaml','.json','.mjs','.yml','.yaml','.txt','.gitignore','.gitattributes')
 $patterns = [ordered]@{
     'OpenAI-style secret key' = 'sk-[A-Za-z0-9_-]{20,}'

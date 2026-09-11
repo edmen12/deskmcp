@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 import {
   RecoverableTaskStore,
   type CheckpointInput,
@@ -19,6 +20,8 @@ const MAX_CONTEXT_FILE_BYTES = 1024 * 1024;
 const MAX_CONTEXT_LABEL_BYTES = 256;
 const MAX_CONTEXTS = 256;
 const MAX_CAPABILITIES = 8;
+const CONTEXT_LOCK_TIMEOUT_MS = 5_000;
+const CONTEXT_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 
 interface ContextCapabilityRecord {
   readonly sha256: string;
@@ -201,15 +204,33 @@ export class TaskContextStore {
     await mkdir(this.contextsRoot, { recursive: true, mode: 0o700 });
   }
 
+  private get mutationLockPath(): string {
+    return path.join(this.root, '.contexts.lock');
+  }
+
+  private async acquireMutationLock(): Promise<PidDirectoryLockLease> {
+    return acquirePidDirectoryLock(this.mutationLockPath, {
+      label: 'Task context store',
+      timeoutMs: CONTEXT_LOCK_TIMEOUT_MS,
+      initializationGraceMs: CONTEXT_LOCK_INITIALIZATION_GRACE_MS
+    });
+  }
+
   private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.mutationChain;
     let release!: () => void;
     this.mutationChain = new Promise<void>(resolve => { release = resolve; });
     await previous;
+    let lock: PidDirectoryLockLease | undefined;
     try {
+      lock = await this.acquireMutationLock();
       return await operation();
     } finally {
-      release();
+      try {
+        if (lock) await lock.release();
+      } finally {
+        release();
+      }
     }
   }
 

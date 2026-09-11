@@ -1,11 +1,24 @@
 import { Client, StreamableHTTPClientTransport, type Tool } from '@modelcontextprotocol/client';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 
 const REGISTRY_SCHEMA_VERSION = 1;
 const MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
+const MAX_SERVERS = 64;
+const MAX_TOOLS_PER_SERVER = 512;
+const MAX_TOOL_NAME_BYTES = 512;
+const MAX_TOOL_TITLE_BYTES = 2048;
+const MAX_TOOL_DESCRIPTION_BYTES = 16 * 1024;
+const MAX_TOOL_SCHEMA_BYTES = 256 * 1024;
+const MAX_TOOL_ANNOTATIONS_BYTES = 64 * 1024;
+const MAX_TOOL_RESULT_BYTES = 8 * 1024 * 1024;
+const MAX_REFRESH_ALL_MS = 120_000;
+const REGISTRY_LOCK_TIMEOUT_MS = 5_000;
+const REGISTRY_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const SERVER_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
@@ -68,6 +81,17 @@ export interface RefreshResult {
   readonly tool_count?: number;
   readonly server_info?: DynamicMcpServerConfig['server_info'];
   readonly error?: string;
+}
+
+export interface DynamicMcpHubTestHooks {
+  readonly beforePersistRefresh?: () => Promise<void> | void;
+}
+
+function sameRefreshTarget(left: DynamicMcpServerConfig, right: DynamicMcpServerConfig): boolean {
+  if (left.url !== right.url || left.transport !== right.transport) return false;
+  const leftHeaders = Object.entries(left.header_env).sort(([a], [b]) => a.localeCompare(b));
+  const rightHeaders = Object.entries(right.header_env).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(leftHeaders) === JSON.stringify(rightHeaders);
 }
 
 function normalizeName(value: string): string {
@@ -142,8 +166,53 @@ function publicConfig(server: DynamicMcpServerConfig) {
   };
 }
 
-function toolToDefinition(serverName: string, tool: Tool): DynamicMcpToolDefinition {
+function boundedUtf8(value: unknown, label: string, maxBytes: number, required = false): string | undefined {
+  if (value === undefined || value === null) {
+    if (required) throw new Error(`${label} is required.`);
+    return undefined;
+  }
+  if (typeof value !== 'string' || (required && value.length === 0) || Buffer.byteLength(value, 'utf8') > maxBytes) {
+    throw new Error(`${label} is invalid or exceeds ${maxBytes} bytes.`);
+  }
+  return value;
+}
+
+function assertJsonSize(value: unknown, label: string, maxBytes: number): void {
+  let encoded: string | undefined;
+  try { encoded = JSON.stringify(value); }
+  catch { throw new Error(`${label} is not JSON serializable.`); }
+  if (encoded === undefined || Buffer.byteLength(encoded, 'utf8') > maxBytes) {
+    throw new Error(`${label} exceeds ${maxBytes} bytes.`);
+  }
+}
+
+function validateToolDefinition(serverName: string, raw: unknown): DynamicMcpToolDefinition {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`Dynamic MCP tool entry for ${serverName} is invalid.`);
+  const tool = raw as Partial<DynamicMcpToolDefinition>;
+  const toolName = boundedUtf8(tool.tool_name, `Dynamic MCP tool name for ${serverName}`, MAX_TOOL_NAME_BYTES, true)!;
+  const qualifiedName = boundedUtf8(tool.qualified_name, `Dynamic MCP qualified tool name for ${serverName}`, MAX_TOOL_NAME_BYTES + 65, true)!;
+  if (qualifiedName !== `${serverName}:${toolName}` || tool.server !== serverName) {
+    throw new Error(`Dynamic MCP cached tool identity mismatch for ${serverName}:${toolName}.`);
+  }
+  const title = boundedUtf8(tool.title, `Dynamic MCP tool title for ${serverName}:${toolName}`, MAX_TOOL_TITLE_BYTES);
+  const description = boundedUtf8(tool.description, `Dynamic MCP tool description for ${serverName}:${toolName}`, MAX_TOOL_DESCRIPTION_BYTES);
+  assertJsonSize(tool.input_schema, `Dynamic MCP input schema for ${serverName}:${toolName}`, MAX_TOOL_SCHEMA_BYTES);
+  if (tool.output_schema !== undefined) assertJsonSize(tool.output_schema, `Dynamic MCP output schema for ${serverName}:${toolName}`, MAX_TOOL_SCHEMA_BYTES);
+  if (tool.annotations !== undefined) assertJsonSize(tool.annotations, `Dynamic MCP annotations for ${serverName}:${toolName}`, MAX_TOOL_ANNOTATIONS_BYTES);
   return {
+    qualified_name: qualifiedName,
+    server: serverName,
+    tool_name: toolName,
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
+    input_schema: tool.input_schema,
+    ...(tool.output_schema !== undefined ? { output_schema: tool.output_schema } : {}),
+    ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {})
+  };
+}
+
+function toolToDefinition(serverName: string, tool: Tool): DynamicMcpToolDefinition {
+  const definition = {
     qualified_name: `${serverName}:${tool.name}`,
     server: serverName,
     tool_name: tool.name,
@@ -152,7 +221,8 @@ function toolToDefinition(serverName: string, tool: Tool): DynamicMcpToolDefinit
     input_schema: tool.inputSchema,
     ...(tool.outputSchema !== undefined ? { output_schema: tool.outputSchema } : {}),
     ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {})
-  };
+  } satisfies DynamicMcpToolDefinition;
+  return validateToolDefinition(serverName, definition);
 }
 
 function parseRegistry(value: unknown): RegistryFile {
@@ -163,6 +233,7 @@ function parseRegistry(value: unknown): RegistryFile {
   if (candidate.schema_version !== REGISTRY_SCHEMA_VERSION || !Array.isArray(candidate.servers)) {
     throw new Error(`Unsupported Dynamic MCP registry schema: ${String(candidate.schema_version)}.`);
   }
+  if (candidate.servers.length > MAX_SERVERS) throw new Error(`Dynamic MCP registry exceeds ${MAX_SERVERS} servers.`);
   const servers = candidate.servers.map(raw => {
     if (!raw || typeof raw !== 'object') throw new Error('Dynamic MCP server entry is invalid.');
     const entry = raw as Partial<DynamicMcpServerConfig>;
@@ -175,14 +246,21 @@ function parseRegistry(value: unknown): RegistryFile {
     const headerEnv = normalizeHeaderEnv(entry.header_env);
     const timeout = normalizeTimeout(entry.timeout_ms);
     const enabled = entry.enabled !== false;
-    const tools = Array.isArray(entry.tools)
-      ? entry.tools.filter((tool): tool is DynamicMcpToolDefinition => Boolean(
-        tool
-        && typeof tool === 'object'
-        && typeof (tool as DynamicMcpToolDefinition).tool_name === 'string'
-        && typeof (tool as DynamicMcpToolDefinition).qualified_name === 'string'
-      ))
-      : [];
+    const rawTools = Array.isArray(entry.tools) ? entry.tools : [];
+    if (rawTools.length > MAX_TOOLS_PER_SERVER) {
+      throw new Error(`Dynamic MCP server ${name} exceeds ${MAX_TOOLS_PER_SERVER} cached tools.`);
+    }
+    const tools = rawTools.map(tool => validateToolDefinition(name, tool));
+    let serverInfo: DynamicMcpServerConfig['server_info'];
+    if (entry.server_info !== undefined) {
+      if (!entry.server_info || typeof entry.server_info !== 'object') throw new Error(`Dynamic MCP server_info for ${name} is invalid.`);
+      const infoName = boundedUtf8(entry.server_info.name, `Dynamic MCP server_info name for ${name}`, 512, true)!;
+      const infoVersion = boundedUtf8(entry.server_info.version, `Dynamic MCP server_info version for ${name}`, 512, true)!;
+      serverInfo = { name: infoName, version: infoVersion };
+    }
+    const refreshedAt = entry.refreshed_at === undefined
+      ? undefined
+      : boundedUtf8(entry.refreshed_at, `Dynamic MCP refreshed_at for ${name}`, 128, true);
     return {
       name,
       ...(description ? { description } : {}),
@@ -192,12 +270,8 @@ function parseRegistry(value: unknown): RegistryFile {
       enabled,
       timeout_ms: timeout,
       tools,
-      ...(typeof entry.refreshed_at === 'string' ? { refreshed_at: entry.refreshed_at } : {}),
-      ...(entry.server_info
-        && typeof entry.server_info.name === 'string'
-        && typeof entry.server_info.version === 'string'
-        ? { server_info: { name: entry.server_info.name, version: entry.server_info.version } }
-        : {})
+      ...(refreshedAt ? { refreshed_at: refreshedAt } : {}),
+      ...(serverInfo ? { server_info: serverInfo } : {})
     } satisfies DynamicMcpServerConfig;
   });
   const names = new Set<string>();
@@ -239,10 +313,17 @@ function timeoutPromise<T>(promise: Promise<T>, timeoutMs: number, label: string
 export class DynamicMcpHub {
   private mutationChain: Promise<void> = Promise.resolve();
 
-  constructor(readonly root: string) {}
+  constructor(
+    readonly root: string,
+    private readonly testHooks: DynamicMcpHubTestHooks = {}
+  ) {}
 
   private get registryPath(): string {
     return path.join(this.root, 'servers.json');
+  }
+
+  private get registryLockPath(): string {
+    return path.join(this.root, '.servers.lock');
   }
 
   async init(): Promise<void> {
@@ -251,8 +332,22 @@ export class DynamicMcpHub {
       await this.load();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      await this.save({ schema_version: REGISTRY_SCHEMA_VERSION, servers: [] });
+      await this.serializeMutation(async () => {
+        try { await this.load(); }
+        catch (retryError) {
+          if ((retryError as NodeJS.ErrnoException).code !== 'ENOENT') throw retryError;
+          await this.save({ schema_version: REGISTRY_SCHEMA_VERSION, servers: [] });
+        }
+      });
     }
+  }
+
+  private async acquireRegistryLock(): Promise<PidDirectoryLockLease> {
+    return acquirePidDirectoryLock(this.registryLockPath, {
+      label: 'Dynamic MCP registry',
+      timeoutMs: REGISTRY_LOCK_TIMEOUT_MS,
+      initializationGraceMs: REGISTRY_LOCK_INITIALIZATION_GRACE_MS
+    });
   }
 
   private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -260,10 +355,16 @@ export class DynamicMcpHub {
     let release!: () => void;
     this.mutationChain = new Promise<void>(resolve => { release = resolve; });
     await previous;
+    let lock: PidDirectoryLockLease | undefined;
     try {
+      lock = await this.acquireRegistryLock();
       return await operation();
     } finally {
-      release();
+      try {
+        if (lock) await lock.release();
+      } finally {
+        release();
+      }
     }
   }
 
@@ -280,10 +381,19 @@ export class DynamicMcpHub {
     if (Buffer.byteLength(payload, 'utf8') > MAX_REGISTRY_BYTES) {
       throw new Error('Dynamic MCP registry exceeds size limit.');
     }
-    const temp = path.join(this.root, `.servers.${process.pid}.${Date.now()}.tmp`);
+    const temp = path.join(this.root, `.servers.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
     await writeFile(temp, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     try {
-      await rename(temp, this.registryPath);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await rename(temp, this.registryPath);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (!['EACCES', 'EPERM', 'EBUSY'].includes(code ?? '') || attempt >= 5) throw error;
+          await new Promise(resolve => setTimeout(resolve, Math.min(25 * (2 ** attempt), 400)));
+        }
+      }
     } catch (error) {
       await rm(temp, { force: true }).catch(() => undefined);
       throw error;
@@ -314,6 +424,9 @@ export class DynamicMcpHub {
       const name = normalizeName(input.name);
       if (registry.servers.some(server => server.name === name)) {
         throw new Error(`Dynamic MCP server already exists: ${name}.`);
+      }
+      if (registry.servers.length >= MAX_SERVERS) {
+        throw new Error(`Dynamic MCP registry is limited to ${MAX_SERVERS} servers.`);
       }
       const description = normalizeDescription(input.description);
       const server: DynamicMcpServerConfig = {
@@ -377,18 +490,26 @@ export class DynamicMcpHub {
 
   private async withClient<T>(
     server: DynamicMcpServerConfig,
-    operation: (client: Client) => Promise<T>
+    operation: (client: Client) => Promise<T>,
+    totalTimeoutMs = server.timeout_ms
   ): Promise<T> {
     if (!server.enabled) throw new Error(`Dynamic MCP server is disabled: ${server.name}.`);
+    const budgetMs = Math.max(1, Math.min(server.timeout_ms, totalTimeoutMs));
+    const deadline = Date.now() + budgetMs;
+    const remaining = (label: string): number => {
+      const value = deadline - Date.now();
+      if (value <= 0) throw new Error(`${label} exceeded the ${budgetMs} ms total timeout budget.`);
+      return value;
+    };
     const transport = new StreamableHTTPClientTransport(new URL(server.url), {
       requestInit: { headers: this.requestHeaders(server) }
     });
     const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.10' });
     let connected = false;
     try {
-      await timeoutPromise(client.connect(transport), server.timeout_ms, `Connect to ${server.name}`);
+      await timeoutPromise(client.connect(transport), remaining(`Connect to ${server.name}`), `Connect to ${server.name}`);
       connected = true;
-      return await timeoutPromise(operation(client), server.timeout_ms, `MCP operation on ${server.name}`);
+      return await timeoutPromise(operation(client), remaining(`MCP operation on ${server.name}`), `MCP operation on ${server.name}`);
     } finally {
       if (connected) await client.close().catch(() => undefined);
       else await transport.close().catch(() => undefined);
@@ -404,21 +525,41 @@ export class DynamicMcpHub {
     if (normalized && targets.length === 0) throw new Error(`Dynamic MCP server not found: ${normalized}.`);
 
     const results: RefreshResult[] = [];
+    const targetConfigs = new Map(targets.map(server => [server.name, server] as const));
     const updates = new Map<string, {
       tools: readonly DynamicMcpToolDefinition[];
       refreshed_at: string;
       server_info?: DynamicMcpServerConfig['server_info'];
     }>();
-    for (const server of targets) {
+    const batchDeadline = normalized ? undefined : Date.now() + MAX_REFRESH_ALL_MS;
+    for (let index = 0; index < targets.length; index++) {
+      const server = targets[index]!;
+      if (batchDeadline !== undefined && Date.now() >= batchDeadline) {
+        for (const remaining of targets.slice(index)) {
+          results.push({ name: remaining.name, ok: false, error: `Batch refresh exceeded ${MAX_REFRESH_ALL_MS} ms total deadline.` });
+        }
+        break;
+      }
       try {
+        const remainingBatchMs = batchDeadline === undefined ? server.timeout_ms : Math.max(1, batchDeadline - Date.now());
         const discovered = await this.withClient(server, async client => {
           const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
+          if (listed.tools.length > MAX_TOOLS_PER_SERVER) {
+            throw new Error(`Dynamic MCP server ${server.name} exposed more than ${MAX_TOOLS_PER_SERVER} tools.`);
+          }
           const serverInfo = client.getServerVersion();
+          let validatedServerInfo: DynamicMcpServerConfig['server_info'];
+          if (serverInfo) {
+            validatedServerInfo = {
+              name: boundedUtf8(serverInfo.name, `Dynamic MCP server name for ${server.name}`, 512, true)!,
+              version: boundedUtf8(serverInfo.version, `Dynamic MCP server version for ${server.name}`, 512, true)!
+            };
+          }
           return {
             tools: listed.tools.map(tool => toolToDefinition(server.name, tool)),
-            ...(serverInfo ? { serverInfo: { name: serverInfo.name, version: serverInfo.version } } : {})
+            ...(validatedServerInfo ? { serverInfo: validatedServerInfo } : {})
           };
-        });
+        }, Math.min(server.timeout_ms, remainingBatchMs));
         const discoveryUpdate = {
           tools: discovered.tools,
           refreshed_at: new Date().toISOString(),
@@ -441,11 +582,20 @@ export class DynamicMcpHub {
     }
 
     if (updates.size > 0) {
+      await this.testHooks.beforePersistRefresh?.();
+      const staleResults = new Set<string>();
       await this.serializeMutation(async () => {
         const latest = await this.load();
+        const latestByName = new Map(latest.servers.map(server => [server.name, server] as const));
+        for (const serverName of updates.keys()) {
+          const expected = targetConfigs.get(serverName);
+          const current = latestByName.get(serverName);
+          if (!expected || !current || !sameRefreshTarget(expected, current)) staleResults.add(serverName);
+        }
+        if (staleResults.size === updates.size) return;
         const servers = latest.servers.map(server => {
           const discovery = updates.get(server.name);
-          if (!discovery) return server;
+          if (!discovery || staleResults.has(server.name)) return server;
           return discovery.server_info
             ? {
                 ...server,
@@ -461,6 +611,15 @@ export class DynamicMcpHub {
         });
         await this.save({ ...latest, servers });
       });
+      for (let index = 0; index < results.length; index++) {
+        const result = results[index]!;
+        if (!staleResults.has(result.name) || !result.ok) continue;
+        results[index] = {
+          name: result.name,
+          ok: false,
+          error: 'Dynamic MCP server configuration changed while refresh was in progress; stale discovery was not persisted.'
+        };
+      }
     }
     return results;
   }
@@ -513,12 +672,17 @@ export class DynamicMcpHub {
     const server = await this.requireServer(parts.server);
     return this.withClient(server, async client => {
       const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
+      if (listed.tools.length > MAX_TOOLS_PER_SERVER) {
+        throw new Error(`Dynamic MCP server ${server.name} exposed more than ${MAX_TOOLS_PER_SERVER} tools.`);
+      }
       const tool = listed.tools.find(item => item.name === parts.tool);
       if (!tool) throw new Error(`Dynamic MCP tool no longer exists: ${qualifiedName}.`);
+      toolToDefinition(server.name, tool);
       const result = await client.callTool(
         { name: tool.name, arguments: args },
         { toolDefinition: tool }
       );
+      assertJsonSize(result, `Dynamic MCP tool result for ${qualifiedName}`, MAX_TOOL_RESULT_BYTES);
       return {
         name: `${server.name}:${tool.name}`,
         result

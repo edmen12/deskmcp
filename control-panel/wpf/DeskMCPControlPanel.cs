@@ -2939,6 +2939,12 @@ internal static class Program
                 return TunnelRuntimeStatusEvaluator.RunSelfTest();
             if (args.Length > 0 && args[0] == "--agent-safe-isolation-self-test")
                 return ControlPanelRuntime.RunAgentSafeIsolationSelfTest();
+            if (args.Length > 0 && args[0] == "--agent-control-lock-self-test")
+                return CrossProcessDirectoryLock.RunSelfTest();
+            if (args.Length == 4 && args[0] == "--agent-control-lock-hold")
+                return CrossProcessDirectoryLock.HoldForInterop(args[1], args[2], args[3]);
+            if (args.Length == 2 && args[0] == "--agent-control-lock-try")
+                return CrossProcessDirectoryLock.TryForInterop(args[1]);
             if (args.Length > 0 && args[0].StartsWith("--capture", StringComparison.Ordinal))
             {
                 string mode = args[0];

@@ -9,7 +9,7 @@ Use the tools in this order:
 1. `desktop_ui_windows` — discover visible app windows and receive opaque `window_id` capabilities.
 2. `desktop_ui_snapshot` — inspect a window and receive a fresh `computer_observation_id`; optionally request a PNG screenshot.
 3. `desktop_ui_action` — perform exactly one action using that fresh observation.
-4. Re-observe before the next action. A successful or partially attempted action invalidates sibling observations for the same window.
+4. Re-observe before the next action. A successful or partially attempted action invalidates sibling observations for the same window; physical/global input also invalidates observations for other windows because it can change global desktop state.
 
 The intended loop is **observe → act once → observe again**. Do not cache selectors or UI state across unrelated changes.
 
@@ -31,6 +31,7 @@ Snapshots default to the interactive UI Automation tree without a screenshot. Re
 - Observations are one-time capabilities.
 - An observation is bound to one opaque `window_id`.
 - The first action on a window advances its state generation and invalidates sibling observations created from the old state.
+- Physical/global mouse or keyboard input also advances the global input generation and invalidates observations for other windows, because injected input can change shared desktop state outside the nominal target.
 - Window capabilities are validated against the live HWND, process ID, process name, and window class internally. These native identifiers are not part of the public window capability.
 - All GUI operations share one Gateway-process coordinator, so multiple MCP clients cannot concurrently mutate the desktop.
 
@@ -45,7 +46,7 @@ Computer Use is discoverable in the stable MCP schema but executable only in:
 
 Read-only and Workspace Write reject Computer Use calls locally.
 
-The MCP surface intentionally does not expose WinApp's `post-message` keyboard transport because it can cross Windows integrity levels. DeskMCP uses Windows `send-input` for injected keyboard input. System-wide keys require Fully Unlocked.
+Remote MCP callers cannot select WinApp's `post-message` keyboard transport because it can cross Windows integrity levels. Normal injected keyboard input uses Windows `send-input`, and system-wide keys require Fully Unlocked. Agent Desktop background mode is the exception: after validating the active lease and target window, DeskMCP may internally select restricted window-targeted keyboard delivery so the agent does not steal the user's foreground desktop. That internal transport is not a remote caller-selectable capability.
 
 ## UAC, lock screen, and Secure Desktop
 
