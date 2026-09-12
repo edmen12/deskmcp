@@ -127,6 +127,14 @@ On Windows, `window_mode` controls only whether the CMD/PowerShell console itsel
 
 `elevation: "admin"` uses the Windows `runas` broker and always relies on the normal local UAC approval flow. It is valid with either window mode: `hidden + admin` shows the standard UAC prompt and, after approval, runs the administrator process without an extra CMD/PowerShell window; `visible + admin` shows UAC and then opens the visible administrator console. UAC cancellation or denial is returned as an error; DeskMCP does not bypass UAC.
 
+## Agent Desktop pool on Windows
+
+Desktop 1 is reserved for the local user. Create Desktop 2 or later with Windows Virtual Desktops, switch to each desktop you want to offer to agents, then use **Settings → Agent Desktop → Bind Current**. Multiple bound desktops form a pool: each new Agent Control lease receives the first free live desktop, and concurrent agents cannot take the same slot.
+
+Settings lists each bound desktop separately with its current state. **Ready** means the slot is available, **Controlling** means an agent owns the slot, and **Unavailable** means the original Windows virtual-desktop GUID was removed or became Desktop 1. Idle or unavailable bindings can be removed with **Unbind**; a controlling desktop must exit Agent Control first. DeskMCP resolves the live Windows desktop number from the stable desktop GUID before allocation, so normal Windows desktop renumbering does not misroute a lease.
+
+Agent Desktop Browser sessions belong to the Agent Control lease rather than one tool call. The browser remains open, including page/login state, until that lease exits, is revoked, or its linked Task Room completes. The blue safety edge/HUD is shown only on the currently viewed controlled Agent Desktop; switching back to Desktop 1 hides the overlay without stopping agents running on other bound desktops.
+
 ## Security model
 
 - Gateway HTTP binds only to `127.0.0.1:8765`.

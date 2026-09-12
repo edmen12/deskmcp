@@ -14,6 +14,14 @@ export interface AgentDesktopNativeInfo {
   readonly desktopCount?: number | null;
 }
 
+export interface AgentDesktopDesktopInfo {
+  readonly desktopId: string;
+  readonly present: boolean;
+  readonly desktopNumber?: number | null;
+  readonly desktopCount?: number | null;
+  readonly currentDesktopNumber?: number | null;
+}
+
 export interface AgentDesktopWindowInfo {
   readonly hwnd: string;
   readonly desktopId: string;
@@ -91,6 +99,10 @@ export class AgentDesktopNativeBridge {
 
   info(): Promise<AgentDesktopNativeInfo> {
     return this.run<AgentDesktopNativeInfo>(['info']);
+  }
+
+  desktopById(desktopId: string): Promise<AgentDesktopDesktopInfo> {
+    return this.run<AgentDesktopDesktopInfo>(['desktop-by-id', '--desktop-id', normalizeDesktopId(desktopId)]);
   }
 
   windowInfo(hwnd: number): Promise<AgentDesktopWindowInfo> {

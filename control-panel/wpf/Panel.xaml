@@ -343,15 +343,18 @@
                 </Grid>
               </Border>
               <Border x:Name="AgentDesktopCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
-                <Grid>
-                  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                  <StackPanel>
-                    <TextBlock x:Name="AgentDesktopLabel" Text="Agent Desktop" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="AgentDesktopStatusText" Text="Not bound" Foreground="#8E8E93" FontSize="10" Margin="0,2,10,0" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="AgentDesktopHint" Text="Bind Desktop 2 or later into the Agent pool. DeskMCP returns you to Desktop 1 after each bind." Foreground="#8E8E93" FontSize="9" Margin="0,4,12,0" TextWrapping="Wrap" MaxWidth="225"/>
-                  </StackPanel>
-                  <Button Grid.Column="1" x:Name="AgentDesktopBindButton" Style="{StaticResource MiniButton}" Content="Bind Current" Padding="11,7" VerticalAlignment="Center"/>
-                </Grid>
+                <StackPanel>
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                      <TextBlock x:Name="AgentDesktopLabel" Text="Agent Desktop" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
+                      <TextBlock x:Name="AgentDesktopStatusText" Text="Not bound" Foreground="#8E8E93" FontSize="10" Margin="0,2,10,0" FontWeight="SemiBold"/>
+                      <TextBlock x:Name="AgentDesktopHint" Text="Bind Desktop 2 or later into the Agent pool. DeskMCP returns you to Desktop 1 after each bind." Foreground="#8E8E93" FontSize="9" Margin="0,4,12,0" TextWrapping="Wrap" MaxWidth="225"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" x:Name="AgentDesktopBindButton" Style="{StaticResource MiniButton}" Content="Bind Current" Padding="11,7" VerticalAlignment="Center"/>
+                  </Grid>
+                  <StackPanel x:Name="AgentDesktopBindingsPanel" Margin="0,10,0,0"/>
+                </StackPanel>
               </Border>
               <Border x:Name="TunnelSettingsCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>

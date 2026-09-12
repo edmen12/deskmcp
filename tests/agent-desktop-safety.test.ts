@@ -186,19 +186,24 @@ test('Task-linked Agent Desktop control only auto-stops for the matching task', 
 test('Agent Desktop pool allocates distinct bound desktops before reporting busy', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-pool-'));
   try {
+    const desktopA = randomUUID();
+    const desktopB = randomUUID();
     const native = {
-      async info() { return { officialApi: true, virtualDesktopAccessor: true }; }
+      async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
+      async desktopById(desktopId: string) {
+        const desktopNumber = desktopId === desktopA ? 1 : desktopId === desktopB ? 2 : null;
+        return { desktopId, present: desktopNumber !== null, desktopNumber, desktopCount: 3, currentDesktopNumber: 0 };
+      }
     } as unknown as AgentDesktopNativeBridge;
     const manager = new AgentDesktopManager(root, native);
     await manager.init();
     const now = new Date().toISOString();
-    const desktopA = randomUUID();
-    const desktopB = randomUUID();
     await writeJson(path.join(root, 'config.json'), {
       schemaVersion: 2,
       bindings: [
         { schemaVersion: 1, desktopId: desktopA, desktopNumber: 1, boundAtUtc: now },
-        { schemaVersion: 1, desktopId: desktopB, desktopNumber: 2, boundAtUtc: now }
+        // desktopNumber is only a stale display cache; GUID identity must preserve both bindings.
+        { schemaVersion: 1, desktopId: desktopB, desktopNumber: 1, boundAtUtc: now }
       ]
     });
 
@@ -247,13 +252,88 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
     assert.equal(status.bindings.length, 2);
     assert.equal(status.controls.length, 2);
     assert.equal(status.available_desktops, 0);
-    await assert.rejects(manager.startControl('Agent C'), /all bound agent desktops are busy/i);
+    await assert.rejects(manager.startControl('Agent C'), /all usable agent desktops are busy/i);
 
     await manager.stopControl(first.control.leaseId!);
     const afterStop = await manager.status();
     assert.equal(afterStop.controls.length, 1);
     assert.equal(afterStop.available_desktops, 1);
     assert.equal(afterStop.controls[0]?.leaseId, second.control.leaseId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('Agent Desktop skips a bound Windows desktop that no longer exists', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-missing-'));
+  try {
+    const desktopId = randomUUID();
+    const native = {
+      async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
+      async desktopById(requestedId: string) {
+        return { desktopId: requestedId, present: false, desktopNumber: null, desktopCount: 1, currentDesktopNumber: 0 };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [{ schemaVersion: 1, desktopId, desktopNumber: 2, boundAtUtc: new Date().toISOString() }]
+    });
+
+    const status = await manager.status();
+    assert.equal(status.configured, true);
+    assert.equal(status.available_desktops, 0);
+    await assert.rejects(manager.startControl('missing desktop'), /no usable agent desktops remain/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('Agent Desktop resolves a bound desktop by GUID after Windows renumbers it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-renumber-'));
+  try {
+    const desktopId = randomUUID();
+    const native = {
+      async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
+      async desktopById(requestedId: string) {
+        return { desktopId: requestedId, present: true, desktopNumber: 1, desktopCount: 2, currentDesktopNumber: 0 };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [{ schemaVersion: 1, desktopId, desktopNumber: 3, boundAtUtc: new Date().toISOString() }]
+    });
+
+    const started = manager.startControl('renumbered desktop');
+    const deadline = Date.now() + 2000;
+    let leaseId = '';
+    let generation = -1;
+    while (Date.now() < deadline) {
+      const raw = JSON.parse(await readFile(path.join(root, 'control.json'), 'utf8')) as {
+        controls?: Array<{ generation: number; leaseId: string; desktopId: string; desktopNumber: number }>;
+      };
+      const control = raw.controls?.[0];
+      if (control) {
+        assert.equal(control.desktopId, desktopId);
+        assert.equal(control.desktopNumber, 1);
+        leaseId = control.leaseId;
+        generation = control.generation;
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok(leaseId);
+    await writeJson(path.join(root, 'hud-state.json'), {
+      schemaVersion: 2,
+      entries: [{ schemaVersion: 1, generation, leaseId, armed: true, visible: false, processId: 1234, heartbeatAtUtc: new Date().toISOString() }]
+    });
+    const status = await started;
+    assert.equal(status.control.desktopNumber, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

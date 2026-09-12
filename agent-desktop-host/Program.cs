@@ -227,6 +227,7 @@ internal static class Program
                 "info" => Info(vda),
                 "current-desktop" => CurrentDesktop(vda),
                 "desktop-info" => DesktopInfo(ParsePositiveInt(Required(options, "desktop-number"), "desktop-number", allowZero: true), vda),
+                "desktop-by-id" => DesktopById(ParseDesktopId(Required(options, "desktop-id")), vda),
                 "create-desktop" => CreateDesktop(vda),
                 "remove-desktop" => RemoveDesktop(ParsePositiveInt(Required(options, "desktop-number"), "desktop-number", allowZero: true), ParsePositiveInt(Required(options, "fallback-number"), "fallback-number", allowZero: true), vda),
                 "window-info" => WindowInfo(ParseHwnd(Required(options, "hwnd")), vda),
@@ -291,6 +292,22 @@ internal static class Program
             desktopId = desktopId.Value.ToString("D"),
             desktopNumber,
             desktopCount = desktopCount.Value,
+            currentDesktopNumber = vda.CurrentDesktopNumber()
+        };
+    }
+
+    private static object DesktopById(Guid desktopId, VirtualDesktopAccessor vda)
+    {
+        if (!vda.Available)
+            throw new InvalidOperationException("VirtualDesktopAccessor is required to resolve a virtual desktop by id.");
+        int? desktopCount = vda.DesktopCount();
+        int? desktopNumber = vda.DesktopNumberById(desktopId);
+        return new
+        {
+            desktopId = desktopId.ToString("D"),
+            present = desktopNumber.HasValue,
+            desktopNumber,
+            desktopCount,
             currentDesktopNumber = vda.CurrentDesktopNumber()
         };
     }

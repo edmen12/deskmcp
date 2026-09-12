@@ -87,15 +87,10 @@ function validConfig(value: unknown): value is AgentDesktopConfigDocument {
   const row = value as Record<string, unknown>;
   if (row.schemaVersion !== 2 || !Array.isArray(row.bindings) || !row.bindings.every(validBinding)) return false;
   const ids = new Set<string>();
-  const numbers = new Set<number>();
   for (const binding of row.bindings as AgentDesktopBinding[]) {
     const id = binding.desktopId.toLowerCase();
     if (ids.has(id)) return false;
     ids.add(id);
-    if (binding.desktopNumber !== undefined) {
-      if (numbers.has(binding.desktopNumber)) return false;
-      numbers.add(binding.desktopNumber);
-    }
   }
   return true;
 }
@@ -265,6 +260,20 @@ export class AgentDesktopManager {
     return (await this.bindings())[0];
   }
 
+  private async liveBindingsForAllocation(bindings: readonly AgentDesktopBinding[]): Promise<AgentDesktopBinding[]> {
+    const live: AgentDesktopBinding[] = [];
+    for (const binding of bindings) {
+      const info = await this.native.desktopById(binding.desktopId);
+      if (info.desktopId.toLowerCase() !== binding.desktopId.toLowerCase()) {
+        throw new Error('Agent Desktop native host returned a mismatched desktop id.');
+      }
+      if (!info.present) continue;
+      if (!Number.isInteger(info.desktopNumber) || Number(info.desktopNumber) <= 0) continue;
+      live.push({ ...binding, desktopNumber: Number(info.desktopNumber) });
+    }
+    return live.sort((a, b) => (a.desktopNumber ?? Number.MAX_SAFE_INTEGER) - (b.desktopNumber ?? Number.MAX_SAFE_INTEGER));
+  }
+
   private async readControlDocument(): Promise<AgentDesktopControlDocument> {
     const raw = await readJson(this.controlPath);
     if (raw === undefined) return { schemaVersion: 2, generation: 0, controls: [] };
@@ -317,13 +326,15 @@ export class AgentDesktopManager {
       ? Boolean(liveHud.find(entry => entry.leaseId.toLowerCase() === selected.leaseId!.toLowerCase())?.visible)
       : false;
     const usedDesktopIds = new Set(controls.map(control => control.desktopId?.toLowerCase()).filter((value): value is string => Boolean(value)));
+    const supportsLiveDesktopResolution = typeof (this.native as unknown as { desktopById?: unknown }).desktopById === 'function';
+    const availableBindings = supportsLiveDesktopResolution ? await this.liveBindingsForAllocation(bindings) : [...bindings];
     return {
       configured: bindings.length > 0,
       bindings,
       ...(bindings[0] ? { binding: bindings[0] } : {}),
       controls,
       control: selected,
-      available_desktops: bindings.filter(binding => !usedDesktopIds.has(binding.desktopId.toLowerCase())).length,
+      available_desktops: availableBindings.filter(binding => !usedDesktopIds.has(binding.desktopId.toLowerCase())).length,
       hud_ready: selectedReady,
       hud_visible: selectedVisible
     };
@@ -343,10 +354,13 @@ export class AgentDesktopManager {
     const control = await this.serialize(() => this.withCrossProcessLock(async () => {
       const [bindings, document] = await Promise.all([this.bindings(), this.readControlDocument()]);
       if (bindings.length === 0) throw new Error('No Agent Desktops are bound. Bind Desktop 2 or later in DeskMCP Settings.');
+      const liveBindings = await this.liveBindingsForAllocation(bindings);
+      if (liveBindings.length === 0) {
+        throw new Error('No usable Agent Desktops remain. Bound Windows virtual desktops were removed, became Desktop 1, or must be rebound in DeskMCP Settings.');
+      }
       const used = new Set(document.controls.map(row => row.desktopId!.toLowerCase()));
-      const binding = bindings.find(row => !used.has(row.desktopId.toLowerCase()));
-      if (!binding) throw new Error('All bound Agent Desktops are busy. Bind another virtual desktop or wait for an existing Agent Control lease to exit.');
-      if (!Number.isInteger(binding.desktopNumber) || binding.desktopNumber! <= 0) throw new Error('Agent Desktop binding is missing a valid desktop number. Re-bind it from DeskMCP Settings.');
+      const binding = liveBindings.find(row => !used.has(row.desktopId.toLowerCase()));
+      if (!binding) throw new Error('All usable Agent Desktops are busy. Bind another virtual desktop or wait for an existing Agent Control lease to exit.');
       const nextGeneration = document.generation + 1;
       const next: AgentDesktopControlState = {
         schemaVersion: 1,

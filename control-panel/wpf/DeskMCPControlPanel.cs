@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -684,7 +685,7 @@ internal sealed partial class ControlPanelRuntime
             Find<TextBlock>("SettingsTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Button>("SettingsBackButton").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
             Find<Button>("SettingsBackButton").Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
-            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "TunnelSettingsCard", "UpdateCard" })
+            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "AgentDesktopCard", "TunnelSettingsCard", "UpdateCard" })
                 Find<Border>(cardName).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
             Find<TextBlock>("WorkspaceLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("WorkspacePathText").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
@@ -696,6 +697,8 @@ internal sealed partial class ControlPanelRuntime
             Find<TextBlock>("StartupHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("AdminRequestLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("AdminRequestHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+            Find<TextBlock>("AgentDesktopLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+            Find<TextBlock>("AgentDesktopHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("TunnelSettingsLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("TunnelConfigStatus").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("UpdateLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
@@ -714,7 +717,7 @@ internal sealed partial class ControlPanelRuntime
             Find<PasswordBox>("TunnelRuntimeKeyInput").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Border>("ThemeShell").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
             themeIndicator.Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
-            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
+            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "AgentDesktopBindButton", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
             {
                 Button button = Find<Button>(name);
                 button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
@@ -725,6 +728,7 @@ internal sealed partial class ControlPanelRuntime
             power.Foreground = Brushes.White;
             UpdateStartupUi();
             UpdateAdminRequestUi();
+            UpdateAgentDesktopUi();
             UpdateTunnelSettingsUi();
             SetProfileVisual(selectedProfile, false);
         }
@@ -1398,6 +1402,7 @@ internal sealed partial class ControlPanelRuntime
 
         EnsureManagedServices(health, lastTunnelStatus);
         UpdateTunnelSettingsUi();
+        UpdateAgentDesktopUi();
         ApplyUpdateSecurityHoldUi();
 
         string profileLabel = selectedProfile == "read-only" ? "Read" :
@@ -2525,6 +2530,8 @@ internal sealed partial class ControlPanelRuntime
     {
         TextBlock status = Find<TextBlock>("AgentDesktopStatusText");
         Button bind = Find<Button>("AgentDesktopBindButton");
+        StackPanel bindingsPanel = Find<StackPanel>("AgentDesktopBindingsPanel");
+        if (bindingsPanel != null) bindingsPanel.Children.Clear();
         if (agentDesktopControl == null)
         {
             if (status != null) status.Text = "Unavailable";
@@ -2532,27 +2539,129 @@ internal sealed partial class ControlPanelRuntime
             return;
         }
 
-        bool active = false;
-        string display = "Not bound";
         try
         {
-            active = agentDesktopControl.IsControlActive;
-            display = agentDesktopControl.BindingDisplay;
+            List<AgentDesktopBindingDocument> bindings = agentDesktopControl.ReadBindings();
+            int currentDesktop = agentDesktopControl.CurrentDesktopNumber;
+            int activeCount = 0;
+            int unavailableCount = 0;
+            Dictionary<string, int?> liveDesktopNumbers = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
+            foreach (AgentDesktopBindingDocument binding in bindings)
+            {
+                if (agentDesktopControl.IsDesktopControlled(binding.DesktopId)) activeCount++;
+                int? liveNumber = agentDesktopControl.ResolveDesktopNumber(binding.DesktopId);
+                liveDesktopNumbers[binding.DesktopId] = liveNumber;
+                if (!liveNumber.HasValue) unavailableCount++;
+            }
+
+            if (status != null)
+            {
+                status.Text = bindings.Count == 0
+                    ? "Not bound"
+                    : bindings.Count + " bound · " + activeCount + " controlling" + (unavailableCount > 0 ? " · " + unavailableCount + " unavailable" : String.Empty);
+                status.Foreground = BrushFrom(unavailableCount > 0 ? "#FFFF9F0A" : activeCount > 0 ? "#FF0A84FF" : (isDarkTheme ? "#FF98989F" : "#FF8E8E93"));
+            }
+            if (bind != null)
+            {
+                bind.Content = "Bind Current";
+                bind.IsEnabled = true;
+            }
+
+            if (bindingsPanel != null)
+            {
+                foreach (AgentDesktopBindingDocument binding in bindings)
+                {
+                    bool controlled = agentDesktopControl.IsDesktopControlled(binding.DesktopId);
+                    int? liveNumber = liveDesktopNumbers[binding.DesktopId];
+                    bool available = liveNumber.HasValue;
+                    bool current = available && liveNumber.Value == currentDesktop;
+                    int? displayNumber = liveNumber ?? binding.DesktopNumber;
+                    string label = displayNumber.HasValue ? "Desktop " + (displayNumber.Value + 1) : "Desktop " + binding.DesktopId.Substring(0, 8);
+                    string state = !available
+                        ? "Unavailable · Windows desktop missing"
+                        : (current ? "Current · " : String.Empty) + (controlled ? "Controlling" : "Ready");
+
+                    Border row = new Border
+                    {
+                        Background = BrushFrom(isDarkTheme ? "#FF252527" : "#FFFFFFFF"),
+                        BorderBrush = BrushFrom(isDarkTheme ? "#20FFFFFF" : "#10000000"),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(12),
+                        Padding = new Thickness(9, 7, 8, 7),
+                        Margin = new Thickness(0, bindingsPanel.Children.Count == 0 ? 0 : 6, 0, 0)
+                    };
+                    Grid grid = new Grid();
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    StackPanel text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                    text.Children.Add(new TextBlock
+                    {
+                        Text = label,
+                        Foreground = BrushFrom(isDarkTheme ? "#FFF5F5F7" : "#FF18181B"),
+                        FontSize = 10,
+                        FontWeight = FontWeights.SemiBold
+                    });
+                    text.Children.Add(new TextBlock
+                    {
+                        Text = state,
+                        Foreground = BrushFrom(!available ? "#FFFF9F0A" : controlled ? "#FF0A84FF" : (isDarkTheme ? "#FF98989F" : "#FF8E8E93")),
+                        FontSize = 9,
+                        Margin = new Thickness(0, 2, 0, 0)
+                    });
+                    grid.Children.Add(text);
+
+                    string capturedDesktopId = binding.DesktopId;
+                    Button unbind = new Button
+                    {
+                        Content = controlled ? "In Use" : "Unbind",
+                        Style = window.FindResource("MiniButton") as Style,
+                        Padding = new Thickness(10, 5, 10, 5),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        IsEnabled = !controlled,
+                        ToolTip = controlled ? "Exit Agent Control before unbinding this desktop." : "Remove this desktop from the Agent pool."
+                    };
+                    unbind.Background = BrushFrom(isDarkTheme ? "#FF2C2C2E" : "#FFF2F2F4");
+                    unbind.Foreground = BrushFrom(controlled ? (isDarkTheme ? "#FF73737A" : "#FFA1A1AA") : (isDarkTheme ? "#FFF5F5F7" : "#FF27272A"));
+                    unbind.Click += async delegate
+                    {
+                        unbind.IsEnabled = false;
+                        await UnbindAgentDesktopAsync(capturedDesktopId);
+                    };
+                    Grid.SetColumn(unbind, 1);
+                    grid.Children.Add(unbind);
+                    row.Child = grid;
+                    bindingsPanel.Children.Add(row);
+                }
+            }
         }
         catch
         {
-            display = "Needs attention";
+            if (status != null)
+            {
+                status.Text = "Needs attention";
+                status.Foreground = BrushFrom("#FFFF453A");
+            }
+            if (bind != null) bind.IsEnabled = true;
+            if (bindingsPanel != null) bindingsPanel.Children.Clear();
         }
+    }
 
-        if (status != null)
+    private async Task UnbindAgentDesktopAsync(string desktopId)
+    {
+        if (agentDesktopControl == null) return;
+        try
         {
-            status.Text = display;
-            status.Foreground = BrushFrom(active ? "#FF0A84FF" : (isDarkTheme ? "#FF98989F" : "#FF8E8E93"));
+            AgentDesktopBindingDocument removed = await agentDesktopControl.UnbindDesktopAsync(desktopId);
+            string label = removed.DesktopNumber.HasValue ? "Desktop " + (removed.DesktopNumber.Value + 1) : "Agent Desktop";
+            ShowToast(label + " removed from the Agent pool.", false);
         }
-        if (bind != null)
+        catch (Exception error)
         {
-            bind.Content = "Bind Current";
-            bind.IsEnabled = true;
+            ShowToast(error.Message, true);
+        }
+        finally
+        {
+            UpdateAgentDesktopUi();
         }
     }
 
@@ -2656,6 +2765,7 @@ internal sealed partial class ControlPanelRuntime
         Forms.ToolStripItem tunnel = menu.Items.Add("Open Tunnel UI");
         menu.Items.Add("-");
         Forms.ToolStripItem bindAgentDesktop = menu.Items.Add("Bind Current Desktop as Agent Desktop");
+        Forms.ToolStripItem manageAgentDesktops = menu.Items.Add("Manage Agent Desktops…");
         Forms.ToolStripItem exitAgentControl = menu.Items.Add("Exit Agent Control");
         menu.Items.Add("-");
         Forms.ToolStripItem quitPanel = menu.Items.Add("Quit Control Panel (Keep Services Running)");
@@ -2672,6 +2782,13 @@ internal sealed partial class ControlPanelRuntime
         stop.Click += delegate { StopGatewayAsync(); };
         tunnel.Click += delegate { OpenPath("http://127.0.0.1:8080/ui"); };
         bindAgentDesktop.Click += delegate { BindCurrentAgentDesktop(); };
+        manageAgentDesktops.Click += delegate
+        {
+            UpdateStatus();
+            if (!settingsExpanded) ToggleSettings();
+            UpdateAgentDesktopUi();
+            AnimateShow();
+        };
         exitAgentControl.Click += delegate
         {
             if (agentDesktopControl != null) agentDesktopControl.ExitControl();
@@ -2680,7 +2797,8 @@ internal sealed partial class ControlPanelRuntime
         menu.Opening += delegate
         {
             bool available = agentDesktopControl != null;
-            bindAgentDesktop.Enabled = available;
+            manageAgentDesktops.Enabled = available;
+            bindAgentDesktop.Enabled = available && agentDesktopControl.CurrentDesktopNumber > 0;
             exitAgentControl.Enabled = available && agentDesktopControl.IsCurrentDesktopControlled;
         };
         quitPanel.Click += delegate { QuitPanel(false); };
@@ -2941,6 +3059,8 @@ internal static class Program
                 return ControlPanelRuntime.RunAgentSafeIsolationSelfTest();
             if (args.Length > 0 && args[0] == "--agent-control-lock-self-test")
                 return CrossProcessDirectoryLock.RunSelfTest();
+            if (args.Length > 0 && args[0] == "--agent-desktop-binding-self-test")
+                return AgentDesktopControlCoordinator.RunBindingSelfTest();
             if (args.Length == 4 && args[0] == "--agent-control-lock-hold")
                 return CrossProcessDirectoryLock.HoldForInterop(args[1], args[2], args[3]);
             if (args.Length == 2 && args[0] == "--agent-control-lock-try")

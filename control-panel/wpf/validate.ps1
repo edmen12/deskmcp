@@ -18,6 +18,7 @@ $selfTests = @(
     @{ Arg='--tunnel-status-self-test'; Label='TUNNEL_STATUS_SELF_TEST' },
     @{ Arg='--agent-safe-isolation-self-test'; Label='AGENT_SAFE_ISOLATION_SELF_TEST' },
     @{ Arg='--agent-control-lock-self-test'; Label='AGENT_CONTROL_LOCK_SELF_TEST' },
+    @{ Arg='--agent-desktop-binding-self-test'; Label='AGENT_DESKTOP_BINDING_SELF_TEST' },
     @{ Arg='--update-security-self-test'; Label='UPDATE_SECURITY_SELF_TEST' }
 )
 foreach ($entry in $selfTests) {
