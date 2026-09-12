@@ -27,7 +27,11 @@ If `startupTiming.connectMs` dominates while the other phases stay small, diagno
 Check that both the Tunnel ID and Runtime API Key are configured. If the credentials changed, open **Settings → Tunnel → Configure**, save them again, then reconnect.
 
 The Runtime API Key is stored using Windows DPAPI. DeskMCP does not write it to `settings.json`.
-## ChatGPT does not show 13 tools
+## Connector name already exists
+
+ChatGPT plugin names are account-side and are not removed by reinstalling DeskMCP. If **DeskMCP** already exists, do not create another plugin with the same name. Cancel **New plugin**, open the existing DeskMCP plugin, confirm it uses the current Tunnel, then run **Scan tools** again.
+
+## ChatGPT does not show 27 tools
 
 Recheck the plugin configuration:
 
@@ -37,7 +41,7 @@ Recheck the plugin configuration:
 - Correct Tunnel selected
 - **I understand and want to continue** checked
 
-Then run **Scan tools** again. The expected production surface is exactly 13 tools.
+Then run **Scan tools** again. The expected production surface is exactly 27 tools.
 
 ## A file or search result is blocked
 

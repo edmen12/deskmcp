@@ -451,14 +451,15 @@
                 <TextBlock Text="Your local side is ready. Finish the connection in ChatGPT:" FontSize="10" TextWrapping="Wrap" Margin="0,5,0,12" Foreground="{DynamicResource UiTextSecondary}"/>
                 <Border Background="{DynamicResource UiSurfaceMuted}" CornerRadius="16" Padding="13">
                   <StackPanel>
-                    <TextBlock Text="1   Plugins &#x2192; New plugin" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}"/>
-                    <TextBlock Text="2   Name: DeskMCP" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0"/>
+                    <TextBlock Text="1   Plugins &#x2192; open DeskMCP if it already exists" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" TextWrapping="Wrap"/>
+                    <TextBlock Text="2   If missing, New plugin &#x2192; Name: DeskMCP" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
                     <TextBlock Text="3   Connection: Tunnel &#x00B7; Auth: No auth" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
                     <TextBlock Text="4   Select your Tunnel, check &#x2018;I understand and want to continue&#x2019;, then Scan tools" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource UiTextPrimary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
                   </StackPanel>
                 </Border>
+                <TextBlock Text="If ChatGPT says &apos;Connector name already exists&apos;, cancel creation and open the existing DeskMCP plugin instead." FontSize="9" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{DynamicResource UiTextMuted}"/>
                 <Border x:Name="FirstRunExpectedCard" Background="{DynamicResource UiAccentSoft}" CornerRadius="13" Padding="11,9" Margin="0,12,0,0">
-                  <TextBlock Text="Expected result: 26 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
+                  <TextBlock Text="Expected result: 27 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
                 </Border>
                 <Button x:Name="FirstRunFinishButton" Style="{StaticResource ActionButton}" Content="Finish Setup" Margin="0,16,0,0"/>
               </StackPanel>

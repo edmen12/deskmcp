@@ -32,7 +32,7 @@ DeskMCP is not a vulnerability scanner, exploit framework, credential harvester,
 
 Release-affecting source and build scripts live in the public repository. GitHub Actions uses GitHub-hosted Windows x64, Windows ARM64, and macOS ARM64 runners for validation.
 
-Windows release tooling builds the Gateway, publishes the self-contained Control Panel, stages production dependencies, inventories licenses, validates 13 tools and process cleanup, builds Setup, and runs install/rollback/upgrade/recovery/runtime/uninstall smoke tests before release metadata is generated.
+Windows release tooling builds the Gateway, publishes the self-contained Control Panel, stages production dependencies, inventories licenses, validates 27 tools and process cleanup, builds Setup, and runs install/rollback/upgrade/recovery/runtime/uninstall smoke tests before release metadata is generated.
 
 ## Third-party components
 
@@ -61,6 +61,6 @@ The release inventory currently resolves all production package licenses with no
 
 **License:** Apache License 2.0, no commercial dual-licensing of DeskMCP.
 
-**Description:** DeskMCP is a free, local-first desktop bridge for ChatGPT. It runs a loopback-only policy Gateway on the user's computer and exposes 13 MCP tools for a user-selected Workspace. Read-only is the default, Write is workspace-scoped, and Full Control is session-only. Users configure their own OpenAI Tunnel credentials. DeskMCP does not provide vulnerability scanning, exploitation, privilege escalation, security bypass, maintainer-operated remote administration, telemetry, advertising, or credential collection.
+**Description:** DeskMCP is a free, local-first desktop bridge for ChatGPT. It runs a loopback-only policy Gateway on the user's computer and exposes 27 MCP tools for a user-selected Workspace. Read-only is the default, Write is workspace-scoped, and Full Control is session-only. Users configure their own OpenAI Tunnel credentials. DeskMCP does not provide vulnerability scanning, exploitation, privilege escalation, security bypass, maintainer-operated remote administration, telemetry, advertising, or credential collection.
 
 **Windows artifacts to sign:** DeskMCP Setup executables for Windows x64 and Windows ARM64. Bundled upstream OSS runtimes remain upstream components and are not re-signed as DeskMCP-owned binaries.

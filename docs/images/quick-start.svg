@@ -11,6 +11,6 @@
     <circle cx="738" cy="180" r="35" fill="#10263A" stroke="#3A8CFF" stroke-width="3"/><text x="738" y="188" text-anchor="middle" fill="#8CB8FF" font-size="23" font-weight="700">3</text>
     <text x="738" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Connect Tunnel</text><text x="738" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Paste Tunnel ID + API key</text>
     <circle cx="1015" cy="180" r="35" fill="#10263A" stroke="#34C759" stroke-width="3"/><text x="1015" y="188" text-anchor="middle" fill="#34C759" font-size="23" font-weight="700">4</text>
-    <text x="1015" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Scan tools</text><text x="1015" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Expected: 13 tools</text>
+    <text x="1015" y="238" text-anchor="middle" fill="#EDF9FD" font-size="18" font-weight="600">Scan tools</text><text x="1015" y="263" text-anchor="middle" fill="#7F95AA" font-size="14">Expected: 27 tools</text>
   </g>
 </svg>

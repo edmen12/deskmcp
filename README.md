@@ -43,11 +43,11 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
 1. Download `DeskMCP-Setup-<version>.exe` from the [latest GitHub Release](https://github.com/edmen12/deskmcp/releases/latest) and run it.
 2. Choose the workspace DeskMCP may access.
 3. In OpenAI Platform, create a Tunnel and copy its **Tunnel ID** and **Runtime API Key** into First Run.
-4. In ChatGPT open **Plugins → New plugin**.
-5. Use **Name: DeskMCP**, **Connection: Tunnel**, **Auth: No auth**.
+4. In ChatGPT, open the existing **DeskMCP** plugin if one already exists. Only use **Plugins → New plugin** when DeskMCP is not present.
+5. For a new plugin use **Name: DeskMCP**, **Connection: Tunnel**, **Auth: No auth**. If ChatGPT reports **Connector name already exists**, cancel creation and reuse the existing DeskMCP plugin instead.
 6. Select the Tunnel, check **I understand and want to continue**, then **Scan tools**.
 
-Expected result: **26 DeskMCP tools**.
+Expected result: **27 DeskMCP tools**.
 
 The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. Secret writes are verified by immediate DPAPI readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
 ## Architecture

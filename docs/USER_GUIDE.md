@@ -37,15 +37,15 @@ The Runtime API Key is encrypted with Windows DPAPI and is not stored in `settin
 
 In ChatGPT:
 
-1. Open **Plugins → New plugin**.
-2. Name it `DeskMCP`.
+1. If a **DeskMCP** plugin already exists, open and reuse it. Otherwise open **Plugins → New plugin**.
+2. Only for a new plugin, name it `DeskMCP`. If ChatGPT reports **Connector name already exists**, cancel creation and return to the existing DeskMCP plugin.
 3. Set **Connection** to `Tunnel`.
 4. Set **Auth** to `No auth`.
 5. Select your Tunnel.
 6. Check **I understand and want to continue**.
 7. Run **Scan tools**.
 
-Expected result: **26 DeskMCP tools**.
+Expected result: **27 DeskMCP tools**.
 ## 3. Control Panel
 
 <p align="center"><img src="images/control-panel.png" alt="DeskMCP Control Panel" width="430" /></p>
