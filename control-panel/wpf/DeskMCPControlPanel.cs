@@ -323,7 +323,7 @@ internal sealed partial class ControlPanelRuntime
         catch (Exception error)
         {
             agentDesktopControl = null;
-            try { File.AppendAllText(Path.Combine(logsDir, "agent-desktop-error.log"), DateTime.Now.ToString("s") + " " + error.Message + Environment.NewLine); } catch { }
+            try { RuntimeReliability.AppendAllTextBounded(Path.Combine(logsDir, "agent-desktop-error.log"), DateTime.Now.ToString("s") + " " + error.Message + Environment.NewLine); } catch { }
         }
 
         WireWindowEvents();
@@ -621,7 +621,7 @@ internal sealed partial class ControlPanelRuntime
         try
         {
             string log = Path.Combine(logsDir, "control-panel-error.log");
-            File.AppendAllText(log, DateTime.Now.ToString("s") + " " + context + Environment.NewLine + error + Environment.NewLine + Environment.NewLine);
+            RuntimeReliability.AppendAllTextBounded(log, DateTime.Now.ToString("s") + " " + context + Environment.NewLine + error + Environment.NewLine + Environment.NewLine);
         }
         catch { }
     }
@@ -3427,7 +3427,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            try { File.AppendAllText(logPath, DateTime.Now.ToString("s") + Environment.NewLine + ex + Environment.NewLine + Environment.NewLine); } catch { }
+            try { RuntimeReliability.AppendAllTextBounded(logPath, DateTime.Now.ToString("s") + Environment.NewLine + ex + Environment.NewLine + Environment.NewLine); } catch { }
             MessageBox.Show("DeskMCP Control Panel failed to start.\n\n" + ex.Message, "DeskMCP Control", MessageBoxButton.OK, MessageBoxImage.Error);
             return 1;
         }

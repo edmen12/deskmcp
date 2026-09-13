@@ -6,6 +6,8 @@ using System.Threading;
 internal static class RuntimeReliability
 {
     private static readonly int[] RetryDelaysSeconds = new int[] { 2, 5, 10, 30 };
+    private static readonly object LogWriteSync = new object();
+    private const int DefaultLogMaxBytes = 1024 * 1024;
 
     public static int RetryDelaySeconds(int retryIndex)
     {
@@ -121,6 +123,38 @@ internal static class RuntimeReliability
         }
     }
 
+    public static void AppendAllTextBounded(string path, string content, int maxBytes = DefaultLogMaxBytes)
+    {
+        if (maxBytes < 64) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        string directory = Path.GetDirectoryName(path);
+        if (String.IsNullOrWhiteSpace(directory))
+            throw new InvalidOperationException("Bounded log path must have a parent directory.");
+        Directory.CreateDirectory(directory);
+        string value = content ?? String.Empty;
+        int maxChars = Math.Max(1, maxBytes / 4);
+        if (value.Length > maxChars) value = value.Substring(value.Length - maxChars);
+        byte[] bytes = new UTF8Encoding(false).GetBytes(value);
+        try
+        {
+            lock (LogWriteSync)
+            {
+                string rotated = path + ".1";
+                long existingBytes = File.Exists(path) ? new FileInfo(path).Length : 0;
+                if (existingBytes + bytes.Length > maxBytes)
+                {
+                    if (File.Exists(rotated)) DeleteFileWithRetry(rotated);
+                    if (File.Exists(path)) MoveFileWithRetry(path, rotated, false);
+                }
+                using (FileStream stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read))
+                {
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(false);
+                }
+            }
+        }
+        finally { Array.Clear(bytes, 0, bytes.Length); }
+    }
+
     public static int RunSelfTest()
     {
         string root = Path.Combine(Path.GetTempPath(), "deskmcp-runtime-reliability-" + Guid.NewGuid().ToString("N"));
@@ -176,6 +210,16 @@ internal static class RuntimeReliability
             if (File.ReadAllText(state) != "{\"value\":2}" ||
                 File.ReadAllText(BackupPath(state)) != "{\"value\":1}")
                 throw new InvalidOperationException("atomic state backup contract failed");
+
+            string boundedLog = Path.Combine(root, "bounded.log");
+            for (int i = 0; i < 5; i++)
+                AppendAllTextBounded(boundedLog, new string((char)('A' + i), 80) + Environment.NewLine, 128);
+            AppendAllTextBounded(boundedLog, new string('Z', 1000), 128);
+            string rotatedLog = boundedLog + ".1";
+            if (!File.Exists(rotatedLog) || new FileInfo(rotatedLog).Length > 128 || new FileInfo(boundedLog).Length > 128)
+                throw new InvalidOperationException("bounded log rotation contract failed");
+            if (!File.ReadAllText(boundedLog).Contains("ZZZZ"))
+                throw new InvalidOperationException("bounded log did not preserve the newest entry tail");
 
             Console.WriteLine("RUNTIME_RELIABILITY_SELF_TEST_OK");
             return 0;

@@ -565,7 +565,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         try { RegisterDesktopSwitchNotifications(); }
         catch (Exception error)
         {
-            try { File.AppendAllText(Path.Combine(root, "desktop-switch-hook-error.log"), DateTime.UtcNow.ToString("O") + " " + error.Message + Environment.NewLine); } catch { }
+            try { RuntimeReliability.AppendAllTextBounded(Path.Combine(root, "desktop-switch-hook-error.log"), DateTime.UtcNow.ToString("O") + " " + error.Message + Environment.NewLine); } catch { }
         }
         timer.Start();
         Tick();
@@ -1110,7 +1110,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         try
         {
             if (!String.IsNullOrWhiteSpace(detail))
-                File.AppendAllText(Path.Combine(root, "control-error.log"), DateTime.UtcNow.ToString("O") + " " + detail + Environment.NewLine);
+                RuntimeReliability.AppendAllTextBounded(Path.Combine(root, "control-error.log"), DateTime.UtcNow.ToString("O") + " " + detail + Environment.NewLine);
         }
         catch { }
         try
