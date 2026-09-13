@@ -2,6 +2,7 @@ param([switch]$SkipStage,[ValidateSet('win-x64','win-arm64')][string]$Target = '
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
@@ -18,6 +19,7 @@ $InstallerSource = Join-Path $InstallerRoot 'DeskMCPInstaller.cs'
 $UninstallerExe = Join-Path $BuildRoot 'DeskMCPUninstaller.exe'
 $PayloadZip = Join-Path $BuildRoot 'DesktopMCP-payload.zip'
 $PayloadHashFile = Join-Path $BuildRoot 'DesktopMCP-payload.sha256'
+$SourceCommitFile = Join-Path $BuildRoot 'DesktopMCP-source-commit.txt'
 $BrandIcon = Join-Path $ProjectRoot 'assets\brand\DeskMCP.ico'
 $PackageVersion = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
 $expectedHostArch = if ($Target -eq 'win-arm64') { 'ARM64' } else { 'AMD64' }
@@ -129,6 +131,7 @@ if (-not $SkipStage) {
     Write-Output 'STEP=release-stage-skip'
     Require (Test-Path -LiteralPath $StageRoot) 'Release stage is missing.'
 }
+Assert-DeskMcpReleaseSourceClean $ProjectRoot
 
 Write-Output 'STEP=installer-path-budget'
 Assert-InstallerPathBudget $StageRoot $SmokeRoot
@@ -152,6 +155,11 @@ Copy-Item -LiteralPath $UninstallerExe -Destination (Join-Path $StageRoot 'DeskM
 Require ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $StageRoot 'DeskMCPUninstaller.exe')).Hash -eq $panelHashForUninstaller) 'Staged Uninstaller host must be byte-identical to DeskMCP.exe.'
 Write-Output 'STEP=payload-integrity-manifest'
 $targetContract = Get-Content -LiteralPath (Join-Path $StageRoot 'release-target.json') -Raw | ConvertFrom-Json
+$sourceCommit = ([string]$targetContract.sourceCommit).Trim().ToLowerInvariant()
+Require ($sourceCommit -match '^[0-9a-f]{40}$') 'Release stage is missing valid source commit provenance; rebuild it before packaging.'
+$currentCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
+Require ($sourceCommit -eq $currentCommit) ('Release stage source commit ' + $sourceCommit + ' does not match current source ' + $currentCommit + '; rebuild the stage before packaging.')
+[IO.File]::WriteAllText($SourceCommitFile, ('DESKMCP_SOURCE_COMMIT_V1=' + $sourceCommit + [Environment]::NewLine), [Text.Encoding]::ASCII)
 Require ([int]$targetContract.agentSafeIsolationContract -ge 2) 'Release stage predates the tunnel-isolated agent-safe contract; rebuild it before packaging.'
 Require ([int]$targetContract.processJobObjectContract -ge 1) 'Release stage predates the owned-process Job Object contract; rebuild it before packaging.'
 Require ([int]$targetContract.computerUseContract -ge 1) 'Release stage predates the computer-use payload contract; rebuild it before packaging.'
@@ -220,9 +228,13 @@ Invoke-Native $csc @(
     '/reference:System.IO.Compression.FileSystem.dll',
     ('/resource:' + $PayloadZip + ',DesktopMCP.Payload.zip'),
     ('/resource:' + $PayloadHashFile + ',DesktopMCP.Payload.sha256'),
+    ('/resource:' + $SourceCommitFile + ',DesktopMCP.SourceCommit.txt'),
     $InstallerSource
 )
 Require (Test-Path -LiteralPath $SetupExe) 'Setup build output is missing.'
+$embeddedSourceCommit = Get-DeskMcpSetupSourceCommit $SetupExe
+Require ($embeddedSourceCommit -eq $sourceCommit) ('Setup embedded source commit mismatch: ' + $embeddedSourceCommit + ' expected=' + $sourceCommit)
+Write-Output ('SETUP_SOURCE_COMMIT=' + $embeddedSourceCommit)
 Write-Output 'STEP=installer-smoke-single-instance'
 $mutexProbeRoot = Join-Path $RuntimeRoot ('installer-mutex-probe\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
 $mutexReady = Join-Path $mutexProbeRoot 'ready.txt'
@@ -307,6 +319,10 @@ Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\SHA256SUMS
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\UPSTREAM_ARCHIVE_SHA256.txt')) 'Installed WinApp CLI upstream provenance hash is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'gateway\winapp\VERSION.txt')) 'Installed WinApp CLI version marker is missing.'
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'licenses\winappcli\LICENSE.txt')) 'Installed WinApp CLI MIT license is missing.'
+$installedReleaseTargetPath = Join-Path $SmokeRoot 'release-target.json'
+Require (Test-Path -LiteralPath $installedReleaseTargetPath) 'Installed release target contract is missing.'
+$installedReleaseTarget = Get-Content -LiteralPath $installedReleaseTargetPath -Raw | ConvertFrom-Json
+Require (([string]$installedReleaseTarget.sourceCommit).Trim().ToLowerInvariant() -eq $sourceCommit) 'Installed source provenance does not match the Setup embedded source commit.'
 $installedIntegrityPath = Join-Path $SmokeRoot 'install-integrity.sha256'
 Require (Test-Path -LiteralPath $installedIntegrityPath) 'Installed integrity manifest is missing.'
 $installedIntegrityText = Get-Content -LiteralPath $installedIntegrityPath -Raw

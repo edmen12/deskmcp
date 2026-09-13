@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version) }
 $ReleaseRoot = Split-Path ([IO.Path]::GetFullPath($SetupPath)) -Parent
@@ -23,8 +24,16 @@ $signature = Get-AuthenticodeSignature -LiteralPath $SetupPath
 $rows = @(Import-Csv -LiteralPath $inventory)
 $unknown = @($rows | Where-Object { $_.license -eq 'UNKNOWN' }).Count
 $targetInfoPath = Join-Path $StageRoot 'release-target.json'
-$targetInfo = if (Test-Path -LiteralPath $targetInfoPath) { Get-Content -LiteralPath $targetInfoPath -Raw | ConvertFrom-Json } else { $null }
-$nodeVersion = if ($targetInfo -and $targetInfo.nodeVersion) { [string]$targetInfo.nodeVersion } else { [string]$TargetConfig.NodeVersion }
+if (-not (Test-Path -LiteralPath $targetInfoPath)) { throw 'Release-stage target contract is missing.' }
+$targetInfo = Get-Content -LiteralPath $targetInfoPath -Raw | ConvertFrom-Json
+$setupSourceCommit = Get-DeskMcpSetupSourceCommit $SetupPath
+$stageSourceCommit = ([string]$targetInfo.sourceCommit).Trim().ToLowerInvariant()
+if ($stageSourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Release-stage source provenance is missing or invalid.' }
+if ($stageSourceCommit -ne $setupSourceCommit) { throw ('Release-stage source commit ' + $stageSourceCommit + ' does not match Setup embedded source commit ' + $setupSourceCommit + '.') }
+Assert-DeskMcpReleaseSourceClean $ProjectRoot
+$currentSourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
+if ($setupSourceCommit -ne $currentSourceCommit) { throw ('Setup embedded source commit ' + $setupSourceCommit + ' does not match current source ' + $currentSourceCommit + '.') }
+$nodeVersion = if ($targetInfo.nodeVersion) { [string]$targetInfo.nodeVersion } else { [string]$TargetConfig.NodeVersion }
 $manifest = [ordered]@{
     schemaVersion = 2
     product = 'DeskMCP'
@@ -32,6 +41,7 @@ $manifest = [ordered]@{
     channel = 'stable'
     target = $Target
     architecture = $TargetConfig.Architecture
+    sourceCommit = $setupSourceCommit
     artifact = $artifact.Name
     sizeBytes = [int64]$artifact.Length
     sha256 = $sha

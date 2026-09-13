@@ -2,7 +2,9 @@ param([switch]$RequireSigned,[ValidateSet('win-x64','win-arm64')][string]$Target
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
+$CurrentSourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
 $Setup = if ([string]::IsNullOrWhiteSpace($SetupPath)) { Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig) } else { [IO.Path]::GetFullPath($SetupPath) }
@@ -26,6 +28,11 @@ $versionTagDetail = @(& $versionTagGuard -ProjectRoot $ProjectRoot -Version $Ver
 $versionTagExit = $LASTEXITCODE
 $versionTagMessage = ($versionTagDetail -join ' ').Trim()
 if ($versionTagExit -eq 0) { Pass $versionTagMessage } else { Block $versionTagMessage }
+try {
+    Assert-DeskMcpReleaseSourceClean $ProjectRoot
+    Pass ('Tracked release source is clean at ' + $CurrentSourceCommit)
+}
+catch { Block $_.Exception.Message }
 Write-Output '------------------------------------'
 $projectLicense = Join-Path $ProjectRoot 'LICENSE'
 if (Test-Path -LiteralPath $projectLicense) {
@@ -73,6 +80,10 @@ foreach ($item in @(
 $stageContractPath = Join-Path $StageRoot 'release-target.json'
 if (Require-File $stageContractPath 'Release-stage target contract') {
     $stageContract = Get-Content -LiteralPath $stageContractPath -Raw | ConvertFrom-Json
+    $stageSourceCommit = ([string]$stageContract.sourceCommit).Trim().ToLowerInvariant()
+    if ($stageSourceCommit -notmatch '^[0-9a-f]{40}$') { Block 'Release-stage source commit provenance is missing or invalid' }
+    elseif ($stageSourceCommit -eq $CurrentSourceCommit) { Pass ('Release-stage source commit matches current source: ' + $stageSourceCommit) }
+    else { Block ('Release-stage source commit mismatch: ' + $stageSourceCommit + ' current=' + $CurrentSourceCommit) }
     if ([int]$stageContract.computerUseContract -ge 1) { Pass 'Computer-use release contract' } else { Block 'Release stage predates the computer-use payload contract' }
     if ([string]$stageContract.winAppVersion -eq [string]$TargetConfig.WinAppVersion) { Pass ('WinApp release target: ' + $TargetConfig.WinAppVersion) } else { Block ('WinApp release target mismatch: ' + $stageContract.winAppVersion) }
 }
@@ -103,6 +114,14 @@ if (Require-File $Setup ('Windows Setup ' + $Target)) {
     $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash.ToLowerInvariant()
     Pass ('Setup size MB: ' + [math]::Round($setupItem.Length / 1MB, 1))
     Write-Output ('INFO  Setup SHA256: ' + $setupHash)
+    try {
+        $setupSourceCommit = Get-DeskMcpSetupSourceCommit $Setup
+        if ($setupSourceCommit -eq $CurrentSourceCommit) { Pass ('Setup embedded source commit matches current source: ' + $setupSourceCommit) }
+        else { Block ('Setup embedded source commit mismatch: ' + $setupSourceCommit + ' current=' + $CurrentSourceCommit) }
+        if ($stageSourceCommit -and $setupSourceCommit -eq $stageSourceCommit) { Pass 'Setup embedded source commit matches release stage' }
+        elseif ($stageSourceCommit) { Block ('Setup source commit ' + $setupSourceCommit + ' does not match release stage ' + $stageSourceCommit) }
+    }
+    catch { Block $_.Exception.Message }
     $signature = Get-AuthenticodeSignature -LiteralPath $Setup
     if ($signature.Status -eq 'Valid') { Pass ('Authenticode valid: ' + $signature.SignerCertificate.Subject) }
     elseif ($RequireSigned) { Block ('Setup is not Authenticode-signed: ' + $signature.Status) }
@@ -118,6 +137,10 @@ if (Require-File $manifestPath 'Release manifest') {
     if ($manifest.version -eq $Version) { Pass 'Release manifest version matches package' } else { Block ('Release manifest version mismatch: ' + $manifest.version) }
     if ($manifest.target -eq $Target) { Pass ('Release manifest target: ' + $Target) } else { Block ('Release manifest target mismatch: ' + $manifest.target) }
     if ($manifest.architecture -eq $TargetConfig.Architecture) { Pass ('Release architecture: ' + $TargetConfig.Architecture) } else { Block ('Release architecture mismatch: ' + $manifest.architecture) }
+    $manifestSourceCommit = ([string]$manifest.sourceCommit).Trim().ToLowerInvariant()
+    if ($manifestSourceCommit -notmatch '^[0-9a-f]{40}$') { Block 'Release manifest source commit provenance is missing or invalid' }
+    elseif ($setupSourceCommit -and $manifestSourceCommit -eq $setupSourceCommit -and $manifestSourceCommit -eq $CurrentSourceCommit) { Pass 'Release manifest source commit matches Setup and current source' }
+    else { Block ('Release manifest source commit mismatch: ' + $manifestSourceCommit + ' setup=' + $setupSourceCommit + ' current=' + $CurrentSourceCommit) }
     if ($manifest.artifact -eq (Split-Path $Setup -Leaf)) { Pass 'Release manifest artifact name matches Setup' } else { Block ('Release manifest artifact mismatch: ' + $manifest.artifact) }
     if ($manifest.releaseStageSmoke -eq 'passed') { Pass 'Release-stage smoke attested in manifest' } else { Block 'Release manifest does not attest a passing release-stage smoke' }
     if ($manifest.installerSmoke -eq 'passed') { Pass 'Installer smoke attested in manifest' } else { Block 'Release manifest does not attest a passing installer smoke' }

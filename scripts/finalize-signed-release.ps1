@@ -5,14 +5,27 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
 if ([string]::IsNullOrWhiteSpace($SetupPath)) {
     $SetupPath = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
 }
 $SetupPath = [IO.Path]::GetFullPath($SetupPath)
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 Require (Test-Path -LiteralPath $SetupPath) ('Signed Setup artifact is missing: ' + $SetupPath)
+$stageContractPath = Join-Path $StageRoot 'release-target.json'
+Require (Test-Path -LiteralPath $stageContractPath) 'Release-stage target contract is missing.'
+Assert-DeskMcpReleaseSourceClean $ProjectRoot
+$currentSourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
+$stageContract = Get-Content -LiteralPath $stageContractPath -Raw | ConvertFrom-Json
+$stageSourceCommit = ([string]$stageContract.sourceCommit).Trim().ToLowerInvariant()
+Require ($stageSourceCommit -match '^[0-9a-f]{40}$') 'Release-stage source commit provenance is missing or invalid.'
+$setupSourceCommit = Get-DeskMcpSetupSourceCommit $SetupPath
+Require ($stageSourceCommit -eq $currentSourceCommit) ('Release-stage source commit ' + $stageSourceCommit + ' does not match current source ' + $currentSourceCommit + '.')
+Require ($setupSourceCommit -eq $currentSourceCommit) ('Setup embedded source commit ' + $setupSourceCommit + ' does not match current source ' + $currentSourceCommit + '.')
+Write-Output ('FINALIZE_PROVENANCE_OK=' + $currentSourceCommit)
 
 $auth = Get-AuthenticodeSignature -LiteralPath $SetupPath
 Require ($auth.Status -eq 'Valid') ('Authenticode status is ' + $auth.Status + ': ' + $auth.StatusMessage)

@@ -8,11 +8,24 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
 $Version = [string]((Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw | ConvertFrom-Json).version)
 $Setup = Join-Path (Join-Path $ProjectRoot 'runtime\release') (Get-DeskMcpSetupName $Version $TargetConfig)
+$StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 Require (Test-Path -LiteralPath $Setup) 'Setup artifact is missing.'
+$stageContractPath = Join-Path $StageRoot 'release-target.json'
+Require (Test-Path -LiteralPath $stageContractPath) 'Release-stage target contract is missing.'
+Assert-DeskMcpReleaseSourceClean $ProjectRoot
+$currentSourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
+$stageContract = Get-Content -LiteralPath $stageContractPath -Raw | ConvertFrom-Json
+$stageSourceCommit = ([string]$stageContract.sourceCommit).Trim().ToLowerInvariant()
+Require ($stageSourceCommit -match '^[0-9a-f]{40}$') 'Release-stage source commit provenance is missing or invalid.'
+$setupSourceCommit = Get-DeskMcpSetupSourceCommit $Setup
+Require ($stageSourceCommit -eq $currentSourceCommit) ('Release-stage source commit ' + $stageSourceCommit + ' does not match current source ' + $currentSourceCommit + '.')
+Require ($setupSourceCommit -eq $currentSourceCommit) ('Setup embedded source commit ' + $setupSourceCommit + ' does not match current source ' + $currentSourceCommit + '.')
+Write-Output ('SIGN_PROVENANCE_OK=' + $currentSourceCommit)
 try {
     Invoke-RestMethod 'http://127.0.0.1:8765/health' -TimeoutSec 1 | Out-Null
     throw 'DeskMCP is running on port 8765. Quit DeskMCP before signing so installer smoke cannot affect the live instance.'

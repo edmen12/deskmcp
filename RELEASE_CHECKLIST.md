@@ -31,6 +31,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] Repository secret hygiene scan: 0 findings.
 - [x] Release manifest and SHA256SUMS match the final Setup binary.
 - [x] Release readiness blocks reuse of an existing `v<version>` tag from a different source commit; CI fetches full tag history before candidate validation.
+- [x] Release provenance is bound to the binary: the release stage records the exact clean Git commit, Setup embeds that commit as a PE resource, and metadata/readiness require stage + Setup + manifest + current/tag source to agree.
 - [x] Source portability scan: no hard-coded local project path, TODO/FIXME/HACK/XXX, or old 0.8.0 version markers.
 ## Candidate hardening hosted CI validation
 
@@ -75,7 +76,7 @@ The release pipeline writes the current installer to:
 
 `runtime\release\DeskMCP-Setup-<version>.exe`
 
-Treat the generated `SHA256SUMS.txt` and `release-manifest.json` beside that installer as the source of truth for the final release hash, version, target, and signature status. Rebuilds intentionally change the hash.
+Treat the final Setup binary plus its generated `SHA256SUMS.txt` and `release-manifest.json` as one provenance set. The Setup carries the embedded source commit; readiness requires that commit to match the release stage, manifest, current Git source, and any existing `v<version>` tag. Rebuilds intentionally change the artifact hash.
 
 ## SignPath Foundation OSS signing application
 

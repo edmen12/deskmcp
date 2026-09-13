@@ -2,7 +2,9 @@ param([ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
+$CurrentSourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $hostArch = [string]$env:PROCESSOR_ARCHITECTURE
 if ($Target -eq 'win-arm64' -and $hostArch -ne 'ARM64') { throw 'ARM64 runtime smoke requires a native Windows ARM64 runner.' }
@@ -72,6 +74,10 @@ foreach ($requiredWinAppFile in @($WinAppExe,$WinAppSkia,$WinAppSums,$WinAppArch
 $StageContractPath = Join-Path $StageRoot 'release-target.json'
 if (-not (Test-Path -LiteralPath $StageContractPath)) { throw 'Release-stage target contract is missing.' }
 $StageContract = Get-Content -LiteralPath $StageContractPath -Raw | ConvertFrom-Json
+$StageSourceCommit = ([string]$StageContract.sourceCommit).Trim().ToLowerInvariant()
+if ($StageSourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Release-stage source commit provenance is missing or invalid.' }
+if ($StageSourceCommit -ne $CurrentSourceCommit) { throw ('Release-stage source commit ' + $StageSourceCommit + ' does not match current source ' + $CurrentSourceCommit + '.') }
+Write-Output ('RELEASE_STAGE_SOURCE_COMMIT=' + $StageSourceCommit)
 if ([int]$StageContract.agentSafeIsolationContract -lt 2) { throw 'Release-stage predates the tunnel-isolated agent-safe contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.processJobObjectContract -lt 1) { throw 'Release-stage predates the owned-process Job Object contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predates the computer-use payload contract; rebuild the stage before smoke testing.' }

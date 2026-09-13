@@ -2,7 +2,10 @@ param([ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
+. (Join-Path $PSScriptRoot 'release-provenance.ps1')
 $TargetConfig = Get-DeskMcpReleaseTarget $Target
+$SourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
+Assert-DeskMcpReleaseSourceClean $ProjectRoot
 $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
 $PanelProject = Join-Path $ProjectRoot 'control-panel\wpf\DeskMCP.ControlPanel.csproj'
@@ -270,8 +273,12 @@ Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'node_modules\@emn
 $noticeGenerator = Join-Path $ProjectRoot 'scripts\generate-third-party-notices.mjs'
 Require (Test-Path -LiteralPath $noticeGenerator) 'Third-party notice generator is missing.'
 Invoke-Native $hostNode @($noticeGenerator,$ProjectRoot,$StageRoot,$Target,$TargetConfig.NodeVersion)
+Assert-DeskMcpReleaseSourceClean $ProjectRoot
+$finalSourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
+Require ($finalSourceCommit -eq $SourceCommit) ('Release source changed during stage build: started at ' + $SourceCommit + ' ended at ' + $finalSourceCommit + '.')
 $stageInfo = [ordered]@{
     target=$Target
+    sourceCommit=$SourceCommit
     architecture=$TargetConfig.Architecture
     dotnetRid=$TargetConfig.DotnetRid
     nodeVersion=$TargetConfig.NodeVersion

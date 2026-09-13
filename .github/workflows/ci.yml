@@ -48,6 +48,10 @@ jobs:
         shell: powershell
         run: .\scripts\test-installer-ui.ps1
 
+      - name: Release provenance self-test
+        shell: powershell
+        run: .\scripts\test-release-provenance.ps1
+
       - name: Build and smoke x64 installer
         shell: powershell
         run: .\scripts\build-installer.ps1 -Target win-x64
