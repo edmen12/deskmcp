@@ -49,7 +49,7 @@ The release inventory currently resolves all production package licenses with no
 5. Require explicit manual approval for every signing request.
 6. Verify the returned signed artifact, timestamp, product/version metadata and signer certificate.
 7. Only after independent verification, add the approved certificate SHA-256 to the compiled updater publisher-pin set in a prior trusted release.
-8. Publish future immutable GitHub Releases; never replace the existing v0.9.1 asset.
+8. Publish future immutable GitHub Releases; never replace or mutate any already-published release asset.
 
 ## Suggested application summary
 

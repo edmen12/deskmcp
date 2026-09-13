@@ -61,9 +61,9 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [ ] Complete First Run from the installed build and confirm ChatGPT scans exactly 27 tools.
 - [ ] Verify normal uninstall keeps DeskMCP user data; separately verify explicit purge removes DeskMCP AppData only.
 
-## Documented limitations — not blockers for the current win-x64 release
+## Documented limitations — not blockers for the current Windows release
 
-- [x] Windows ARM64 build/install/upgrade/runtime/uninstall validation passes on the native GitHub ARM64 runner; the current public v0.9.1 asset remains Windows x64 and is not mutated.
+- [x] Windows ARM64 build/install/upgrade/runtime/uninstall validation passes on the native GitHub ARM64 runner; published GitHub Release assets are treated as immutable and are never replaced in place.
 - [x] Updater download/verify/install/post-install security-hold path is implemented and passes x64 + ARM64 self-tests. User-initiated execution is gated by fixed-repository immutable release metadata plus matching size/SHA-256; Authenticode adds publisher verification when present but is not required for the verified unsigned update path.
 - [ ] Upstream deprecated npm dependencies remain in DeskMCP backend / ExcelJS chains even though production `npm audit` reports zero vulnerabilities.
 
@@ -95,4 +95,4 @@ Human/SignPath steps that must not be claimed complete before they occur:
 - [ ] Configure SignPath artifact metadata restrictions and signing policy.
 - [ ] Approve the first signing request manually and verify the returned signer certificate/timestamp.
 - [ ] Add the independently verified certificate SHA-256 to a prior trusted DeskMCP build before enabling signed updater execution.
-- [ ] Add a **Code signing policy** link to the live GitHub Release description before any SignPath application refresh or first signing-integration review; do not change existing v0.9.1 assets.
+- [ ] Add a **Code signing policy** link to the live GitHub Release description before any SignPath application refresh or first signing-integration review; do not replace or mutate any already-published release assets.
