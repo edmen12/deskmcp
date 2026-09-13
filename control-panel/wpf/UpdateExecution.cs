@@ -442,7 +442,7 @@ internal sealed partial class ControlPanelRuntime
             if (!String.Equals(expectedSha, actualSha, StringComparison.Ordinal))
                 throw new InvalidDataException("Downloaded SHA-256 does not match the manifest.");
 
-            File.Move(partialPath, finalPath, true);
+            RuntimeReliability.MoveFileWithRetry(partialPath, finalPath, true);
             string signer;
             string trustReason;
             if (!VerifyDownloadedUpdate(finalPath, candidate, out signer, out trustReason))

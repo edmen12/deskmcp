@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 internal static class RuntimeReliability
 {
@@ -37,6 +38,46 @@ internal static class RuntimeReliability
         return "read-only";
     }
 
+    private static bool IsTransientFileTransitionError(Exception error)
+    {
+        if (error is UnauthorizedAccessException) return true;
+        IOException io = error as IOException;
+        if (io == null) return false;
+        int nativeCode = io.HResult & 0xFFFF;
+        return nativeCode == 5 || nativeCode == 32 || nativeCode == 33;
+    }
+
+    private static void RunFileTransitionWithRetry(Action operation)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                operation();
+                return;
+            }
+            catch (Exception ex) when (IsTransientFileTransitionError(ex) && attempt < 7)
+            {
+                Thread.Sleep(Math.Min(10 * (1 << attempt), 200));
+            }
+        }
+    }
+
+    public static void MoveFileWithRetry(string source, string destination, bool overwrite)
+    {
+        RunFileTransitionWithRetry(() => File.Move(source, destination, overwrite));
+    }
+
+    private static void ReplaceFileWithRetry(string source, string destination, string backup)
+    {
+        RunFileTransitionWithRetry(() => File.Replace(source, destination, backup, true));
+    }
+
+    private static void DeleteFileWithRetry(string path)
+    {
+        RunFileTransitionWithRetry(() => File.Delete(path));
+    }
+
     public static void WriteAllTextAtomic(string path, string content, bool backupExisting)
     {
         byte[] bytes = new UTF8Encoding(false).GetBytes(content ?? String.Empty);
@@ -63,15 +104,15 @@ internal static class RuntimeReliability
                 if (backupExisting)
                 {
                     string backup = BackupPath(path);
-                    if (File.Exists(backup)) File.Delete(backup);
-                    File.Replace(temp, path, backup, true);
+                    if (File.Exists(backup)) DeleteFileWithRetry(backup);
+                    ReplaceFileWithRetry(temp, path, backup);
                 }
                 else
-                    File.Move(temp, path, true);
+                    MoveFileWithRetry(temp, path, true);
             }
             else
             {
-                File.Move(temp, path, false);
+                MoveFileWithRetry(temp, path, false);
             }
         }
         finally
@@ -104,6 +145,30 @@ internal static class RuntimeReliability
                 throw new InvalidOperationException("normal gateway recovery ignored the selected profile");
             if (ResolveGatewayRecoveryProfile(false, null, "invalid") != "read-only")
                 throw new InvalidOperationException("invalid recovery profile did not fail closed to read-only");
+
+            int transientAttempts = 0;
+            RunFileTransitionWithRetry(() =>
+            {
+                transientAttempts++;
+                if (transientAttempts < 3)
+                    throw new IOException("simulated sharing violation", unchecked((int)0x80070020));
+            });
+            if (transientAttempts != 3)
+                throw new InvalidOperationException("transient file transition retry contract failed");
+
+            int permanentAttempts = 0;
+            bool permanentRejected = false;
+            try
+            {
+                RunFileTransitionWithRetry(() =>
+                {
+                    permanentAttempts++;
+                    throw new IOException("simulated file-not-found", unchecked((int)0x80070002));
+                });
+            }
+            catch (IOException) { permanentRejected = true; }
+            if (!permanentRejected || permanentAttempts != 1)
+                throw new InvalidOperationException("non-transient file transition was retried unexpectedly");
 
             string state = Path.Combine(root, "settings.json");
             WriteAllTextAtomic(state, "{\"value\":1}", true);
