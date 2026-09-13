@@ -153,6 +153,8 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GetCurrentDesktopNumberDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate Guid GetDesktopIdByNumberDelegate(int desktopNumber);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GetDesktopNumberByIdDelegate(Guid desktopId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GoToDesktopNumberDelegate(int desktopNumber);
@@ -163,6 +165,7 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
 
     private readonly IntPtr libraryHandle;
     private readonly GetCurrentDesktopNumberDelegate getCurrentDesktopNumber;
+    private readonly GetDesktopIdByNumberDelegate getDesktopIdByNumber;
     private readonly GetDesktopNumberByIdDelegate getDesktopNumberById;
     private readonly GoToDesktopNumberDelegate goToDesktopNumber;
     private readonly RegisterPostMessageHookDelegate registerPostMessageHook;
@@ -178,6 +181,8 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
         {
             IntPtr export = NativeLibrary.GetExport(libraryHandle, "GetCurrentDesktopNumber");
             getCurrentDesktopNumber = Marshal.GetDelegateForFunctionPointer<GetCurrentDesktopNumberDelegate>(export);
+            getDesktopIdByNumber = Marshal.GetDelegateForFunctionPointer<GetDesktopIdByNumberDelegate>(
+                NativeLibrary.GetExport(libraryHandle, "GetDesktopIdByNumber"));
             getDesktopNumberById = Marshal.GetDelegateForFunctionPointer<GetDesktopNumberByIdDelegate>(
                 NativeLibrary.GetExport(libraryHandle, "GetDesktopNumberById"));
             goToDesktopNumber = Marshal.GetDelegateForFunctionPointer<GoToDesktopNumberDelegate>(
@@ -202,6 +207,14 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
         int current = getCurrentDesktopNumber();
         if (current < 0) throw new InvalidOperationException("VirtualDesktopAccessor could not resolve the current virtual desktop.");
         return current;
+    }
+
+    public Guid CurrentDesktopId()
+    {
+        int current = CurrentDesktopNumber();
+        Guid desktopId = getDesktopIdByNumber(current);
+        if (desktopId == Guid.Empty) throw new InvalidOperationException("VirtualDesktopAccessor could not resolve the current virtual desktop id.");
+        return desktopId;
     }
 
     public int? DesktopNumberById(Guid desktopId)
@@ -628,9 +641,9 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         {
             try
             {
-                int current = desktopClient.CurrentDesktopNumber();
+                Guid currentDesktopId = desktopClient.CurrentDesktopId();
                 AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
-                return state != null && state.Controls != null && state.Controls.Exists(control => control.DesktopNumber == current);
+                return FindControlByDesktopId(state?.Controls, currentDesktopId) != null;
             }
             catch { return false; }
         }
@@ -744,6 +757,16 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         return removed;
     }
 
+    private static AgentDesktopControlDocument FindControlByDesktopId(List<AgentDesktopControlDocument> controls, Guid desktopId)
+    {
+        if (controls == null || desktopId == Guid.Empty) return null;
+        return controls.Find(control =>
+        {
+            Guid candidate;
+            return control != null && Guid.TryParse(control.DesktopId, out candidate) && candidate == desktopId;
+        });
+    }
+
     public static int RunBindingSelfTest()
     {
         try
@@ -822,6 +845,18 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             if (!String.Equals(renumberedRemoved.DesktopId, desktop2, StringComparison.OrdinalIgnoreCase) || renumberedBindings.Count != 0)
                 throw new InvalidOperationException("A stale desktop number incorrectly blocked unbinding a different desktop id.");
 
+            List<AgentDesktopControlDocument> collidingControls = new List<AgentDesktopControlDocument>
+            {
+                busyState.Controls[0],
+                otherDesktopSameOldNumber.Controls[0]
+            };
+            AgentDesktopControlDocument desktop2Control = FindControlByDesktopId(collidingControls, Guid.Parse(desktop2));
+            AgentDesktopControlDocument desktop3Control = FindControlByDesktopId(collidingControls, Guid.Parse(desktop3));
+            if (desktop2Control == null || desktop3Control == null ||
+                !String.Equals(desktop2Control.LeaseId, "33333333-3333-4333-8333-333333333333", StringComparison.OrdinalIgnoreCase) ||
+                !String.Equals(desktop3Control.LeaseId, "44444444-4444-4444-8444-444444444444", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Current Agent Desktop control lookup still depends on stale desktop numbers.");
+
             bool missingRejected = false;
             try { RemoveBindingIfIdle(busyBindings, new AgentDesktopControlPoolDocument { SchemaVersion = 2, Generation = 0, Controls = new List<AgentDesktopControlDocument>() }, desktop3); }
             catch (InvalidOperationException) { missingRejected = true; }
@@ -866,9 +901,9 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         if (disposed) return;
         try
         {
-            int current = desktopClient.CurrentDesktopNumber();
+            Guid currentDesktopId = desktopClient.CurrentDesktopId();
             AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
-            AgentDesktopControlDocument control = state?.Controls?.Find(row => row.DesktopNumber == current);
+            AgentDesktopControlDocument control = FindControlByDesktopId(state?.Controls, currentDesktopId);
             if (control == null || String.IsNullOrWhiteSpace(control.LeaseId))
             {
                 if (notify != null) notify("No Agent Control lease is active on this desktop.", false);
@@ -958,8 +993,8 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 }
             }
 
-            int currentDesktopNumber = desktopClient.CurrentDesktopNumber();
-            currentControl = controls.Find(control => control.DesktopNumber == currentDesktopNumber);
+            Guid currentDesktopId = desktopClient.CurrentDesktopId();
+            currentControl = FindControlByDesktopId(controls, currentDesktopId);
             if (currentControl == null)
             {
                 if (overlay != null) HideOverlayOnly();
