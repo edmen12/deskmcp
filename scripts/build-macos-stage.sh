@@ -7,6 +7,9 @@ cd "$PROJECT_ROOT"
 [[ "$(uname -m)" == "arm64" ]] || { echo "macOS ARM64 stage requires arm64" >&2; exit 2; }
 
 VERSION="$(node -p "require('./package.json').version")"
+SOURCE_COMMIT="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid Git source commit: $SOURCE_COMMIT" >&2; exit 2; }
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "Release source tree is not clean; refusing macOS provenance build." >&2; git status --short >&2; exit 2; }
 NODE_VERSION="24.19.0"
 NODE_ARCHIVE="node-v${NODE_VERSION}-darwin-arm64.tar.gz"
 NODE_SHA="8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
@@ -118,9 +121,13 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 plutil -lint "$CONTENTS/Info.plist"
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "Release source tree changed during macOS stage build." >&2; git status --short >&2; exit 2; }
+FINAL_SOURCE_COMMIT="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+[[ "$FINAL_SOURCE_COMMIT" == "$SOURCE_COMMIT" ]] || { echo "Release source HEAD changed during macOS stage build: started=$SOURCE_COMMIT ended=$FINAL_SOURCE_COMMIT" >&2; exit 2; }
 cat > "$RESOURCES/release-target.json" <<JSON
 {
   "target": "darwin-arm64",
+  "sourceCommit": "$SOURCE_COMMIT",
   "architecture": "arm64",
   "minimumMacOS": "13.0",
   "nodeVersion": "$NODE_VERSION",
