@@ -106,7 +106,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       arguments: { command: 'node -i', timeout_ms: 500, shell: 'cmd.exe' }
     });
     assert.equal(workspaceProcessDenied.isError, true);
-    assert.match(JSON.stringify(workspaceProcessDenied.content), /full-control/);
+    assert.match(JSON.stringify(workspaceProcessDenied.content), /Full Control/);
 
     const read = await client.callTool({
       name: 'desktop_read_file',
@@ -169,7 +169,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       arguments: { path: deniedTarget }
     });
     assert.equal(denied.isError, true);
-    assert.match(JSON.stringify(denied.content), /outside DESKTOP_MCP_ALLOWED_ROOTS/);
+    assert.match(JSON.stringify(denied.content), /outside the selected DeskMCP Workspace/);
 
     const writeTool = listed.tools.find(tool => tool.name === 'desktop_write_file');
     assert.ok(writeTool);
@@ -437,7 +437,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
         arguments: { command: 'node -i', timeout_ms: 500, shell: 'cmd.exe' }
       });
       assert.equal(readOnlyProcessDenied.isError, true);
-      assert.match(JSON.stringify(readOnlyProcessDenied.content), /full-control/);
+      assert.match(JSON.stringify(readOnlyProcessDenied.content), /Full Control/);
     } finally {
       await readOnlyClient.close();
       await readOnlyServer.close();

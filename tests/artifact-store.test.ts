@@ -67,7 +67,7 @@ test('artifact publish cannot escape DeskMCP workspace policy', async () => {
     await writeFile(outside, 'outside\n', 'utf8');
     await assert.rejects(
       store.publishFromPath(outside, policy),
-      /outside DESKTOP_MCP_ALLOWED_ROOTS/i
+      /outside the selected DeskMCP Workspace/i
     );
   });
 });

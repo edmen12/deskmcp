@@ -24,7 +24,7 @@ function jsonResult(value: unknown) {
 function requireFullControl(policy: DesktopPolicy): void {
   if (policy.profile !== 'full-control' && policy.profile !== 'fully-unlocked') {
     throw new PolicyDeniedError(
-      'Dynamic MCP network operations require DESKTOP_MCP_PROFILE=full-control or fully-unlocked.'
+      'Dynamic MCP network operations require the session-only Full Control or Fully Unlocked profile.'
     );
   }
 }

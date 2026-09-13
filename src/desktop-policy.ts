@@ -158,21 +158,23 @@ function isSensitivePath(candidate: string): boolean {
 
   assertCanWrite(): void {
     if (!this.canWrite()) {
-      throw new PolicyDeniedError('Write denied by DESKTOP_MCP_PROFILE=read-only.');
+      throw new PolicyDeniedError('Write denied by the current Read profile. Switch DeskMCP locally to Write, Full Control, or Fully Unlocked.');
     }
   }
 
   private assertSensitiveAllowed(candidate: string): void {
     if (!this.allowsSensitivePaths() && isSensitivePath(candidate)) {
       throw new PolicyDeniedError(
-        'Sensitive path denied. Set DESKTOP_MCP_ALLOW_SENSITIVE_PATHS=true locally to allow it.'
+        'Sensitive path denied by DeskMCP. Use the session-only Fully Unlocked profile for explicit access, or the local DESKTOP_MCP_ALLOW_SENSITIVE_PATHS advanced opt-in.'
       );
     }
-  }  private assertLexicallyAllowed(candidate: string): void {
+  }
+
+  private assertLexicallyAllowed(candidate: string): void {
     if (this.isFullyUnlocked()) return;
     if (!this.roots.some(root => isWithin(root.declared, candidate))) {
       throw new PolicyDeniedError(
-        `Path is outside DESKTOP_MCP_ALLOWED_ROOTS: ${candidate}`
+        `Path is outside the selected DeskMCP Workspace: ${candidate}`
       );
     }
     this.assertSensitiveAllowed(candidate);
@@ -182,7 +184,7 @@ function isSensitivePath(candidate: string): boolean {
     if (this.isFullyUnlocked()) return;
     if (!this.roots.some(root => isWithin(root.canonical, candidate))) {
       throw new PolicyDeniedError(
-        `Canonical path escapes DESKTOP_MCP_ALLOWED_ROOTS: ${candidate}`
+        `Canonical path escapes the selected DeskMCP Workspace: ${candidate}`
       );
     }
     this.assertSensitiveAllowed(candidate);

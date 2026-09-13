@@ -22,7 +22,7 @@ function jsonResult(value: unknown) {
 
 function requireBrowserControl(policy: DesktopPolicy): void {
   if (policy.profile !== 'full-control' && policy.profile !== 'fully-unlocked') {
-    throw new PolicyDeniedError('Browser automation requires DESKTOP_MCP_PROFILE=full-control or fully-unlocked.');
+    throw new PolicyDeniedError('Browser Automation requires the session-only Full Control or Fully Unlocked profile.');
   }
 }
 

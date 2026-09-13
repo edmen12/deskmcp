@@ -31,11 +31,11 @@ test('DesktopPolicy enforces profile and allowed-root boundaries', async () => {
     assert.equal(await readOnly.resolveReadPath(insideFile), await realpath(insideFile));
     await assert.rejects(
       readOnly.resolveReadPath(outsideFile),
-      /outside DESKTOP_MCP_ALLOWED_ROOTS/
+      /outside the selected DeskMCP Workspace/
     );
     await assert.rejects(
       readOnly.resolveWritePath(path.join(allowed, 'new.txt')),
-      /read-only/
+      /current Read profile/
     );
 
     const writable = await DesktopPolicy.create({
@@ -53,14 +53,14 @@ test('DesktopPolicy enforces profile and allowed-root boundaries', async () => {
 
     await assert.rejects(
       writable.resolveReadPath(path.join(allowed, '..', 'outside', 'outside.txt')),
-      /outside DESKTOP_MCP_ALLOWED_ROOTS/
+      /outside the selected DeskMCP Workspace/
     );
 
     const escape = path.join(allowed, 'escape-junction');
     await symlink(outside, escape, 'junction');
     await assert.rejects(
       writable.resolveReadPath(path.join(escape, 'outside.txt')),
-      /Canonical path escapes DESKTOP_MCP_ALLOWED_ROOTS/
+      /Canonical path escapes the selected DeskMCP Workspace/
     );
   } finally {
     await rm(sandbox, { recursive: true, force: true });

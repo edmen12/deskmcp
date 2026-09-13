@@ -60,7 +60,7 @@ async function auditedProcessCall(
 function requireFullControl(policy: DesktopPolicy): void {
   if (policy.profile !== 'full-control' && policy.profile !== 'fully-unlocked') {
     throw new PolicyDeniedError(
-      'Process tools require DESKTOP_MCP_PROFILE=full-control or fully-unlocked.'
+      'Process tools require the session-only Full Control or Fully Unlocked profile.'
     );
   }
 }
