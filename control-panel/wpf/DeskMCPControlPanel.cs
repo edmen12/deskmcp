@@ -699,26 +699,28 @@ internal sealed partial class ControlPanelRuntime
         if (downgradePersistedFull) SaveSettings();
     }
 
+    private void SaveSettingsCore()
+    {
+        PanelSettings settings = new PanelSettings();
+        settings.theme = themeMode;
+        settings.modifiers = hotkeyModifiers;
+        settings.virtualKey = hotkeyVk;
+        settings.shortcut = hotkeyText;
+        settings.workspace = currentWorkspace;
+        settings.recentWorkspaces = recentWorkspaces;
+        settings.autoStartTunnel = autoStartTunnel;
+        settings.showAdminRequestDetails = showAdminRequestDetails;
+        settings.profile = persistentProfile;
+        settings.tunnelId = tunnelId;
+        settings.browserExecutablePath = browserExecutablePath;
+        settings.browserAutoDetect = browserAutoDetect;
+        settings.onboardingCompleted = onboardingCompleted;
+        RuntimeReliability.WriteAllTextAtomic(settingsPath, JsonSerializer.Serialize(settings), true);
+    }
+
     private void SaveSettings()
     {
-        try
-        {
-            PanelSettings settings = new PanelSettings();
-            settings.theme = themeMode;
-            settings.modifiers = hotkeyModifiers;
-            settings.virtualKey = hotkeyVk;
-            settings.shortcut = hotkeyText;
-            settings.workspace = currentWorkspace;
-            settings.recentWorkspaces = recentWorkspaces;
-            settings.autoStartTunnel = autoStartTunnel;
-            settings.showAdminRequestDetails = showAdminRequestDetails;
-            settings.profile = persistentProfile;
-            settings.tunnelId = tunnelId;
-            settings.browserExecutablePath = browserExecutablePath;
-            settings.browserAutoDetect = browserAutoDetect;
-            settings.onboardingCompleted = onboardingCompleted;
-            RuntimeReliability.WriteAllTextAtomic(settingsPath, JsonSerializer.Serialize(settings), true);
-        }
+        try { SaveSettingsCore(); }
         catch (Exception ex) { LogRuntimeError("Settings save failed.", ex); }
     }
 
@@ -1778,6 +1780,41 @@ internal sealed partial class ControlPanelRuntime
 
     private static readonly byte[] TunnelEntropy = Encoding.UTF8.GetBytes("DesktopMcpTunnelRuntimeKey:v1");
 
+    private sealed class RollbackFileSnapshot
+    {
+        public bool Exists { get; set; }
+        public byte[] Content { get; set; }
+        public FileAttributes Attributes { get; set; }
+    }
+
+    private static RollbackFileSnapshot CaptureRollbackFile(string path)
+    {
+        RollbackFileSnapshot snapshot = new RollbackFileSnapshot();
+        snapshot.Exists = File.Exists(path);
+        if (!snapshot.Exists) return snapshot;
+        snapshot.Content = File.ReadAllBytes(path);
+        try { snapshot.Attributes = File.GetAttributes(path); }
+        catch { snapshot.Attributes = FileAttributes.Normal; }
+        return snapshot;
+    }
+
+    private static void RestoreRollbackFile(string path, RollbackFileSnapshot snapshot)
+    {
+        if (snapshot == null) return;
+        if (!snapshot.Exists)
+        {
+            if (File.Exists(path)) RuntimeReliability.DeleteFileWithRetry(path);
+            return;
+        }
+        RuntimeReliability.WriteAllBytesAtomic(path, snapshot.Content ?? Array.Empty<byte>(), false);
+        try { File.SetAttributes(path, snapshot.Attributes); } catch { }
+    }
+
+    private static void ClearRollbackFile(RollbackFileSnapshot snapshot)
+    {
+        if (snapshot?.Content != null) Array.Clear(snapshot.Content, 0, snapshot.Content.Length);
+    }
+
     private bool HasTunnelKey()
     {
         return !TunnelDisabledByEnvironment() && !tunnelCredentialInvalid && File.Exists(tunnelSecretPath);
@@ -1831,6 +1868,63 @@ internal sealed partial class ControlPanelRuntime
         {
             if (plain != null) Array.Clear(plain, 0, plain.Length);
             if (encrypted != null) Array.Clear(encrypted, 0, encrypted.Length);
+        }
+    }
+
+    private void ApplyTunnelConfigurationTransaction(string id, string newKey, bool hasNewKey)
+    {
+        RollbackFileSnapshot profileSnapshot = CaptureRollbackFile(tunnelProfilePath);
+        RollbackFileSnapshot secretSnapshot = CaptureRollbackFile(tunnelSecretPath);
+        RollbackFileSnapshot settingsSnapshot = CaptureRollbackFile(settingsPath);
+        string previousTunnelId = tunnelId;
+        bool previousAutoStartTunnel = autoStartTunnel;
+        int previousTunnelRetryIndex = tunnelRetryIndex;
+        DateTime previousNextTunnelRetry = nextTunnelRetry;
+        bool previousCredentialInvalid = tunnelCredentialInvalid;
+        bool previousCredentialRejected = tunnelCredentialRejected;
+        TunnelRuntimeStatus previousTunnelStatus = lastTunnelStatus;
+        try
+        {
+            string profileId = TryLoadTunnelIdFromProfile();
+            if (!String.Equals(profileId, id, StringComparison.Ordinal)) ConfigureTunnelProfile(id);
+            if (hasNewKey)
+            {
+                if (String.IsNullOrWhiteSpace(newKey)) throw new InvalidOperationException("Tunnel Runtime API Key is empty.");
+                SaveTunnelKey(newKey.Trim());
+            }
+            tunnelId = id;
+            autoStartTunnel = true;
+            tunnelRetryIndex = 0;
+            nextTunnelRetry = DateTime.MinValue;
+            SaveSettingsCore();
+        }
+        catch (Exception applyError)
+        {
+            List<Exception> rollbackErrors = new List<Exception>();
+            try { RestoreRollbackFile(tunnelProfilePath, profileSnapshot); } catch (Exception ex) { rollbackErrors.Add(ex); }
+            try { RestoreRollbackFile(tunnelSecretPath, secretSnapshot); } catch (Exception ex) { rollbackErrors.Add(ex); }
+            try { RestoreRollbackFile(settingsPath, settingsSnapshot); } catch (Exception ex) { rollbackErrors.Add(ex); }
+            tunnelId = previousTunnelId;
+            autoStartTunnel = previousAutoStartTunnel;
+            tunnelRetryIndex = previousTunnelRetryIndex;
+            nextTunnelRetry = previousNextTunnelRetry;
+            tunnelCredentialInvalid = previousCredentialInvalid;
+            tunnelCredentialRejected = previousCredentialRejected;
+            lastTunnelStatus = previousTunnelStatus;
+            if (rollbackErrors.Count > 0)
+            {
+                List<Exception> all = new List<Exception>();
+                all.Add(applyError);
+                all.AddRange(rollbackErrors);
+                throw new AggregateException("Tunnel configuration failed and rollback was incomplete.", all);
+            }
+            throw;
+        }
+        finally
+        {
+            ClearRollbackFile(profileSnapshot);
+            ClearRollbackFile(secretSnapshot);
+            ClearRollbackFile(settingsSnapshot);
         }
     }
 
@@ -1917,21 +2011,31 @@ internal sealed partial class ControlPanelRuntime
             if (!String.IsNullOrWhiteSpace(current) && File.Exists(current))
                 dialog.InitialDirectory = Path.GetDirectoryName(current);
             if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
+            string previousPath = browserExecutablePath;
+            bool previousAutoDetect = browserAutoDetect;
             try
             {
                 browserExecutablePath = NormalizeBrowserExecutablePath(dialog.FileName, true);
                 browserAutoDetect = false;
-                SaveSettings();
+                SaveSettingsCore();
                 UpdateBrowserSettingsUi();
                 bool restarting = OwnedGatewayRunning() && RestartGatewayAsync(selectedProfile);
                 ShowToast(restarting ? "Browser Automation configured · Gateway restarting" : "Browser Automation configured · restart Gateway to apply", false);
             }
-            catch (Exception error) { ShowToast("Could not configure Browser Automation: " + error.Message, true); }
+            catch (Exception error)
+            {
+                browserExecutablePath = previousPath;
+                browserAutoDetect = previousAutoDetect;
+                UpdateBrowserSettingsUi();
+                ShowToast("Could not configure Browser Automation: " + error.Message, true);
+            }
         }
     }
 
     private void ToggleBrowserClearOrAutoDetect()
     {
+        string previousPath = browserExecutablePath;
+        bool previousAutoDetect = browserAutoDetect;
         bool hadSavedSelection = !String.IsNullOrWhiteSpace(browserExecutablePath);
         string message;
         if (hadSavedSelection)
@@ -1945,10 +2049,20 @@ internal sealed partial class ControlPanelRuntime
             browserAutoDetect = !browserAutoDetect;
             message = browserAutoDetect ? "Browser Automation auto-detect enabled" : "Browser Automation disabled";
         }
-        SaveSettings();
-        UpdateBrowserSettingsUi();
-        bool restarting = OwnedGatewayRunning() && RestartGatewayAsync(selectedProfile);
-        ShowToast(restarting ? message + " · Gateway restarting" : message + " · restart Gateway to apply", false);
+        try
+        {
+            SaveSettingsCore();
+            UpdateBrowserSettingsUi();
+            bool restarting = OwnedGatewayRunning() && RestartGatewayAsync(selectedProfile);
+            ShowToast(restarting ? message + " · Gateway restarting" : message + " · restart Gateway to apply", false);
+        }
+        catch (Exception error)
+        {
+            browserExecutablePath = previousPath;
+            browserAutoDetect = previousAutoDetect;
+            UpdateBrowserSettingsUi();
+            ShowToast("Could not update Browser Automation: " + error.Message, true);
+        }
     }
 
     private void UpdateTunnelSettingsUi()
@@ -2072,17 +2186,17 @@ internal sealed partial class ControlPanelRuntime
                 }
             }
 
-            if (profileChanged)
-                await Task.Run(delegate { ConfigureTunnelProfile(id); });
-            tunnelId = id;
-            if (hasNewKey)
+            string key = hasNewKey ? keyInput.Password : null;
+            try
             {
-                string key = keyInput.Password;
-                try { SaveTunnelKey(key.Trim()); }
-                finally { key = null; keyInput.Clear(); }
+                await Task.Run(delegate { ApplyTunnelConfigurationTransaction(id, key, hasNewKey); });
             }
-            autoStartTunnel = true; tunnelRetryIndex = 0; nextTunnelRetry = DateTime.MinValue;
-            SaveSettings(); UpdateTunnelSettingsUi(); HideTunnelSetupOverlay(); ShowToast("Tunnel saved · connecting…", false); UpdateStatus();
+            finally
+            {
+                key = null;
+                keyInput.Clear();
+            }
+            UpdateTunnelSettingsUi(); HideTunnelSetupOverlay(); ShowToast("Tunnel saved · connecting…", false); UpdateStatus();
         }
         catch (Exception ex)
         {
@@ -2254,10 +2368,20 @@ internal sealed partial class ControlPanelRuntime
                 ShowToast("Could not safely stop the current Tunnel. It may still be running.", true);
                 return;
             }
+            bool previousAutoStartTunnel = autoStartTunnel;
+            int previousTunnelRetryIndex = tunnelRetryIndex;
+            DateTime previousNextTunnelRetry = nextTunnelRetry;
             autoStartTunnel = true;
             tunnelRetryIndex = 0;
             nextTunnelRetry = DateTime.MinValue;
-            SaveSettings();
+            try { SaveSettingsCore(); }
+            catch
+            {
+                autoStartTunnel = previousAutoStartTunnel;
+                tunnelRetryIndex = previousTunnelRetryIndex;
+                nextTunnelRetry = previousNextTunnelRetry;
+                throw;
+            }
             ShowToast("Reconnecting Tunnel…", false);
         }
         catch (Exception ex) { ShowToast("Could not reconnect Tunnel: " + ex.Message, true); }
@@ -2671,21 +2795,46 @@ internal sealed partial class ControlPanelRuntime
         Button save = Find<Button>("FirstRunTunnelSaveButton");
         Button skip = Find<Button>("FirstRunTunnelSkipButton");
         string id = idInput.Text.Trim();
-        string key = keyInput.Password.Trim();
+        bool hasNewKey = keyInput.SecurePassword != null && keyInput.SecurePassword.Length > 0;
         if (!IsValidTunnelId(id)) { hint.Text = "Tunnel ID must look like tunnel_ followed by 32 lowercase hexadecimal characters."; hint.Foreground = BrushFrom("#FF453A"); return; }
-        if (String.IsNullOrWhiteSpace(key) && !HasTunnelKey()) { hint.Text = "Paste a Runtime API Key, or choose Skip for now."; hint.Foreground = BrushFrom("#FF453A"); return; }
+        if (!HasTunnelKey() && !hasNewKey) { hint.Text = "Paste a Runtime API Key, or choose Skip for now."; hint.Foreground = BrushFrom("#FF453A"); return; }
         save.IsEnabled = false; skip.IsEnabled = false;
         hint.Text = "Saving secure Tunnel…"; hint.Foreground = BrushFrom("#71717A");
         try
         {
-            await Task.Run(delegate { ConfigureTunnelProfile(id); });
-            tunnelId = id;
-            if (!String.IsNullOrWhiteSpace(key)) SaveTunnelKey(key);
-            autoStartTunnel = true;
-            tunnelRetryIndex = 0;
-            nextTunnelRetry = DateTime.MinValue;
-            keyInput.Clear();
-            SaveSettings();
+            string profileId = await Task.Run(delegate { return TryLoadTunnelIdFromProfile(); });
+            bool restartRequired = !String.Equals(profileId, id, StringComparison.Ordinal) || hasNewKey;
+            if (restartRequired)
+            {
+                bool stopped = true;
+                if (OwnedTunnelRunning())
+                    stopped = await Task.Run(delegate { return StopOwnedTunnel(); });
+                else
+                {
+                    TunnelRuntimeStatus currentStatus = await Task.Run(delegate { return GetTunnelStatus(); });
+                    stopped = currentStatus.LocalReady
+                        ? await Task.Run(delegate { return StopDetachedManagedTunnelIfSafe(); })
+                        : await Task.Run(delegate { return StopDetachedManagedTunnelIfPresentSafe(); });
+                }
+                if (!stopped)
+                {
+                    keyInput.Clear();
+                    hint.Text = "Could not safely stop the current Tunnel. Tunnel settings were not changed.";
+                    hint.Foreground = BrushFrom("#FF453A");
+                    return;
+                }
+            }
+
+            string key = hasNewKey ? keyInput.Password : null;
+            try
+            {
+                await Task.Run(delegate { ApplyTunnelConfigurationTransaction(id, key, hasNewKey); });
+            }
+            finally
+            {
+                key = null;
+                keyInput.Clear();
+            }
             onboardingStep = 2;
             UpdateFirstRunStep();
         }
@@ -2693,7 +2842,7 @@ internal sealed partial class ControlPanelRuntime
         {
             keyInput.Clear(); hint.Text = "Could not configure Tunnel: " + ex.Message; hint.Foreground = BrushFrom("#FF453A");
         }
-        finally { key = null; save.IsEnabled = true; skip.IsEnabled = true; }
+        finally { save.IsEnabled = true; skip.IsEnabled = true; }
     }
     private void FirstRunSkipTunnel()
     {

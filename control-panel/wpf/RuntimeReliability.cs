@@ -75,7 +75,7 @@ internal static class RuntimeReliability
         RunFileTransitionWithRetry(() => File.Replace(source, destination, backup, true));
     }
 
-    private static void DeleteFileWithRetry(string path)
+    public static void DeleteFileWithRetry(string path)
     {
         RunFileTransitionWithRetry(() => File.Delete(path));
     }
