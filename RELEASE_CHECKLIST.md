@@ -30,6 +30,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] Production npm audit: 0 vulnerabilities.
 - [x] Repository secret hygiene scan: 0 findings.
 - [x] Release manifest and SHA256SUMS match the final Setup binary.
+- [x] Release readiness blocks reuse of an existing `v<version>` tag from a different source commit; CI fetches full tag history before candidate validation.
 - [x] Source portability scan: no hard-coded local project path, TODO/FIXME/HACK/XXX, or old 0.8.0 version markers.
 ## Candidate hardening hosted CI validation
 

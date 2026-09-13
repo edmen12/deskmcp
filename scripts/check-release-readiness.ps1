@@ -18,8 +18,14 @@ function Require-File([string]$Path, [string]$Label) {
     Block ($Label + ' missing: ' + $Path)
     return $false
 }
+$versionTagGuard = Join-Path $PSScriptRoot 'check-release-version-tag.ps1'
 
 Write-Output 'DeskMCP public release readiness'
+Write-Output '------------------------------------'
+$versionTagDetail = @(& $versionTagGuard -ProjectRoot $ProjectRoot -Version $Version)
+$versionTagExit = $LASTEXITCODE
+$versionTagMessage = ($versionTagDetail -join ' ').Trim()
+if ($versionTagExit -eq 0) { Pass $versionTagMessage } else { Block $versionTagMessage }
 Write-Output '------------------------------------'
 $projectLicense = Join-Path $ProjectRoot 'LICENSE'
 if (Test-Path -LiteralPath $projectLicense) {
