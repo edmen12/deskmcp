@@ -6,7 +6,6 @@ import {
   readFile,
   readdir,
   realpath,
-  rename,
   rm,
   stat,
   writeFile
@@ -17,6 +16,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parseDocument } from 'yaml';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { renameFileWithRetry } from './fs-reliability.js';
 
 interface UnzipperEntry {
   readonly path: string;
@@ -212,7 +212,7 @@ function normalizeRelativeResource(value: string | undefined): string {
 async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
   const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  try { await rename(temp, filePath); }
+  try { await renameFileWithRetry(temp, filePath); }
   catch (error) {
     await rm(temp, { force: true }).catch(() => undefined);
     throw error;
@@ -746,7 +746,7 @@ export class SkillStore {
         const targetRoot = this.versionPath(validation.metadata.name, versionId);
         await mkdir(path.dirname(targetRoot), { recursive: true, mode: 0o700 });
         if (await stat(targetRoot).catch(() => undefined)) throw new Error(`Skill package destination already exists: ${versionId}.`);
-        await rename(candidateRoot, targetRoot);
+        await renameFileWithRetry(candidateRoot, targetRoot);
         const installedVersion: SkillVersionRecord = {
           version_id: versionId,
           ...(validation.declared_version ? { declared_version: validation.declared_version } : {}),
