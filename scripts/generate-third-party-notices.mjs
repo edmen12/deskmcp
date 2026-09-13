@@ -16,8 +16,19 @@ const architectureLabel = isMac ? 'macOS ARM64' : target === 'win-arm64' ? 'Wind
 const runtimeNotice = isMac ? '' : `- **.NET 10 ${architectureLabel} self-contained runtime** — the release carries \`licenses/dotnet/LICENSE.txt\` and \`licenses/dotnet/ThirdPartyNotices.txt\` copied from the exact SDK used to publish the desktop application.\n`;
 const winAppNotice = isMac ? '' : `- **Microsoft WinApp CLI v0.5.0** — MIT; DeskMCP bundles the pinned standalone \`winapp.exe\` + \`libSkiaSharp.dll\` computer-use backend and preserves its MIT notice at \`licenses/winappcli/LICENSE.txt\`.\n`;
 const virtualDesktopNotice = isMac ? '' : `- **VirtualDesktopAccessor** — MIT; DeskMCP builds the pinned source commit recorded in \`virtual-desktop-accessor/SOURCE_COMMIT.txt\`, preserves the upstream MIT notice at \`virtual-desktop-accessor/LICENSE.txt\`, and records the shipped DLL checksum in \`virtual-desktop-accessor/SHA256SUMS.txt\`.\n`;
-fs.mkdirSync(sourceLicenses, { recursive: true });
+if (!fs.existsSync(sourceLicenses)) throw new Error(`Canonical license directory is missing: ${sourceLicenses}`);
 fs.mkdirSync(stageLicenses, { recursive: true });
+
+function normalizeGeneratedText(value) {
+  return String(value).replaceAll('\r\n', '\n');
+}
+function requireCanonicalGeneratedText(filePath, expected, label) {
+  if (!fs.existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
+  const actual = fs.readFileSync(filePath, 'utf8');
+  if (normalizeGeneratedText(actual) !== normalizeGeneratedText(expected)) {
+    throw new Error(`${label} is stale; regenerate and commit it before building a release candidate.`);
+  }
+}
 
 const isWindows = process.platform === 'win32';
 const npmCommand = isWindows ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'npm';
@@ -75,11 +86,23 @@ for (const row of rows) {
   ].map(csvCell).join(','));
 }
 const csvText = `${csvLines.join('\r\n')}\r\n`;
-if (target === 'win-x64') fs.writeFileSync(path.join(sourceLicenses, 'production-node-packages.csv'), csvText);
+if (target === 'win-x64') {
+  requireCanonicalGeneratedText(
+    path.join(sourceLicenses, 'production-node-packages.csv'),
+    csvText,
+    'Canonical production Node package inventory'
+  );
+}
 fs.writeFileSync(path.join(stageLicenses, 'production-node-packages.csv'), csvText);
 
 const buffersMit = `MIT License\n\nCopyright (c) 2015 James Halliday\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the "Software"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is furnished\nto do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n`;
-if (target === 'win-x64') fs.writeFileSync(path.join(sourceLicenses, 'buffers-0.1.1-MIT.txt'), buffersMit);
+if (target === 'win-x64') {
+  requireCanonicalGeneratedText(
+    path.join(sourceLicenses, 'buffers-0.1.1-MIT.txt'),
+    buffersMit,
+    'Canonical buffers 0.1.1 MIT notice'
+  );
+}
 fs.writeFileSync(path.join(stageLicenses, 'buffers-0.1.1-MIT.txt'), buffersMit);
 
 const unresolved = rows.filter(row => row.license === 'UNKNOWN');
@@ -120,7 +143,13 @@ virtualDesktopNotice +
 `License expressions requiring special attention or explicit choice:\n${specialLines}\n\n` +
 `## Preservation rule\n\n` +
 `Do not strip package-local LICENSE, NOTICE, COPYING, COPYRIGHT, README license tables, Node's LICENSE, platform runtime notices, WinApp CLI's MIT notice, VirtualDesktopAccessor's MIT/provenance/checksum files, or tunnel-client notice/SPDX files when optimizing a release payload.\n`;
-if (target === 'win-x64') fs.writeFileSync(path.join(projectRoot, 'THIRD_PARTY_NOTICES.md'), notices);
+if (target === 'win-x64') {
+  requireCanonicalGeneratedText(
+    path.join(projectRoot, 'THIRD_PARTY_NOTICES.md'),
+    notices,
+    'Canonical third-party notices'
+  );
+}
 fs.writeFileSync(path.join(stageLicenses, 'THIRD_PARTY_NOTICES.md'), notices);
 fs.writeFileSync(path.join(stageRoot, 'THIRD_PARTY_NOTICES.md'), notices);
 console.log(`THIRD_PARTY_PACKAGES=${rows.length}`);

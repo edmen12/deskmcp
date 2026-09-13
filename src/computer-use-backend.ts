@@ -88,7 +88,7 @@ function recordValue(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function parseComputerWindows(value: unknown): ComputerWindow[] {
+export function parseComputerWindows(value: unknown): ComputerWindow[] {
   if (!Array.isArray(value)) throw new Error('Computer backend window list is invalid.');
   return value.map((raw, index) => {
     const item = recordValue(raw, `Computer backend window ${index}`);
@@ -96,8 +96,8 @@ function parseComputerWindows(value: unknown): ComputerWindow[] {
       !Number.isSafeInteger(item.hwnd) || Number(item.hwnd) <= 0
       || !Number.isSafeInteger(item.processId) || Number(item.processId) <= 0
       || typeof item.processName !== 'string' || item.processName.length === 0 || item.processName.length > 1024
-      || typeof item.width !== 'number' || !Number.isFinite(item.width) || item.width <= 0 || item.width > 100_000
-      || typeof item.height !== 'number' || !Number.isFinite(item.height) || item.height <= 0 || item.height > 100_000
+      || typeof item.width !== 'number' || !Number.isFinite(item.width) || item.width < 0 || item.width > 100_000
+      || typeof item.height !== 'number' || !Number.isFinite(item.height) || item.height < 0 || item.height > 100_000
       || typeof item.isForeground !== 'boolean'
       || (item.title !== undefined && typeof item.title !== 'string')
       || (item.className !== undefined && typeof item.className !== 'string')

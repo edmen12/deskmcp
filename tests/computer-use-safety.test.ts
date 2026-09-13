@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   flattenUiElementsForMcp,
+  parseComputerWindows,
   resolveWinAppPath,
   sanitizeUiElementForMcp,
   type ComputerWindow,
@@ -29,6 +30,26 @@ function windowFixture(overrides: Partial<ComputerWindow> = {}): ComputerWindow 
     ...overrides
   };
 }
+
+test('computer backend accepts zero-sized shell windows without failing the whole list', () => {
+  const windows = parseComputerWindows([
+    windowFixture(),
+    windowFixture({
+      hwnd: 101,
+      processId: 201,
+      processName: 'ShellExperienceHost',
+      title: 'New notification',
+      width: 396,
+      height: 0,
+      isForeground: false
+    })
+  ]);
+  assert.equal(windows.length, 2);
+  assert.equal(windows[1]?.height, 0);
+  assert.throws(() => parseComputerWindows([
+    windowFixture({ height: -1 })
+  ]), /fields are invalid/i);
+});
 
 test('computer observations are one-time and window-bound', () => {
   const observations = new ComputerObservationRegistry(16, 30_000);
