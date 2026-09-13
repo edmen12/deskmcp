@@ -7,7 +7,7 @@
   <a href="https://github.com/edmen12/deskmcp/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/edmen12/deskmcp?display_name=tag" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-22B8FF" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20x64%20%2B%20ARM64-2563EB" />
-  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-26-2DE0D8" />
+  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-27-2DE0D8" />
 </p>
 
 # DeskMCP

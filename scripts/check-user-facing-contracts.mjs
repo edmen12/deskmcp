@@ -9,7 +9,7 @@ const EXPECTED_TOOLS = 27;
 const required = new Map([
   ['control-panel/wpf/Panel.xaml', ['Expected result: 27 DeskMCP tools', 'open DeskMCP if it already exists', 'Connector name already exists', 'x:Name="VersionText" Text="Gateway —"', 'x:Name="BrowserSettingsCard"', 'x:Name="BrowserChooseButton"', 'x:Name="BrowserClearButton"']],
   ['.github/ISSUE_TEMPLATE/bug_report.yml', ['placeholder: Copy the exact version shown in the DeskMCP Control Panel']],
-  ['README.md', ['Expected result: **27 DeskMCP tools**', 'open the existing **DeskMCP** plugin', 'Connector name already exists', '**Settings → Browser Automation** auto-detects', '**Auto Detect** re-enables discovery', 'development/environment override only while auto-detect is enabled']],
+  ['README.md', ['MCP%20tools-27-2DE0D8', 'Expected result: **27 DeskMCP tools**', 'open the existing **DeskMCP** plugin', 'Connector name already exists', '**Settings → Browser Automation** auto-detects', '**Auto Detect** re-enables discovery', 'development/environment override only while auto-detect is enabled']],
   ['src/browser-runtime.ts', ['Open DeskMCP Settings → Browser Automation', 'local development override']],
   ['src/browser-tools.ts', ['configured through DeskMCP Settings or the explicit development environment override']],
   ['docs/USER_GUIDE.md', ['Expected result: **27 DeskMCP tools**', 'plugin already exists', 'Connector name already exists', '### Browser Automation', '**Settings → Browser Automation** auto-detects', '**Auto Detect**', 'manual selection always takes precedence', '### Agent Desktop pool', '**Unavailable**', '**Exit Agent Control**', 'Browser Automation started with an Agent Desktop lease']],
