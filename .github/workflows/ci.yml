@@ -68,9 +68,9 @@ jobs:
           $p = Start-Process -FilePath .\runtime\release-stage\win-x64\DesktopMCP\DeskMCP.exe -ArgumentList '--runtime-reliability-self-test' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Runtime reliability self-test failed: $($p.ExitCode)" }
 
-      - name: x64 release readiness
+      - name: x64 development release validation
         shell: powershell
-        run: .\scripts\check-release-readiness.ps1 -Target win-x64
+        run: .\scripts\check-release-readiness.ps1 -DevelopmentValidation -Target win-x64
 
       - name: Secret hygiene
         shell: powershell
@@ -118,9 +118,9 @@ jobs:
           $p = Start-Process -FilePath .\runtime\release-stage\win-arm64\DesktopMCP\DeskMCP.exe -ArgumentList '--runtime-reliability-self-test' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "ARM64 runtime reliability self-test failed: $($p.ExitCode)" }
 
-      - name: ARM64 release readiness
+      - name: ARM64 development release validation
         shell: powershell
-        run: .\scripts\check-release-readiness.ps1 -Target win-arm64
+        run: .\scripts\check-release-readiness.ps1 -DevelopmentValidation -Target win-arm64
 
       - name: Secret hygiene
         shell: powershell

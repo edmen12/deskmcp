@@ -1,4 +1,4 @@
-param([switch]$RequireSigned,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64',[string]$SetupPath)
+param([switch]$RequireSigned,[switch]$DevelopmentValidation,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64',[string]$SetupPath)
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
@@ -22,12 +22,16 @@ function Require-File([string]$Path, [string]$Label) {
 }
 $versionTagGuard = Join-Path $PSScriptRoot 'check-release-version-tag.ps1'
 
-Write-Output 'DeskMCP public release readiness'
+Write-Output ($(if ($DevelopmentValidation) { 'DeskMCP development release validation' } else { 'DeskMCP public release readiness' }))
 Write-Output '------------------------------------'
-$versionTagDetail = @(& $versionTagGuard -ProjectRoot $ProjectRoot -Version $Version)
-$versionTagExit = $LASTEXITCODE
-$versionTagMessage = ($versionTagDetail -join ' ').Trim()
-if ($versionTagExit -eq 0) { Pass $versionTagMessage } else { Block $versionTagMessage }
+if ($DevelopmentValidation) {
+    Write-Host ('INFO  Version-tag collision guard is intentionally skipped for development CI. Public candidate/sign/finalize paths still enforce it.')
+} else {
+    $versionTagDetail = @(& $versionTagGuard -ProjectRoot $ProjectRoot -Version $Version)
+    $versionTagExit = $LASTEXITCODE
+    $versionTagMessage = ($versionTagDetail -join ' ').Trim()
+    if ($versionTagExit -eq 0) { Pass $versionTagMessage } else { Block $versionTagMessage }
+}
 try {
     Assert-DeskMcpReleaseSourceClean $ProjectRoot
     Pass ('Tracked release source is clean at ' + $CurrentSourceCommit)
