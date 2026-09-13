@@ -197,7 +197,7 @@ export function registerDynamicMcpTools(
     'desktop_mcp_tool_call',
     {
       title: 'Call Dynamic MCP Tool',
-      description: 'Call an upstream MCP tool by qualified <server>:<tool> name. DeskMCP reconnects transiently, refreshes the live tool definition before the call, and requires full-control or fully-unlocked. Header secrets are read from the local process environment only at call time and are never stored in the registry.',
+      description: 'Call an upstream MCP tool by qualified <server>:<tool> name. DeskMCP reconnects transiently, refreshes the live tool definition before the call, and requires the session-only Full Control or Fully Unlocked profile. Header secrets are read from the local process environment only at call time and are never stored in the registry.',
       inputSchema: z.object({
         name: z.string().min(3).max(512),
         arguments: z.record(z.string(), z.unknown()).default({})
