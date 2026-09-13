@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { ObservationCapabilityError, ObservationRequiredError, ObservationStore, StaleObservationError } from '../src/observation-store.js';
@@ -132,5 +132,87 @@ test('Observation capabilities are single-use and serialize concurrent mutations
     );
   } finally {
     await rm(file, { force: true });
+  }
+});
+
+test('independent ObservationStore instances sharing a lock root prevent cross-Gateway lost updates', async () => {
+  const file = path.join(TEST_AREA, 'obs-cross-gateway.txt');
+  const lockRoot = path.join(TEST_AREA, 'obs-cross-gateway-locks');
+  try {
+    await rm(lockRoot, { recursive: true, force: true });
+    await writeFile(file, 'base', 'utf8');
+    const firstStore = new ObservationStore(1024 * 1024, 1024, lockRoot);
+    const secondStore = new ObservationStore(1024 * 1024, 1024, lockRoot);
+    const first = await firstStore.observe(file);
+    const second = await secondStore.observe(file);
+
+    let enteredFirst!: () => void;
+    const firstEntered = new Promise<void>(resolve => { enteredFirst = resolve; });
+    let releaseFirst!: () => void;
+    const firstMayFinish = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let secondActionRan = false;
+
+    const firstMutation = firstStore.withObservedMutation(file, first.observationId, async () => {
+      enteredFirst();
+      await firstMayFinish;
+      await writeFile(file, 'first', 'utf8');
+    });
+    await firstEntered;
+
+    const secondMutation = secondStore.withObservedMutation(file, second.observationId, async () => {
+      secondActionRan = true;
+      await writeFile(file, 'second', 'utf8');
+    });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(secondActionRan, false, 'second Gateway entered the mutation while the first still owned the cross-process lock');
+
+    releaseFirst();
+    await firstMutation;
+    await assert.rejects(secondMutation, StaleObservationError);
+    assert.equal(secondActionRan, false);
+    assert.equal(await readFile(file, 'utf8'), 'first');
+  } finally {
+    await rm(file, { force: true });
+    await rm(lockRoot, { recursive: true, force: true });
+  }
+});
+
+test('independent ObservationStore instances cannot concurrently create and overwrite the same new file', async () => {
+  const file = path.join(TEST_AREA, 'obs-cross-gateway-new.txt');
+  const lockRoot = path.join(TEST_AREA, 'obs-cross-gateway-new-locks');
+  try {
+    await rm(file, { force: true });
+    await rm(lockRoot, { recursive: true, force: true });
+    const firstStore = new ObservationStore(1024 * 1024, 1024, lockRoot);
+    const secondStore = new ObservationStore(1024 * 1024, 1024, lockRoot);
+
+    let enteredFirst!: () => void;
+    const firstEntered = new Promise<void>(resolve => { enteredFirst = resolve; });
+    let releaseFirst!: () => void;
+    const firstMayFinish = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let secondActionRan = false;
+
+    const firstMutation = firstStore.withWriteMutation(file, undefined, async () => {
+      enteredFirst();
+      await firstMayFinish;
+      await writeFile(file, 'first-create', 'utf8');
+    });
+    await firstEntered;
+
+    const secondMutation = secondStore.withWriteMutation(file, undefined, async () => {
+      secondActionRan = true;
+      await writeFile(file, 'second-create', 'utf8');
+    });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(secondActionRan, false, 'second Gateway entered a same-path create while the first still owned the cross-process lock');
+
+    releaseFirst();
+    await firstMutation;
+    await assert.rejects(secondMutation, ObservationRequiredError);
+    assert.equal(secondActionRan, false);
+    assert.equal(await readFile(file, 'utf8'), 'first-create');
+  } finally {
+    await rm(file, { force: true });
+    await rm(lockRoot, { recursive: true, force: true });
   }
 });

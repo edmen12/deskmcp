@@ -32,7 +32,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 const audit = new AuditLogger();
 await audit.init();
 const policy = await DesktopPolicy.create();
-const observations = new ObservationStore();
+const observations = new ObservationStore(5 * 1024 * 1024, 1024, resolveDeskMcpStateRoot('file-mutation-locks'));
 const processSessions = new ProcessSessionRegistry();
 const computerUse = createComputerUseRuntime();
 const taskStore = new TaskContextStore(resolveDeskMcpStateRoot('tasks'));

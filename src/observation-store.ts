@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 import { PolicyDeniedError } from './desktop-policy.js';
 
 export interface FileObservation {
@@ -52,14 +54,18 @@ function sameVersion(a: FileObservation, b: FileObservation): boolean {
 export class ObservationStore {
   private readonly observations = new Map<string, ObservationCapability>();
   private readonly mutationLocks = new Map<string, Promise<void>>();
+  private readonly mutationLockRoot: string | undefined;
+  private mutationLockRootReady?: Promise<void>;
 
   constructor(
     readonly maxBytes = 5 * 1024 * 1024,
-    readonly maxEntries = 1024
+    readonly maxEntries = 1024,
+    mutationLockRoot?: string
   ) {
     if (!Number.isInteger(maxEntries) || maxEntries < 1 || maxEntries > 100000) {
       throw new Error(`Invalid observation entry limit: ${maxEntries}`);
     }
+    this.mutationLockRoot = mutationLockRoot ? path.resolve(mutationLockRoot) : undefined;
   }
 
   private issueCaptured(observation: FileObservation): string {
@@ -112,14 +118,42 @@ export class ObservationStore {
     };
   }
 
+  private async ensureMutationLockRoot(): Promise<void> {
+    if (!this.mutationLockRoot) return;
+    this.mutationLockRootReady ??= mkdir(this.mutationLockRoot, { recursive: true, mode: 0o700 }).then(() => undefined);
+    await this.mutationLockRootReady;
+  }
+
+  private async acquireCrossProcessMutationLock(key: string): Promise<PidDirectoryLockLease | undefined> {
+    if (!this.mutationLockRoot) return undefined;
+    await this.ensureMutationLockRoot();
+    const digest = createHash('sha256').update(key).digest('hex');
+    return acquirePidDirectoryLock(path.join(this.mutationLockRoot, `${digest}.lock`), {
+      label: `Workspace mutation ${digest.slice(0, 12)}`,
+      timeoutMs: 15_000,
+      metadata: { path_hash: digest }
+    });
+  }
+
   private async withMutationLocks<T>(filePaths: readonly string[], action: () => Promise<T>): Promise<T> {
     const keys = [...new Set(filePaths.map(keyFor))].sort();
     const releases: Array<() => void> = [];
+    const crossProcessLocks: PidDirectoryLockLease[] = [];
     try {
       for (const key of keys) releases.push(await this.acquireMutationLock(key));
+      for (const key of keys) {
+        const lock = await this.acquireCrossProcessMutationLock(key);
+        if (lock) crossProcessLocks.push(lock);
+      }
       return await action();
     } finally {
+      let releaseError: unknown;
+      for (let index = crossProcessLocks.length - 1; index >= 0; index--) {
+        try { await crossProcessLocks[index]!.release(); }
+        catch (error) { releaseError ??= error; }
+      }
       for (let index = releases.length - 1; index >= 0; index--) releases[index]!();
+      if (releaseError) throw releaseError;
     }
   }
 
