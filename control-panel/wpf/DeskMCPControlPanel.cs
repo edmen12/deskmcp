@@ -2048,25 +2048,38 @@ internal sealed partial class ControlPanelRuntime
         hint.Text = "Configuring…"; hint.Foreground = BrushFrom(isDarkTheme ? "#98989F" : "#71717A");
         try
         {
-            bool idChanged = !String.Equals(tunnelId, id, StringComparison.Ordinal);
-            if (idChanged)
-            {
-                bool externalReady = await Task.Run(delegate { return IsTunnelReady(); });
-                if (externalReady && !OwnedTunnelRunning()) { hint.Text = "A Tunnel is already running outside this Panel. Stop it before changing the Tunnel ID."; hint.Foreground = BrushFrom("#FF453A"); return; }
-            }
             string profileId = await Task.Run(delegate { return TryLoadTunnelIdFromProfile(); });
-            if (!String.Equals(profileId, id, StringComparison.Ordinal))
+            bool profileChanged = !String.Equals(profileId, id, StringComparison.Ordinal);
+            bool restartRequired = profileChanged || hasNewKey;
+            if (restartRequired)
             {
-                if (OwnedTunnelRunning()) await Task.Run(delegate { StopOwnedTunnel(); });
-                await Task.Run(delegate { ConfigureTunnelProfile(id); });
+                bool stopped = true;
+                if (OwnedTunnelRunning())
+                    stopped = await Task.Run(delegate { return StopOwnedTunnel(); });
+                else
+                {
+                    TunnelRuntimeStatus currentStatus = await Task.Run(delegate { return GetTunnelStatus(); });
+                    stopped = currentStatus.LocalReady
+                        ? await Task.Run(delegate { return StopDetachedManagedTunnelIfSafe(); })
+                        : await Task.Run(delegate { return StopDetachedManagedTunnelIfPresentSafe(); });
+                }
+                if (!stopped)
+                {
+                    keyInput.Clear();
+                    hint.Text = "Could not safely stop the current Tunnel. Tunnel settings were not changed.";
+                    hint.Foreground = BrushFrom("#FF453A");
+                    return;
+                }
             }
+
+            if (profileChanged)
+                await Task.Run(delegate { ConfigureTunnelProfile(id); });
             tunnelId = id;
             if (hasNewKey)
             {
                 string key = keyInput.Password;
                 try { SaveTunnelKey(key.Trim()); }
                 finally { key = null; keyInput.Clear(); }
-                if (OwnedTunnelRunning()) await Task.Run(delegate { StopOwnedTunnel(); });
             }
             autoStartTunnel = true; tunnelRetryIndex = 0; nextTunnelRetry = DateTime.MinValue;
             SaveSettings(); UpdateTunnelSettingsUi(); HideTunnelSetupOverlay(); ShowToast("Tunnel saved · connecting…", false); UpdateStatus();
@@ -2096,6 +2109,16 @@ internal sealed partial class ControlPanelRuntime
 
     private bool StopDetachedManagedTunnelIfSafe()
     {
+        return StopDetachedManagedTunnelIfSafe(false);
+    }
+
+    private bool StopDetachedManagedTunnelIfPresentSafe()
+    {
+        return StopDetachedManagedTunnelIfSafe(true);
+    }
+
+    private bool StopDetachedManagedTunnelIfSafe(bool allowMissing)
+    {
         if (OwnedTunnelRunning()) return true;
         string expectedPath = Path.GetFullPath(tunnelClientPath);
         Process match = null;
@@ -2114,10 +2137,15 @@ internal sealed partial class ControlPanelRuntime
             }
             catch { try { candidate.Dispose(); } catch { } }
         }
+        if (matches == 0) return allowMissing;
         if (matches != 1 || match == null) { if (match != null) match.Dispose(); return false; }
         try
         {
-            if (!match.HasExited) { match.Kill(true); match.WaitForExit(5000); }
+            if (!match.HasExited)
+            {
+                match.Kill(true);
+                if (!match.WaitForExit(5000)) throw new TimeoutException("Detached Tunnel did not exit within 5 seconds.");
+            }
             return true;
         }
         catch (Exception ex) { LogRuntimeError("Detached Tunnel cleanup failed.", ex); return false; }
@@ -2131,8 +2159,11 @@ internal sealed partial class ControlPanelRuntime
         if (!File.Exists(tunnelClientPath)) throw new FileNotFoundException("tunnel-client.exe not found.", tunnelClientPath);
         TunnelRuntimeStatus existing = GetTunnelStatus();
         if (existing.Ready) return;
-        if (existing.LocalReady && !StopDetachedManagedTunnelIfSafe())
-            throw new InvalidOperationException("A detached DeskMCP tunnel is using the local tunnel endpoint and could not be safely replaced.");
+        bool detachedStopped = existing.LocalReady
+            ? StopDetachedManagedTunnelIfSafe()
+            : StopDetachedManagedTunnelIfPresentSafe();
+        if (!detachedStopped)
+            throw new InvalidOperationException("A detached DeskMCP tunnel could not be safely replaced.");
         string profileId = TryLoadTunnelIdFromProfile();
         if (!String.Equals(profileId, tunnelId, StringComparison.Ordinal)) ConfigureTunnelProfile(tunnelId);
         string key = LoadTunnelKey();
@@ -2169,22 +2200,35 @@ internal sealed partial class ControlPanelRuntime
             key = null;
         }
     }
-    private void StopOwnedTunnel()
+    private bool StopOwnedTunnel()
     {
         Process p = tunnelProcess;
-        tunnelProcess = null;
-        tunnelUnreadySince = DateTime.MinValue;
-        if (p == null) return;
+        if (p == null) { tunnelUnreadySince = DateTime.MinValue; return true; }
+        bool stopped = false;
         try
         {
             if (!p.HasExited)
             {
                 p.Kill(true);
-                p.WaitForExit(5000);
+                if (!p.WaitForExit(5000)) throw new TimeoutException("Tunnel process did not exit within 5 seconds.");
+            }
+            stopped = true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogRuntimeError("Tunnel process cleanup failed.", ex);
+            return false;
+        }
+        finally
+        {
+            if (stopped)
+            {
+                if (Object.ReferenceEquals(tunnelProcess, p)) tunnelProcess = null;
+                tunnelUnreadySince = DateTime.MinValue;
+                try { p.Dispose(); } catch { }
             }
         }
-        catch (Exception ex) { LogRuntimeError("Tunnel process cleanup failed.", ex); }
-        finally { try { p.Dispose(); } catch { } }
     }
 
     private async void ReconnectTunnel()
@@ -2195,13 +2239,21 @@ internal sealed partial class ControlPanelRuntime
         Find<TextBlock>("TunnelStatus").Text = "Reconnecting…";
         try
         {
-            bool ready = await Task.Run(delegate { return IsTunnelReady(); });
-            if (ready && !OwnedTunnelRunning())
+            bool stopped = true;
+            if (OwnedTunnelRunning())
+                stopped = await Task.Run(delegate { return StopOwnedTunnel(); });
+            else
             {
-                ShowToast("Tunnel is already Ready and is managed outside this Panel", false);
+                TunnelRuntimeStatus currentStatus = await Task.Run(delegate { return GetTunnelStatus(); });
+                stopped = currentStatus.LocalReady
+                    ? await Task.Run(delegate { return StopDetachedManagedTunnelIfSafe(); })
+                    : await Task.Run(delegate { return StopDetachedManagedTunnelIfPresentSafe(); });
+            }
+            if (!stopped)
+            {
+                ShowToast("Could not safely stop the current Tunnel. It may still be running.", true);
                 return;
             }
-            if (OwnedTunnelRunning()) await Task.Run(delegate { StopOwnedTunnel(); });
             autoStartTunnel = true;
             tunnelRetryIndex = 0;
             nextTunnelRetry = DateTime.MinValue;
