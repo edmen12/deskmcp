@@ -38,7 +38,7 @@ scripts\build-installer.cmd
 ```
 The release pipeline is expected to prove:
 
-- 13 production MCP tools are discoverable.
+- Exactly 27 production MCP tools are discoverable.
 - Read Only remains the default.
 - Single Instance works.
 - Gateway/DeskMCP backend child processes are cleaned up.

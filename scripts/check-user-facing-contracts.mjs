@@ -11,10 +11,13 @@ const required = new Map([
   ['README.md', ['Expected result: **27 DeskMCP tools**', 'open the existing **DeskMCP** plugin', 'Connector name already exists']],
   ['docs/USER_GUIDE.md', ['Expected result: **27 DeskMCP tools**', 'plugin already exists', 'Connector name already exists']],
   ['docs/TROUBLESHOOTING.md', ['ChatGPT does not show 27 tools', 'expected production surface is exactly 27 tools', 'Connector name already exists']],
-  ['site/index.html', ['existing DeskMCP plugin', '27 DeskMCP tools']],
+  ['site/index.html', ['existing DeskMCP plugin', '27 DeskMCP tools', '27 discoverable MCP tools', 'Agent Desktop pool', 'Browser Automation', 'Windows Computer Use']],
   ['docs/images/quick-start.svg', ['Expected: 27 tools']],
+  ['docs/images/hero.svg', ['27 MCP TOOLS']],
   ['site/assets/images/quick-start.svg', ['Expected: 27 tools']],
   ['docs/SIGNPATH_APPLICATION.md', ['validates 27 tools', 'exposes 27 MCP tools']],
+  ['CONTRIBUTING.md', ['Exactly 27 production MCP tools are discoverable.']],
+  ['RELEASE_CHECKLIST.md', ['Release-stage smoke: read-only profile, 27 tools', 'confirm ChatGPT scans exactly 27 tools']],
   ['scripts/test-release-stage.ps1', ['TOOLS=27']]
 ]);
 
@@ -27,7 +30,7 @@ for (const [rel, needles] of required) {
 
 for (const rel of [...required.keys()].filter(rel => !rel.startsWith('scripts/'))) {
   const text = read(rel);
-  const stale = text.match(/\b(?:13|26) (?:DeskMCP )?tools\b/i);
+  const stale = text.match(/\b(?:13|26)\b[^\r\n]{0,40}\btools\b/i);
   if (stale) throw new Error(`${rel} contains stale tool-count copy: ${stale[0]}`);
 }
 

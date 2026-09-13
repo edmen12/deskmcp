@@ -39,6 +39,10 @@ jobs:
           test -f site/assets/js/site.js
           test -f site/assets/brand/deskmcp-approved-logo-64.png
           test -f site/assets/images/control-panel.png
+          test -f site/assets/images/control-panel-cutout.png
+          test -f site/assets/images/architecture.svg
+          test -f site/assets/images/quick-start.svg
+          node scripts/check-user-facing-contracts.mjs
           ! grep -R --line-number -E 'sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' site
 
       - name: Configure Pages

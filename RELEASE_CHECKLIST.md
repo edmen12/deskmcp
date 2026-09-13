@@ -23,7 +23,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [x] First Run Wizard: Workspace → Tunnel → ChatGPT connection flow.
 - [x] Sensitive search paths are excluded before ripgrep reads file contents.
 - [x] Tray exit semantics distinguish keeping services running from quitting DeskMCP.
-- [x] Release-stage smoke: read-only profile, 13 tools, single instance, Node cleanup, directory lockcheck.
+- [x] Release-stage smoke: read-only profile, 27 tools, single instance, Node cleanup, directory lockcheck.
 - [x] Installer smoke: install, injected failure rollback, upgrade, interrupted-install recovery, runtime, uninstall all pass.
 - [x] Safe-update contract: manifest schema v2, immutable-release/digest/size gates, optional local Authenticode publisher verification, and post-install profile verification.
 - [x] Upgrade Setup preserves an existing **Start with Windows** choice instead of silently enabling it.
@@ -58,7 +58,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 
 - [ ] Install under a fresh Windows user with **Start DeskMCP with Windows** enabled.
 - [ ] Sign out/in (or reboot with approval) and verify the Control Panel starts quietly and Gateway becomes Ready.
-- [ ] Complete First Run from the installed build and confirm ChatGPT scans exactly 13 tools.
+- [ ] Complete First Run from the installed build and confirm ChatGPT scans exactly 27 tools.
 - [ ] Verify normal uninstall keeps DeskMCP user data; separately verify explicit purge removes DeskMCP AppData only.
 
 ## Documented limitations — not blockers for the current win-x64 release

@@ -32,7 +32,7 @@ The default profile is **Read-only**. Filesystem access is scoped to a workspace
   <img src="docs/images/control-panel.png" alt="DeskMCP Control Panel" width="430" />
 </p>
 
-The tray Control Panel shows Gateway/Tunnel health, the active permission profile, the selected workspace, Windows startup settings, and Tunnel configuration without exposing secrets.
+The tray Control Panel shows Gateway/Tunnel health, the active permission profile, the selected workspace, Agent Desktop bindings, Windows startup settings, and Tunnel configuration without exposing secrets.
 
 ## Windows quick start
 
