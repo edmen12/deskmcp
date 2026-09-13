@@ -12,6 +12,16 @@ $Project = Join-Path $ProjectRoot 'process-host\DeskMCP.ProcessHost.csproj'
 $Output = Join-Path $RuntimeRoot ('process-host\' + $Target)
 
 function Require([bool]$Condition,[string]$Message) { if(-not $Condition){ throw $Message } }
+function Remove-TreeWithRetry([string]$Path) {
+    for($attempt=0;;$attempt++){
+        if(-not (Test-Path -LiteralPath $Path)){return}
+        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop; return }
+        catch {
+            if($attempt -ge 7){throw}
+            Start-Sleep -Milliseconds ([Math]::Min(10 * [Math]::Pow(2,$attempt), 200))
+        }
+    }
+}
 function Get-PeMachine([string]$Path) {
     $bytes=[IO.File]::ReadAllBytes($Path)
     Require ($bytes.Length -ge 128) ('PE file is unexpectedly small: ' + $Path)
@@ -59,8 +69,8 @@ try {
 
     Require (Test-Path -LiteralPath (Join-Path $Output 'DeskMCP.ProcessHost.exe')) 'ProcessHost final output is missing after publish switch.'
     if(Test-Path -LiteralPath $backup){
-        try { Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop }
-        catch { Write-Warning ('Could not remove previous ProcessHost backup: ' + $_.Exception.Message) }
+        try { Remove-TreeWithRetry $backup }
+        catch { Write-Warning ('Could not remove previous ProcessHost backup after bounded retries: ' + $_.Exception.Message) }
     }
 }
 finally {
