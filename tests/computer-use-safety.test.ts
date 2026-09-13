@@ -46,6 +46,27 @@ test('computer observations are one-time and window-bound', () => {
   );
 });
 
+test('Agent Desktop observations retain lease safety even when the caller omits the lease later', () => {
+  const observations = new ComputerObservationRegistry(16, 30_000);
+  const leaseA = '11111111-1111-4111-8111-111111111111';
+  const leaseB = '22222222-2222-4222-8222-222222222222';
+
+  const inherited = observations.issue('window-a', 1_000, leaseA);
+  assert.equal(observations.consume(inherited, 'window-a', 2_000), leaseA);
+
+  const wrongLease = observations.issue('window-a', 3_000, leaseA);
+  assert.throws(
+    () => observations.consume(wrongLease, 'window-a', 3_001, leaseB),
+    /different Agent Desktop lease/i
+  );
+
+  const normalDesktop = observations.issue('window-a', 4_000);
+  assert.throws(
+    () => observations.consume(normalDesktop, 'window-a', 4_001, leaseA),
+    /was not captured from an Agent Desktop lease/i
+  );
+});
+
 test('one UI action invalidates sibling observations from the same state', () => {
   const observations = new ComputerObservationRegistry(16, 30_000);
   const agentA = observations.issue('window-a', 1_000);

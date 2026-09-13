@@ -189,10 +189,10 @@ type ObserveMode = 'none' | 'tree' | 'screenshot' | 'both';
 async function snapshotContent(
   runtime: ComputerUseRuntime,
   window: ComputerWindow,
-  options: { includeTree: boolean; includeScreenshot: boolean; interactiveOnly: boolean; maxElements: number }
+  options: { includeTree: boolean; includeScreenshot: boolean; interactiveOnly: boolean; maxElements: number; agentDesktopLeaseId?: string }
 ) {
   const windowId = runtime.windows.issue(window);
-  const observationId = runtime.observations.issue(windowId);
+  const observationId = runtime.observations.issue(windowId, Date.now(), options.agentDesktopLeaseId);
   const [inspection, screenshot] = await Promise.all([
     options.includeTree
       ? runtime.backend.inspect(window.hwnd, options.interactiveOnly, options.maxElements)
@@ -222,13 +222,15 @@ async function snapshotContent(
 async function observeAfter(
   runtime: ComputerUseRuntime,
   window: ComputerWindow,
-  mode: ObserveMode
+  mode: ObserveMode,
+  agentDesktopLeaseId?: string
 ) {
   return snapshotContent(runtime, window, {
     includeTree: mode === 'tree' || mode === 'both',
     includeScreenshot: mode === 'screenshot' || mode === 'both',
     interactiveOnly: true,
-    maxElements: 80
+    maxElements: 80,
+    ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {})
   });
 }
 
@@ -305,7 +307,8 @@ export function registerComputerUseTools(
           includeTree: include_tree,
           includeScreenshot: include_screenshot,
           interactiveOnly: interactive_only,
-          maxElements: max_elements
+          maxElements: max_elements,
+          ...(agent_desktop_lease_id ? { agentDesktopLeaseId: agent_desktop_lease_id } : {})
         });
         if (agent_desktop_lease_id) await agentDesktop!.assertLease(agent_desktop_lease_id);
         return snapshot;
@@ -345,27 +348,32 @@ export function registerComputerUseTools(
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
     },
     async input => auditedComputerCall(audit, policy, 'desktop_ui_action', `window:${input.window_id}`, async () => runtime.coordinator.exclusive(async () => {
-      if (input.allow_system_keys && !input.agent_desktop_lease_id && !policy.isFullyUnlocked()) {
-        throw new PolicyDeniedError('System-wide key injection requires Fully Unlocked.');
-      }
-
       const parsedAction = parseAction(input);
-      const action = input.agent_desktop_lease_id ? prepareAgentDesktopAction(parsedAction) : parsedAction;
       const liveWindows = await runtime.backend.listWindows();
       const target = runtime.windows.resolve(input.window_id, liveWindows);
       if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
-      if (input.agent_desktop_lease_id) {
-        if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-        await agentDesktop.assertWindowOnLease(target.hwnd, input.agent_desktop_lease_id);
-      }
 
-      runtime.observations.consume(input.computer_observation_id, input.window_id);
+      const observationLeaseId = runtime.observations.consume(
+        input.computer_observation_id,
+        input.window_id,
+        Date.now(),
+        input.agent_desktop_lease_id
+      );
+      const effectiveAgentDesktopLeaseId = observationLeaseId ?? input.agent_desktop_lease_id;
+      if (input.allow_system_keys && !effectiveAgentDesktopLeaseId && !policy.isFullyUnlocked()) {
+        throw new PolicyDeniedError('System-wide key injection requires Fully Unlocked.');
+      }
+      const action = effectiveAgentDesktopLeaseId ? prepareAgentDesktopAction(parsedAction) : parsedAction;
+      if (effectiveAgentDesktopLeaseId) {
+        if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+        await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+      }
       // Invalidate every sibling observation before attempting the action. Even a
       // backend error can be partial, so all clients must re-observe afterward.
       runtime.observations.advance(input.window_id, usesGlobalDesktopInput(action));
 
       await runtime.backend.act(target.hwnd, action);
-      if (input.agent_desktop_lease_id) await agentDesktop!.assertLease(input.agent_desktop_lease_id);
+      if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
       if (input.settle_ms > 0 && action.type !== 'wait') {
         await new Promise(resolve => setTimeout(resolve, input.settle_ms));
       }
@@ -386,7 +394,7 @@ export function registerComputerUseTools(
           }]
         };
       }
-      if (input.agent_desktop_lease_id) await agentDesktop!.assertWindowOnLease(refreshed.hwnd, input.agent_desktop_lease_id);
+      if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertWindowOnLease(refreshed.hwnd, effectiveAgentDesktopLeaseId);
       if (input.observe_after === 'none') {
         return {
           content: [{
@@ -396,8 +404,8 @@ export function registerComputerUseTools(
         };
       }
 
-      const snapshot = await observeAfter(runtime, refreshed, input.observe_after);
-      if (input.agent_desktop_lease_id) await agentDesktop!.assertLease(input.agent_desktop_lease_id);
+      const snapshot = await observeAfter(runtime, refreshed, input.observe_after, effectiveAgentDesktopLeaseId);
+      if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
       const first = snapshot.content[0];
       if (first?.type !== 'text') throw new Error('Computer observation metadata was unavailable.');
       first.text = JSON.stringify({

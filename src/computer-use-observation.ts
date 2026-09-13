@@ -6,6 +6,7 @@ interface ObservationRecord {
   readonly generation: number;
   readonly globalGeneration: number;
   readonly createdAt: number;
+  readonly agentDesktopLeaseId?: string;
 }
 
 export class ComputerObservationError extends Error {
@@ -32,7 +33,7 @@ export class ComputerObservationRegistry {
     }
   }
 
-  issue(windowId: string, now = Date.now()): string {
+  issue(windowId: string, now = Date.now(), agentDesktopLeaseId?: string): string {
     this.prune(now);
     while (this.records.size >= this.maxRecords) {
       const oldest = this.records.keys().next().value as string | undefined;
@@ -45,12 +46,13 @@ export class ComputerObservationRegistry {
       windowId,
       generation: this.generations.get(windowId) ?? 0,
       globalGeneration: this.globalGeneration,
-      createdAt: now
+      createdAt: now,
+      ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {})
     });
     return id;
   }
 
-  consume(id: string, windowId: string, now = Date.now()): void {
+  consume(id: string, windowId: string, now = Date.now(), requestedAgentDesktopLeaseId?: string): string | undefined {
     this.prune(now);
     const record = this.records.get(id);
     if (!record) {
@@ -61,6 +63,13 @@ export class ComputerObservationRegistry {
     this.records.delete(id);
     if (record.windowId !== windowId) {
       throw new ComputerObservationError('Computer observation does not belong to the requested window.');
+    }
+    if (record.agentDesktopLeaseId) {
+      if (requestedAgentDesktopLeaseId && requestedAgentDesktopLeaseId !== record.agentDesktopLeaseId) {
+        throw new ComputerObservationError('Computer observation belongs to a different Agent Desktop lease. Take a fresh desktop_ui_snapshot.');
+      }
+    } else if (requestedAgentDesktopLeaseId) {
+      throw new ComputerObservationError('Computer observation was not captured from an Agent Desktop lease. Take a fresh desktop_ui_snapshot on that Agent Desktop.');
     }
     const generation = this.generations.get(windowId) ?? 0;
     if (record.generation !== generation) {
@@ -73,6 +82,7 @@ export class ComputerObservationRegistry {
         'Computer observation is stale because global mouse or keyboard input changed desktop state. Take a fresh desktop_ui_snapshot.'
       );
     }
+    return record.agentDesktopLeaseId;
   }
 
   advance(windowId: string, globalInput = false): void {
