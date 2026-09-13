@@ -67,6 +67,21 @@ Full Control is deliberately not persisted. After DeskMCP restarts, it returns t
 - **Red** — offline or explicit Full Control risk state.
 - **Blue/cyan** — DeskMCP brand and normal interactive controls; it does not replace health semantics.
 
+### Agent Desktop pool
+
+Desktop 1 is reserved for you. Create Desktop 2 or later with Windows Virtual Desktops, switch to each desktop you want to make available to agents, then use **Settings → Agent Desktop → Bind Current**. Multiple bindings form a pool, so concurrent agents receive different free desktops instead of competing for one desktop.
+
+Each binding is shown separately in Settings:
+
+- **Ready** — available for a new Agent Control lease.
+- **Controlling** — currently owned by an agent.
+- **Current** — the Windows virtual desktop you are currently viewing.
+- **Unavailable** — the original virtual-desktop GUID no longer exists or became Desktop 1.
+
+Use **Unbind** only on an idle or unavailable binding. A controlling desktop shows **In Use** and must exit Agent Control first. DeskMCP identifies bindings by the stable Windows virtual-desktop GUID, so ordinary Desktop 2/3/4 renumbering does not change which desktop belongs to a lease.
+
+When an agent controls a desktop, the blue safety edge and **Exit Agent Control** HUD appear only while you are viewing that controlled desktop. Switching back to Desktop 1 hides the HUD without stopping the agent. Browser Automation started with an Agent Desktop lease keeps its page/login state for the lifetime of that lease and closes when Agent Control exits, is revoked, or its linked Task Room completes.
+
 ## 4. Tray behavior
 
 - **Quit Control Panel (Keep Services Running)** closes the UI but leaves services running.

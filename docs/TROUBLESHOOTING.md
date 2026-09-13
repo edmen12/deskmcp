@@ -53,6 +53,22 @@ Also verify the file is inside the selected Workspace.
 
 Check the permission profile. Read mode intentionally denies writes and process sessions. Write enables guarded filesystem changes inside the Workspace. Full enables Gateway-owned process sessions and is session-only.
 
+## Agent Desktop cannot bind or reports no free desktop
+
+Desktop 1 is reserved for you and cannot be bound. Create Desktop 2 or later, switch to that desktop, then use **Settings → Agent Desktop → Bind Current**. If every bound desktop shows **Controlling / In Use**, another Agent Control lease already owns each slot; exit one lease or bind another idle virtual desktop.
+
+## An Agent Desktop shows Unavailable
+
+DeskMCP binds the stable Windows virtual-desktop GUID, not just the visible Desktop 2/3/4 number. **Unavailable** means that GUID was removed or now resolves to Desktop 1. Use **Unbind** on the unavailable entry, create or switch to the replacement Windows virtual desktop, then bind it again. Normal Windows renumbering is handled automatically and does not require rebinding while the GUID still exists.
+
+## Unbind is disabled or shows In Use
+
+A controlling desktop cannot be unbound while an agent owns its lease. Switch to that controlled desktop and choose **Exit Agent Control**, or stop the matching Agent Desktop lease from the agent. When the entry returns to **Ready**, Unbind becomes safe.
+
+## Agent Desktop HUD or browser lifetime looks wrong
+
+The blue safety edge and **Exit Agent Control** HUD are visible only on the currently viewed controlled desktop. Switching to Desktop 1 hides the overlay without stopping work on another bound desktop. A Browser Automation session attached to an Agent Desktop lease is expected to remain open across browser tool calls; it closes when that Agent Control lease exits, is revoked, or its linked Task Room completes.
+
 ## Reporting a bug
 
 Use the GitHub bug template and include the DeskMCP version, permission profile, Windows version, minimal reproduction steps, and sanitized logs. See [`SECURITY.md`](../SECURITY.md) for vulnerability reporting.
