@@ -53,6 +53,12 @@ Also verify the file is inside the selected Workspace.
 
 Check the permission profile. Read mode intentionally denies writes and process sessions. Write enables guarded filesystem changes inside the Workspace. Full enables Gateway-owned process sessions and is session-only.
 
+## Browser automation is not configured
+
+Open **Settings → Browser Automation**. DeskMCP auto-detects Edge, Chrome or Chromium by default; use **Choose Browser** if you want to pin a specific `.exe`. Browser tools still require session-only **Full** or **Unlock**.
+
+If the Browser card says **Missing · choose again**, the pinned executable moved or was removed. **Environment override** means `DESKTOP_MCP_BROWSER_EXECUTABLE` supplied the path while auto-detect was enabled. **Clear** explicitly disables Browser Automation, including that environment override for DeskMCP; the button then changes to **Auto Detect** so you can re-enable discovery.
+
 ## Agent Desktop cannot bind or reports no free desktop
 
 Desktop 1 is reserved for you and cannot be bound. Create Desktop 2 or later, switch to that desktop, then use **Settings → Agent Desktop → Bind Current**. If every bound desktop shows **Controlling / In Use**, another Agent Control lease already owns each slot; exit one lease or bind another idle virtual desktop.

@@ -59,6 +59,7 @@ Run `scripts\check-release-readiness.ps1` before publishing an installer.
 - [ ] Install under a fresh Windows user with **Start DeskMCP with Windows** enabled.
 - [ ] Sign out/in (or reboot with approval) and verify the Control Panel starts quietly and Gateway becomes Ready.
 - [ ] Complete First Run from the installed build and confirm ChatGPT scans exactly 27 tools.
+- [ ] In **Settings → Browser Automation**, verify a local Edge/Chrome/Chromium is **Auto-detected** when available; choose a specific `.exe` and verify **Configured**; use **Clear** and confirm Browser Automation is disabled; use **Auto Detect** and confirm discovery returns, then verify Browser Automation is available in Full/Unlock.
 - [ ] Verify normal uninstall keeps DeskMCP user data; separately verify explicit purge removes DeskMCP AppData only.
 
 ## Documented limitations — not blockers for the current Windows release

@@ -56,6 +56,8 @@ internal sealed class PanelSettings
     public bool? showAdminRequestDetails { get; set; }
     public string profile { get; set; }
     public string tunnelId { get; set; }
+    public string browserExecutablePath { get; set; }
+    public bool? browserAutoDetect { get; set; }
     public bool? onboardingCompleted { get; set; }
 }
 
@@ -110,6 +112,8 @@ internal sealed partial class ControlPanelRuntime
     private bool autoStartTunnel;
     private bool showAdminRequestDetails = true;
     private string tunnelId;
+    private string browserExecutablePath;
+    private bool browserAutoDetect = true;
     private Process tunnelProcess;
     private int tunnelRetryIndex;
     private DateTime nextTunnelRetry = DateTime.MinValue;
@@ -387,6 +391,142 @@ internal sealed partial class ControlPanelRuntime
         return String.IsNullOrWhiteSpace(configured) ? Path.GetFullPath(defaultPath) : Path.GetFullPath(configured);
     }
 
+    internal static string NormalizeBrowserExecutablePath(string value, bool requireExisting)
+    {
+        if (String.IsNullOrWhiteSpace(value)) return null;
+        string trimmed = value.Trim();
+        if (!Path.IsPathFullyQualified(trimmed))
+            throw new InvalidDataException("Browser executable path must be absolute.");
+        string full = Path.GetFullPath(trimmed);
+        if (!String.Equals(Path.GetExtension(full), ".exe", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Browser executable must be a Windows .exe file.");
+        if (requireExisting && !File.Exists(full))
+            throw new FileNotFoundException("Browser executable was not found.", full);
+        return full;
+    }
+
+    internal static void ApplyBrowserExecutableEnvironment(ProcessStartInfo psi, string configuredPath, string environmentFallback)
+    {
+        if (psi == null) throw new ArgumentNullException(nameof(psi));
+        psi.EnvironmentVariables.Remove("DESKTOP_MCP_BROWSER_EXECUTABLE");
+        string effective = !String.IsNullOrWhiteSpace(configuredPath) ? configuredPath.Trim() :
+            !String.IsNullOrWhiteSpace(environmentFallback) ? environmentFallback.Trim() : null;
+        if (!String.IsNullOrWhiteSpace(effective))
+            psi.EnvironmentVariables["DESKTOP_MCP_BROWSER_EXECUTABLE"] = effective;
+    }
+
+    internal static string DetectBrowserExecutable(IEnumerable<string> candidates)
+    {
+        if (candidates == null) return null;
+        foreach (string candidate in candidates)
+        {
+            if (String.IsNullOrWhiteSpace(candidate)) continue;
+            try
+            {
+                string full = NormalizeBrowserExecutablePath(candidate, false);
+                if (File.Exists(full)) return full;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    private static string DetectInstalledBrowserExecutable()
+    {
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return DetectBrowserExecutable(new string[]
+        {
+            Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+            Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+            Path.Combine(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
+            Path.Combine(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(programFiles, "Chromium", "Application", "chrome.exe"),
+            Path.Combine(programFilesX86, "Chromium", "Application", "chrome.exe"),
+            Path.Combine(localAppData, "Chromium", "Application", "chrome.exe")
+        });
+    }
+
+    private string ResolveBrowserExecutableForGateway()
+    {
+        if (!String.IsNullOrWhiteSpace(browserExecutablePath))
+        {
+            try { return NormalizeBrowserExecutablePath(browserExecutablePath, true); }
+            catch { return null; }
+        }
+        if (!browserAutoDetect) return null;
+        string environmentFallback = Environment.GetEnvironmentVariable("DESKTOP_MCP_BROWSER_EXECUTABLE");
+        try
+        {
+            string normalized = NormalizeBrowserExecutablePath(environmentFallback, true);
+            if (!String.IsNullOrWhiteSpace(normalized)) return normalized;
+        }
+        catch { }
+        return DetectInstalledBrowserExecutable();
+    }
+
+    internal static int RunBrowserSettingsSelfTest()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "deskmcp-browser-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            string configured = Path.Combine(root, "configured.exe");
+            string fallback = Path.Combine(root, "fallback.exe");
+            File.WriteAllBytes(configured, new byte[] { 0x4D, 0x5A });
+            File.WriteAllBytes(fallback, new byte[] { 0x4D, 0x5A });
+            if (!String.Equals(NormalizeBrowserExecutablePath(configured, true), Path.GetFullPath(configured), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Browser path normalization changed a valid executable path.");
+
+            bool relativeRejected = false;
+            try { NormalizeBrowserExecutablePath("browser.exe", false); }
+            catch (InvalidDataException) { relativeRejected = true; }
+            if (!relativeRejected) throw new InvalidOperationException("Relative browser executable path was accepted.");
+
+            bool extensionRejected = false;
+            try { NormalizeBrowserExecutablePath(Path.Combine(root, "browser.txt"), false); }
+            catch (InvalidDataException) { extensionRejected = true; }
+            if (!extensionRejected) throw new InvalidOperationException("Non-executable browser path was accepted.");
+
+            string missing = Path.Combine(root, "missing.exe");
+            string detected = DetectBrowserExecutable(new string[] { missing, fallback, configured });
+            if (!String.Equals(detected, Path.GetFullPath(fallback), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Browser auto-detection did not choose the first existing candidate.");
+
+            ProcessStartInfo configuredPsi = new ProcessStartInfo();
+            configuredPsi.EnvironmentVariables["DESKTOP_MCP_BROWSER_EXECUTABLE"] = "stale.exe";
+            ApplyBrowserExecutableEnvironment(configuredPsi, configured, fallback);
+            if (!String.Equals(configuredPsi.EnvironmentVariables["DESKTOP_MCP_BROWSER_EXECUTABLE"], configured, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Saved browser selection did not override the environment fallback.");
+
+            ProcessStartInfo fallbackPsi = new ProcessStartInfo();
+            ApplyBrowserExecutableEnvironment(fallbackPsi, null, fallback);
+            if (!String.Equals(fallbackPsi.EnvironmentVariables["DESKTOP_MCP_BROWSER_EXECUTABLE"], fallback, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Browser environment fallback was not preserved.");
+
+            ProcessStartInfo emptyPsi = new ProcessStartInfo();
+            emptyPsi.EnvironmentVariables["DESKTOP_MCP_BROWSER_EXECUTABLE"] = "stale.exe";
+            ApplyBrowserExecutableEnvironment(emptyPsi, null, null);
+            if (emptyPsi.EnvironmentVariables.ContainsKey("DESKTOP_MCP_BROWSER_EXECUTABLE"))
+                throw new InvalidOperationException("Cleared browser selection left a stale Gateway environment value.");
+
+            Console.WriteLine("BROWSER_SETTINGS_SELF_TEST=PASS");
+            return 0;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("BROWSER_SETTINGS_SELF_TEST=FAIL " + error.Message);
+            return 1;
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+        }
+    }
+
     private static string ResolveNodePath(string appBaseDir)
     {
         string configured = Environment.GetEnvironmentVariable("DESKTOP_MCP_NODE_PATH");
@@ -545,6 +685,12 @@ internal sealed partial class ControlPanelRuntime
         persistentProfile = settings.profile == "workspace-write" ? "workspace-write" : "read-only";
         selectedProfile = persistentProfile;
         if (IsValidTunnelId(settings.tunnelId)) tunnelId = settings.tunnelId;
+        browserAutoDetect = settings.browserAutoDetect ?? true;
+        if (!String.IsNullOrWhiteSpace(settings.browserExecutablePath))
+        {
+            try { browserExecutablePath = NormalizeBrowserExecutablePath(settings.browserExecutablePath, false); }
+            catch (Exception ex) { browserExecutablePath = null; LogRuntimeError("Stored Browser Automation executable path is invalid and was ignored.", ex); }
+        }
         if (recoveredBackup)
         {
             try { RuntimeReliability.WriteAllTextAtomic(settingsPath, JsonSerializer.Serialize(settings), false); }
@@ -568,6 +714,8 @@ internal sealed partial class ControlPanelRuntime
             settings.showAdminRequestDetails = showAdminRequestDetails;
             settings.profile = persistentProfile;
             settings.tunnelId = tunnelId;
+            settings.browserExecutablePath = browserExecutablePath;
+            settings.browserAutoDetect = browserAutoDetect;
             settings.onboardingCompleted = onboardingCompleted;
             RuntimeReliability.WriteAllTextAtomic(settingsPath, JsonSerializer.Serialize(settings), true);
         }
@@ -685,7 +833,7 @@ internal sealed partial class ControlPanelRuntime
             Find<TextBlock>("SettingsTitle").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Button>("SettingsBackButton").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
             Find<Button>("SettingsBackButton").Foreground = BrushFrom(dark ? "#FFF5F5F7" : "#FF27272A");
-            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "AgentDesktopCard", "TunnelSettingsCard", "UpdateCard" })
+            foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "AgentDesktopCard", "BrowserSettingsCard", "TunnelSettingsCard", "UpdateCard" })
                 Find<Border>(cardName).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
             Find<TextBlock>("WorkspaceLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("WorkspacePathText").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
@@ -699,6 +847,9 @@ internal sealed partial class ControlPanelRuntime
             Find<TextBlock>("AdminRequestHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("AgentDesktopLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("AgentDesktopHint").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+            Find<TextBlock>("BrowserSettingsLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
+            Find<TextBlock>("BrowserConfigStatus").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
+            Find<TextBlock>("BrowserExecutableValue").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("TunnelSettingsLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<TextBlock>("TunnelConfigStatus").Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
             Find<TextBlock>("UpdateLabel").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
@@ -717,7 +868,7 @@ internal sealed partial class ControlPanelRuntime
             Find<PasswordBox>("TunnelRuntimeKeyInput").Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
             Find<Border>("ThemeShell").Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
             themeIndicator.Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
-            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "AgentDesktopBindButton", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
+            foreach (string name in new string[] { "RefreshButton", "SettingsButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "AgentDesktopBindButton", "BrowserChooseButton", "BrowserClearButton", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
             {
                 Button button = Find<Button>(name);
                 button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
@@ -729,6 +880,7 @@ internal sealed partial class ControlPanelRuntime
             UpdateStartupUi();
             UpdateAdminRequestUi();
             UpdateAgentDesktopUi();
+            UpdateBrowserSettingsUi();
             UpdateTunnelSettingsUi();
             SetProfileVisual(selectedProfile, false);
         }
@@ -933,6 +1085,7 @@ internal sealed partial class ControlPanelRuntime
         psi.EnvironmentVariables["DESKTOP_MCP_ALLOWED_ROOTS"] = scope;
         psi.EnvironmentVariables["DESKTOP_MCP_AUDIT_LOG"] = Path.Combine(logsDir, "audit.jsonl");
         psi.EnvironmentVariables["DESKTOP_MCP_PORT"] = gatewayPort.ToString();
+        ApplyBrowserExecutableEnvironment(psi, ResolveBrowserExecutableForGateway(), null);
         Process p = Process.Start(psi);
         if (p == null) throw new InvalidOperationException("Could not start DeskMCP Gateway.");
         gatewayProcess = p;
@@ -1356,8 +1509,8 @@ internal sealed partial class ControlPanelRuntime
         scope.Text = currentWorkspace;
         if (selectedProfile == "read-only") hint.Text = "Read-only in selected workspace";
         else if (selectedProfile == "workspace-write") hint.Text = "Guarded filesystem writes in workspace";
-        else if (selectedProfile == "full-control") hint.Text = "Workspace files + terminal + Windows Computer Use";
-        else hint.Text = "No DeskMCP filesystem sandbox · terminal + Windows Computer Use";
+        else if (selectedProfile == "full-control") hint.Text = "Workspace files + terminal + Browser Automation + Windows Computer Use";
+        else hint.Text = "No DeskMCP filesystem sandbox · terminal + Browser Automation + Windows Computer Use";
         UpdateWorkspaceUi();
 
         Ellipse liveDot = Find<Ellipse>("LiveDot");
@@ -1403,6 +1556,7 @@ internal sealed partial class ControlPanelRuntime
         EnsureManagedServices(health, lastTunnelStatus);
         UpdateTunnelSettingsUi();
         UpdateAgentDesktopUi();
+        UpdateBrowserSettingsUi();
         ApplyUpdateSecurityHoldUi();
 
         string profileLabel = selectedProfile == "read-only" ? "Read" :
@@ -1420,11 +1574,11 @@ internal sealed partial class ControlPanelRuntime
         Find<TextBlock>("FullControlDangerText").Text = fullyUnlocked ? "FULLY UNLOCKED" : "FULL CONTROL";
         Find<TextBlock>("FullControlTitle").Text = fullyUnlocked ? "Fully unlock DeskMCP?" : "Enable Full Control?";
         Find<TextBlock>("FullControlBody").Text = fullyUnlocked
-            ? "DeskMCP will stop enforcing Workspace and sensitive-path boundaries. Terminal commands and Windows Computer Use run with your current Windows user permissions."
-            : "Gateway-owned terminal sessions and Windows Computer Use will run with your current Windows user permissions.";
+            ? "DeskMCP will stop enforcing Workspace and sensitive-path boundaries. Terminal commands, Browser Automation and Windows Computer Use run with your current Windows user permissions."
+            : "Gateway-owned terminal sessions, Browser Automation and Windows Computer Use will run with your current Windows user permissions.";
         Find<TextBlock>("FullControlNoteText").Text = fullyUnlocked
-            ? "Filesystem tools may access any path your Windows account can access, including sensitive files. Computer Use can interact with the visible desktop and explicitly requested system-wide keys. UAC and Secure Desktop are not bypassed. This mode is session-only."
-            : "Filesystem tools stay inside the selected Workspace. Terminal sessions and Computer Use are not constrained by that filesystem boundary and GUI actions may trigger external side effects. UAC and Secure Desktop are not bypassed. This mode is session-only.";
+            ? "Filesystem tools may access any path your Windows account can access, including sensitive files. Browser Automation can navigate and interact with external sites, and Computer Use can interact with the visible desktop and explicitly requested system-wide keys. UAC and Secure Desktop are not bypassed. This mode is session-only."
+            : "Filesystem tools stay inside the selected Workspace. Terminal sessions, Browser Automation and Computer Use are not constrained by that filesystem boundary and may trigger external side effects. UAC and Secure Desktop are not bypassed. This mode is session-only.";
         Find<Button>("FullControlEnableButton").Content = fullyUnlocked ? "Unlock session" : "Enable session";
         suppressAutoHide = true;
         Grid overlay = Find<Grid>("FullControlOverlay");
@@ -1678,6 +1832,123 @@ internal sealed partial class ControlPanelRuntime
             if (plain != null) Array.Clear(plain, 0, plain.Length);
             if (encrypted != null) Array.Clear(encrypted, 0, encrypted.Length);
         }
+    }
+
+    private string EnvironmentBrowserExecutablePath()
+    {
+        string value = Environment.GetEnvironmentVariable("DESKTOP_MCP_BROWSER_EXECUTABLE");
+        if (String.IsNullOrWhiteSpace(value)) return null;
+        try { return NormalizeBrowserExecutablePath(value, true); }
+        catch { return null; }
+    }
+
+    private string BrowserExecutableForDisplay(out string source)
+    {
+        source = "Disabled";
+        if (!String.IsNullOrWhiteSpace(browserExecutablePath))
+        {
+            try
+            {
+                string manual = NormalizeBrowserExecutablePath(browserExecutablePath, false);
+                source = File.Exists(manual) ? "Configured" : "Missing · choose again";
+                return manual;
+            }
+            catch
+            {
+                source = "Invalid · choose again";
+                return browserExecutablePath;
+            }
+        }
+        if (!browserAutoDetect) return null;
+        string environmentOverride = EnvironmentBrowserExecutablePath();
+        if (!String.IsNullOrWhiteSpace(environmentOverride))
+        {
+            source = "Environment override";
+            return environmentOverride;
+        }
+        string detected = DetectInstalledBrowserExecutable();
+        if (!String.IsNullOrWhiteSpace(detected))
+        {
+            source = "Auto-detected";
+            return detected;
+        }
+        source = "No supported browser found";
+        return null;
+    }
+
+    private void UpdateBrowserSettingsUi()
+    {
+        TextBlock status = Find<TextBlock>("BrowserConfigStatus");
+        TextBlock value = Find<TextBlock>("BrowserExecutableValue");
+        Button clear = Find<Button>("BrowserClearButton");
+        string source;
+        string effective = BrowserExecutableForDisplay(out source);
+        bool usable = !String.IsNullOrWhiteSpace(effective) && File.Exists(effective);
+        if (status != null)
+        {
+            status.Text = source;
+            status.Foreground = BrushFrom(usable ? "#FF34C759" :
+                (source.StartsWith("Missing", StringComparison.Ordinal) || source.StartsWith("Invalid", StringComparison.Ordinal)) ? "#FFFF9F0A" :
+                (isDarkTheme ? "#FF98989F" : "#FF8E8E93"));
+        }
+        if (value != null)
+        {
+            value.Text = String.IsNullOrWhiteSpace(effective) ? "Choose Chrome, Edge or Chromium" : effective;
+            value.ToolTip = String.IsNullOrWhiteSpace(effective) ? null : effective;
+        }
+        if (clear != null)
+        {
+            bool hasSavedSelection = !String.IsNullOrWhiteSpace(browserExecutablePath);
+            clear.Content = hasSavedSelection ? "Clear" : browserAutoDetect ? "Disable" : "Auto Detect";
+            clear.IsEnabled = true;
+        }
+    }
+
+    private void ChooseBrowserExecutable()
+    {
+        using (Forms.OpenFileDialog dialog = new Forms.OpenFileDialog())
+        {
+            dialog.Title = "Choose Chrome, Edge or Chromium";
+            dialog.Filter = "Browser executable (*.exe)|*.exe";
+            dialog.CheckFileExists = true;
+            dialog.Multiselect = false;
+            string source;
+            string current = BrowserExecutableForDisplay(out source);
+            if (!String.IsNullOrWhiteSpace(current) && File.Exists(current))
+                dialog.InitialDirectory = Path.GetDirectoryName(current);
+            if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
+            try
+            {
+                browserExecutablePath = NormalizeBrowserExecutablePath(dialog.FileName, true);
+                browserAutoDetect = false;
+                SaveSettings();
+                UpdateBrowserSettingsUi();
+                bool restarting = OwnedGatewayRunning() && RestartGatewayAsync(selectedProfile);
+                ShowToast(restarting ? "Browser Automation configured · Gateway restarting" : "Browser Automation configured · restart Gateway to apply", false);
+            }
+            catch (Exception error) { ShowToast("Could not configure Browser Automation: " + error.Message, true); }
+        }
+    }
+
+    private void ToggleBrowserClearOrAutoDetect()
+    {
+        bool hadSavedSelection = !String.IsNullOrWhiteSpace(browserExecutablePath);
+        string message;
+        if (hadSavedSelection)
+        {
+            browserExecutablePath = null;
+            browserAutoDetect = true;
+            message = "Browser selection cleared · auto-detect enabled";
+        }
+        else
+        {
+            browserAutoDetect = !browserAutoDetect;
+            message = browserAutoDetect ? "Browser Automation auto-detect enabled" : "Browser Automation disabled";
+        }
+        SaveSettings();
+        UpdateBrowserSettingsUi();
+        bool restarting = OwnedGatewayRunning() && RestartGatewayAsync(selectedProfile);
+        ShowToast(restarting ? message + " · Gateway restarting" : message + " · restart Gateway to apply", false);
     }
 
     private void UpdateTunnelSettingsUi()
@@ -2105,6 +2376,8 @@ internal sealed partial class ControlPanelRuntime
         WireButtonMotion(Find<Button>("ShortcutButton"), 1.012);
         WireButtonMotion(Find<Button>("StartupButton"), 1.012);
         WireButtonMotion(Find<Button>("AdminRequestDetailsButton"), 1.012);
+        WireButtonMotion(Find<Button>("BrowserChooseButton"), 1.012);
+        WireButtonMotion(Find<Button>("BrowserClearButton"), 1.012);
         WireButtonMotion(Find<Button>("TunnelAutoButton"), 1.012);
         WireButtonMotion(Find<Button>("TunnelConfigureButton"), 1.012);
         WireButtonMotion(Find<Button>("TunnelReconnectButton"), 1.012);
@@ -2443,6 +2716,7 @@ internal sealed partial class ControlPanelRuntime
             if (showSettings)
             {
                 UpdateWorkspaceUi();
+                UpdateBrowserSettingsUi();
                 AnimateThemeIndicator(false);
                 Find<ScrollViewer>("SettingsScroll").ScrollToTop();
             }
@@ -2499,6 +2773,8 @@ internal sealed partial class ControlPanelRuntime
         Find<Button>("SettingsBackButton").Click += delegate { if (settingsExpanded) ToggleSettings(); };
         Find<Button>("WorkspaceChangeButton").Click += delegate { ChooseWorkspace(); };
         Find<Button>("AgentDesktopBindButton").Click += delegate { BindCurrentAgentDesktop(); };
+        Find<Button>("BrowserChooseButton").Click += delegate { ChooseBrowserExecutable(); };
+        Find<Button>("BrowserClearButton").Click += delegate { ToggleBrowserClearOrAutoDetect(); };
         Find<Button>("FirstRunChooseWorkspaceButton").Click += delegate { FirstRunChooseWorkspace(); };
         Find<Button>("FirstRunWorkspaceNextButton").Click += delegate { onboardingStep = 1; UpdateFirstRunStep(); };
         Find<Button>("FirstRunTunnelSkipButton").Click += delegate { FirstRunSkipTunnel(); };
@@ -2876,17 +3152,17 @@ internal sealed partial class ControlPanelRuntime
         ((Border)preview.FindName("LocalOnlyPill")).BorderBrush = BrushFrom(dark ? "#FF24532F" : "#142E7D32");
         ((TextBlock)preview.FindName("LocalOnlyText")).Foreground = BrushFrom(dark ? "#FF8FE6A8" : "#FF2E7D32");
         ((TextBlock)preview.FindName("SettingsTitle")).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "AdminRequestLabel", "TunnelSettingsLabel", "TunnelIdValue", "UpdateLabel" })
+        foreach (string name in new string[] { "WorkspaceLabel", "AppearanceLabel", "ShortcutLabel", "StartupLabel", "AdminRequestLabel", "AgentDesktopLabel", "BrowserSettingsLabel", "TunnelSettingsLabel", "TunnelIdValue", "UpdateLabel" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#F5F5F7" : "#18181B");
-        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "AdminRequestHint", "TunnelConfigStatus", "UpdateStatus" })
+        foreach (string name in new string[] { "WorkspacePathText", "RecentLabel", "ShortcutHint", "StartupHint", "AdminRequestHint", "AgentDesktopHint", "BrowserConfigStatus", "BrowserExecutableValue", "TunnelConfigStatus", "UpdateStatus" })
             ((TextBlock)preview.FindName(name)).Foreground = BrushFrom(dark ? "#98989F" : "#8E8E93");
         ((Border)preview.FindName("ThemeShell")).Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFE7E7EC");
         ((Border)preview.FindName("ThemeIndicator")).Background = BrushFrom(dark ? "#FF3A3A3C" : "#FFFFFFFF");
 
-        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "TunnelSettingsCard", "UpdateCard" })
+        foreach (string cardName in new string[] { "WorkspaceCard", "RecentCard", "AppearanceCard", "ShortcutCard", "StartupCard", "AdminRequestCard", "AgentDesktopCard", "BrowserSettingsCard", "TunnelSettingsCard", "UpdateCard" })
             ((Border)preview.FindName(cardName)).Background = BrushFrom(dark ? "#FF1C1C1E" : "#FFF5F5F7");
 
-        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
+        foreach (string name in new string[] { "RefreshButton", "SettingsButton", "SettingsBackButton", "FolderButton", "LogsButton", "ShortcutButton", "WorkspaceChangeButton", "RecentWorkspace1", "RecentWorkspace2", "RecentWorkspace3", "AgentDesktopBindButton", "BrowserChooseButton", "BrowserClearButton", "TunnelConfigureButton", "TunnelReconnectButton", "UpdateButton", "FirstRunChooseWorkspaceButton", "FirstRunTunnelSkipButton", "TunnelSetupCancelButton", "FullControlCancelButton" })
         {
             Button button = (Button)preview.FindName(name);
             button.Background = BrushFrom(dark ? "#FF2C2C2E" : "#FFF2F2F4");
@@ -3061,6 +3337,8 @@ internal static class Program
                 return CrossProcessDirectoryLock.RunSelfTest();
             if (args.Length > 0 && args[0] == "--agent-desktop-binding-self-test")
                 return AgentDesktopControlCoordinator.RunBindingSelfTest();
+            if (args.Length > 0 && args[0] == "--browser-settings-self-test")
+                return ControlPanelRuntime.RunBrowserSettingsSelfTest();
             if (args.Length == 4 && args[0] == "--agent-control-lock-hold")
                 return CrossProcessDirectoryLock.HoldForInterop(args[1], args[2], args[3]);
             if (args.Length == 2 && args[0] == "--agent-control-lock-try")

@@ -356,6 +356,18 @@
                   <StackPanel x:Name="AgentDesktopBindingsPanel" Margin="0,10,0,0"/>
                 </StackPanel>
               </Border>
+              <Border x:Name="BrowserSettingsCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
+                <StackPanel>
+                  <TextBlock x:Name="BrowserSettingsLabel" Text="Browser Automation" Foreground="#18181B" FontSize="11" FontWeight="SemiBold"/>
+                  <TextBlock x:Name="BrowserConfigStatus" Text="Auto Detect" Foreground="#8E8E93" FontSize="10" Margin="0,2,0,0" FontWeight="SemiBold"/>
+                  <TextBlock x:Name="BrowserExecutableValue" Text="Chrome / Edge / Chromium standard install paths" Foreground="#8E8E93" FontSize="9" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
+                  <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" x:Name="BrowserChooseButton" Style="{StaticResource MiniButton}" Content="Choose Browser"/>
+                    <Button Grid.Column="2" x:Name="BrowserClearButton" Style="{StaticResource MiniButton}" Content="Disable"/>
+                  </Grid>
+                </StackPanel>
+              </Border>
               <Border x:Name="TunnelSettingsCard" Background="#F5F5F7" CornerRadius="18" Padding="12" Margin="0,0,0,10">
                 <StackPanel>
                   <Grid>

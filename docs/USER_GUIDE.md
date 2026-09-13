@@ -67,6 +67,12 @@ Full Control is deliberately not persisted. After DeskMCP restarts, it returns t
 - **Red** — offline or explicit Full Control risk state.
 - **Blue/cyan** — DeskMCP brand and normal interactive controls; it does not replace health semantics.
 
+### Browser Automation
+
+Browser Automation requires session-only **Full** or **Unlock**. By default, **Settings → Browser Automation** auto-detects a local Edge, Chrome or Chromium executable. Use **Choose Browser** to pin a specific `.exe`; DeskMCP saves that path locally and restarts the Gateway. DeskMCP launches its own isolated browser/profile and never attaches to your personal browser session.
+
+Use **Clear** to explicitly disable Browser Automation. The button then changes to **Auto Detect**, which re-enables discovery. `DESKTOP_MCP_BROWSER_EXECUTABLE` is treated as a development/environment override only while auto-detect is enabled and no saved Control Panel selection exists; a manual selection always takes precedence.
+
 ### Agent Desktop pool
 
 Desktop 1 is reserved for you. Create Desktop 2 or later with Windows Virtual Desktops, switch to each desktop you want to make available to agents, then use **Settings → Agent Desktop → Bind Current**. Multiple bindings form a pool, so concurrent agents receive different free desktops instead of competing for one desktop.
