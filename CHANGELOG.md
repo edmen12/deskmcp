@@ -4,6 +4,30 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.12 — 2026-09-14
+
+### Changed
+
+- Browser Automation is configurable from DeskMCP Settings with local browser auto-detection, explicit browser selection, and fail-closed settings persistence.
+- Release engineering now binds Windows Setup and macOS developer-preview artifacts to the exact clean source commit and rejects source changes during staging.
+- Development CI uses a dedicated release-validation mode while public candidate, signing, and finalize paths continue to enforce version-tag collision and provenance guards.
+- Control Panel and Agent Desktop diagnostic logs are bounded and rotated instead of growing without limit.
+
+### Fixed
+
+- Fixed Agent Desktop keyboard actions being able to lose their lease context between snapshot and action and fall back to global Windows SendInput on the user desktop.
+- Fixed Tunnel ID/API-key reload leaving half-applied configuration or an old detached tunnel process; configuration now stops safely first and rolls back profile, secret, settings, and in-memory state on failure.
+- Fixed cross-Gateway workspace mutations so concurrent Gateway processes cannot both commit the same observed file version, and preserve both the operation error and lock-release error when cleanup also fails.
+- Fixed transient Windows filesystem failures across SkillStore, runtime metadata, and ProcessHost backup cleanup with bounded retry handling.
+- Fixed current user-facing tool-count documentation and MCP profile descriptions drifting from the 27-tool runtime contract.
+
+### Validation
+
+- Gateway/runtime regression suite: 181 passed, 0 failed.
+- WPF Release build: 0 warnings, 0 errors.
+- Runtime reliability, Tunnel status, Browser settings, release-provenance, and focused cross-process lock/audit self-tests pass.
+- Full repository code audit final review passed with no open code-level risks or missing checks inside the audit scope.
+
 ## 0.9.11 — 2026-09-11
 
 ### Changed
