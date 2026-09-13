@@ -504,7 +504,7 @@ export class BrowserRuntime {
 
   private async configuredExecutable(): Promise<string> {
     if (!this.executablePath) {
-      throw new Error('Browser automation is not configured. Set DESKTOP_MCP_BROWSER_EXECUTABLE locally to a Chrome/Chromium/Edge executable.');
+      throw new Error('Browser automation is not configured. Open DeskMCP Settings → Browser Automation to auto-detect or choose Edge/Chrome/Chromium. DESKTOP_MCP_BROWSER_EXECUTABLE remains available as a local development override.');
     }
     if (!path.isAbsolute(this.executablePath)) throw new Error('DESKTOP_MCP_BROWSER_EXECUTABLE must be an absolute path.');
     await access(this.executablePath);

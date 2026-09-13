@@ -164,7 +164,7 @@ export function registerBrowserTools(
     'desktop_browser_session',
     {
       title: 'Manage Isolated Browser Session',
-      description: 'Start, list, or close DeskMCP-owned isolated Chromium browser sessions, create/select/close tabs, handle a blocking JavaScript dialog, and list or delete persistent DeskMCP browser profiles. Browser start requires a locally configured DESKTOP_MCP_BROWSER_EXECUTABLE and never reuses a personal browser/CDP session.',
+      description: 'Start, list, or close DeskMCP-owned isolated Chromium browser sessions, create/select/close tabs, handle a blocking JavaScript dialog, and list or delete persistent DeskMCP browser profiles. Browser start requires a local Edge/Chrome/Chromium configured through DeskMCP Settings or the explicit development environment override, and never reuses a personal browser/CDP session.',
       inputSchema: z.object({
         action: z.enum(['start', 'list', 'close', 'new_page', 'select_page', 'close_page', 'handle_dialog', 'list_profiles', 'delete_profile']),
         session_id: sessionIdSchema.optional(),
