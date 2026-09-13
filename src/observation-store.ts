@@ -139,6 +139,7 @@ export class ObservationStore {
     const keys = [...new Set(filePaths.map(keyFor))].sort();
     const releases: Array<() => void> = [];
     const crossProcessLocks: PidDirectoryLockLease[] = [];
+    let operationError: unknown;
     try {
       for (const key of keys) releases.push(await this.acquireMutationLock(key));
       for (const key of keys) {
@@ -146,6 +147,9 @@ export class ObservationStore {
         if (lock) crossProcessLocks.push(lock);
       }
       return await action();
+    } catch (error) {
+      operationError = error;
+      throw error;
     } finally {
       let releaseError: unknown;
       for (let index = crossProcessLocks.length - 1; index >= 0; index--) {
@@ -153,7 +157,15 @@ export class ObservationStore {
         catch (error) { releaseError ??= error; }
       }
       for (let index = releases.length - 1; index >= 0; index--) releases[index]!();
-      if (releaseError) throw releaseError;
+      if (releaseError) {
+        if (operationError) {
+          throw new AggregateError(
+            [operationError, releaseError],
+            'Workspace mutation failed and lock release also failed.'
+          );
+        }
+        throw releaseError;
+      }
     }
   }
 
