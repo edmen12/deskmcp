@@ -20,6 +20,7 @@ TUNNEL_SHA="15abf165f06050af642c948ba6bd6c905191dc5420a9422dadde2b49d892e2c6"
 TUNNEL_URL="https://github.com/openai/tunnel-client/releases/download/${TUNNEL_VERSION}/${TUNNEL_ASSET}"
 RUNTIME="$PROJECT_ROOT/runtime"
 DOWNLOADS="$RUNTIME/downloads"
+SWIFT_SCRATCH="$RUNTIME/swiftpm/darwin-arm64"
 STAGE="$RUNTIME/release-stage/darwin-arm64"
 APP="$STAGE/DeskMCP.app"
 CONTENTS="$APP/Contents"
@@ -63,9 +64,10 @@ verified_download() {
 rm -rf "$STAGE"
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/node/bin" "$RESOURCES/tunnel-client/bin" "$RESOURCES/gateway"
 
-swift test -c release --package-path control-panel/macos
-swift build -c release --package-path control-panel/macos
-SWIFT_BIN="$(swift build -c release --package-path control-panel/macos --show-bin-path)/DeskMCPMac"
+rm -rf "$SWIFT_SCRATCH"
+swift test -c release --package-path control-panel/macos --scratch-path "$SWIFT_SCRATCH"
+swift build -c release --package-path control-panel/macos --scratch-path "$SWIFT_SCRATCH"
+SWIFT_BIN="$(swift build -c release --package-path control-panel/macos --scratch-path "$SWIFT_SCRATCH" --show-bin-path)/DeskMCPMac"
 cp "$SWIFT_BIN" "$CONTENTS/MacOS/DeskMCP"
 chmod +x "$CONTENTS/MacOS/DeskMCP"
 file "$CONTENTS/MacOS/DeskMCP" | grep -q 'arm64'
