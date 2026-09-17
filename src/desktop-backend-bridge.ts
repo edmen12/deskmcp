@@ -52,10 +52,11 @@ function buildProcessHostCommand(
   shell: 'powershell.exe' | 'cmd.exe',
   command: string,
   windowMode: 'hidden' | 'visible' = 'hidden',
-  elevation: 'standard' | 'admin' = 'standard'
+  elevation: 'standard' | 'admin' = 'standard',
+  lifetime: 'root' | 'job' = 'root'
 ): string {
   const command64 = Buffer.from(command, 'utf8').toString('base64');
-  return `"${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation}`;
+  return `"${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}`;
 }
 
 function elapsedMs(startedAt: number): number {
@@ -278,7 +279,8 @@ export class DesktopBackendBridge {
     timeoutMs: number,
     shell?: 'powershell.exe' | 'cmd.exe',
     windowMode: 'hidden' | 'visible' = 'hidden',
-    elevation: 'standard' | 'admin' = 'standard'
+    elevation: 'standard' | 'admin' = 'standard',
+    lifetime: 'root' | 'job' = 'root'
   ): Promise<DesktopBackendToolResult> {
     if (process.platform !== 'win32') {
       return this.callTextTool('start_process', {
@@ -296,7 +298,8 @@ export class DesktopBackendBridge {
       shell ?? 'cmd.exe',
       command,
       windowMode,
-      elevation
+      elevation,
+      lifetime
     );
     return this.callTextTool('start_process', {
       command: ownedCommand,

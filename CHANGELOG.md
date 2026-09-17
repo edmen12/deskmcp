@@ -16,12 +16,15 @@ All notable changes to DeskMCP are documented here.
 - Live upgrade now drains every remaining process whose executable belongs to the installed DeskMCP root before the atomic directory swap, including `DeskMCP.ProcessHost.exe` and future helper runtimes that are not part of the Gateway/node/tunnel trio.
 - Uninstall uses the same install-root process sweep, preventing helper executables from keeping the program directory locked after the normal graceful shutdown path.
 - Uninstall self-removal now retries the install-directory deletion for a bounded period instead of making one fixed-delay attempt while the large single-file uninstaller may still be releasing its own image.
+- Browser Automation now uses an internal ProcessHost job-lifetime mode so Chromium launchers that exit immediately (reproduced with Chrome 153) no longer cause DeskMCP to close the Windows Job Object and kill the real browser process tree before `DevToolsActivePort` appears. Public process tools keep the existing root-lifetime behavior and still cannot daemonize descendants.
 
 ### Validation
 
 - A real 0.9.13 live-upgrade attempt reproduced the old failure safely: Setup returned exit 14 while an install-root ProcessHost was active, and the previous installation plus DeskMCP settings, Tunnel profile, and Startup shortcut remained unchanged.
 - The exact released 0.9.13 Setup passed an isolated install on the same machine, narrowing the failure to live install-root process contention rather than payload corruption.
 - Gateway/runtime regression suite: 182 passed, 0 failed.
+- ProcessHost lifetime regression proves ordinary root mode still kills descendants while Browser-only job mode waits for owned descendants to drain.
+- Real Chrome 153 BrowserRuntime E2E started an isolated profile, published `DevToolsActivePort`, connected through Playwright, captured a snapshot/console state, and closed cleanly.
 - WPF Release build: 0 warnings, 0 errors.
 - Installer release validation now launches a real install-root ProcessHost during upgrade and uninstall and requires both operations to terminate it cleanly before completion.
 

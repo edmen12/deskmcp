@@ -254,7 +254,7 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     let pid: number | undefined;
     let sessionId: string | undefined;
     try {
-      const result = await this.bridge.startProcess(command, 3000, 'powershell.exe', 'hidden', 'standard');
+      const result = await this.bridge.startProcess(command, 3000, 'powershell.exe', 'hidden', 'standard', 'job');
       if (result.isError) throw new Error(`Browser process start failed: ${result.text}`);
       pid = extractStartedPid(result.text);
       sessionId = this.sessions.registerReserved(reservationId, pid, 'hidden');

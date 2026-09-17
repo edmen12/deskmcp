@@ -16,8 +16,10 @@ internal static class Program
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const int JobObjectBasicAccountingInformation = 1;
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint WAIT_OBJECT_0 = 0x00000000;
+    private const uint WAIT_TIMEOUT = 0x00000102;
     private const uint WAIT_FAILED = 0xFFFFFFFF;
     private const uint INFINITE = 0xFFFFFFFF;
     private const int STD_INPUT_HANDLE = -10;
@@ -39,11 +41,11 @@ internal static class Program
 
         try
         {
-            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out elevatedChild, out int ownerPid, out errorFile);
+            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out elevatedChild, out int ownerPid, out errorFile);
             if (elevation == "admin" && !elevatedChild)
             {
                 ElevationDisclosure.ShowIfEnabled(shell, command);
-                return RunElevatedHost(shell, command, windowMode);
+                return RunElevatedHost(shell, command, windowMode, lifetime);
             }
             int owningPid = ownerPid > 0 ? ownerPid : GetParentProcessId(Environment.ProcessId);
             if (owningPid <= 0)
@@ -127,8 +129,15 @@ internal static class Program
                 if (!GetExitCodeProcess(childProcessHandle, out uint exitCode))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read the owned process exit code.");
 
-                // Closing a KILL_ON_JOB_CLOSE job also removes any descendants that
-                // outlived the root command. Owned DeskMCP sessions cannot daemonize.
+                if (lifetime == "job")
+                {
+                    WaitForJobToDrain(jobHandle, parentHandle);
+                }
+                // root lifetime intentionally closes the KILL_ON_JOB_CLOSE job as
+                // soon as the root shell exits, so ordinary process tools cannot
+                // daemonize descendants. job lifetime is reserved for internally
+                // owned runtimes such as Chromium, whose launcher PID may exit while
+                // the real browser process tree remains inside the same Windows job.
                 CloseHandle(jobHandle);
                 jobHandle = IntPtr.Zero;
                 return unchecked((int)exitCode);
@@ -160,12 +169,46 @@ internal static class Program
         }
     }
 
-    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out bool elevatedChild, out int ownerPid, out string? errorFile)
+    private static void WaitForJobToDrain(IntPtr jobHandle, IntPtr ownerHandle)
+    {
+        int infoSize = Marshal.SizeOf<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>();
+        IntPtr buffer = Marshal.AllocHGlobal(infoSize);
+        try
+        {
+            while (true)
+            {
+                if (!QueryInformationJobObject(jobHandle, JobObjectBasicAccountingInformation, buffer, (uint)infoSize, IntPtr.Zero))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the DeskMCP process job.");
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info = Marshal.PtrToStructure<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>(buffer);
+                if (info.ActiveProcesses == 0) return;
+
+                uint ownerState = WaitForSingleObject(ownerHandle, 100);
+                if (ownerState == WAIT_OBJECT_0)
+                {
+                    TerminateJobObject(jobHandle, 1);
+                    throw new InvalidOperationException("Owning DeskMCP process ended before the owned job drained.");
+                }
+                if (ownerState != WAIT_TIMEOUT)
+                {
+                    if (ownerState == WAIT_FAILED)
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Waiting for the owning DeskMCP process failed.");
+                    throw new InvalidOperationException("Unexpected owner wait result: " + ownerState);
+                }
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out bool elevatedChild, out int ownerPid, out string? errorFile)
     {
         string? shellValue = null;
         string? command64 = null;
         string? windowModeValue = null;
         string? elevationValue = null;
+        string? lifetimeValue = null;
         string? ownerPidValue = null;
         string? errorFile64 = null;
         elevatedChild = false;
@@ -175,6 +218,7 @@ internal static class Program
             else if (args[index] == "--command64" && index + 1 < args.Length) command64 = args[++index];
             else if (args[index] == "--window-mode" && index + 1 < args.Length) windowModeValue = args[++index];
             else if (args[index] == "--elevation" && index + 1 < args.Length) elevationValue = args[++index];
+            else if (args[index] == "--lifetime" && index + 1 < args.Length) lifetimeValue = args[++index];
             else if (args[index] == "--owner-pid" && index + 1 < args.Length) ownerPidValue = args[++index];
             else if (args[index] == "--elevated-child") elevatedChild = true;
             else if (args[index] == "--error-file64" && index + 1 < args.Length) errorFile64 = args[++index];
@@ -192,6 +236,9 @@ internal static class Program
         elevation = (elevationValue ?? "standard").ToLowerInvariant();
         if (elevation != "standard" && elevation != "admin")
             throw new ArgumentException("Unsupported process elevation mode.");
+        lifetime = (lifetimeValue ?? "root").ToLowerInvariant();
+        if (lifetime != "root" && lifetime != "job")
+            throw new ArgumentException("Unsupported process lifetime mode.");
         errorFile = null;
         if (!String.IsNullOrWhiteSpace(errorFile64))
         {
@@ -207,7 +254,7 @@ internal static class Program
         if (String.IsNullOrWhiteSpace(command)) throw new ArgumentException("Process command is empty.");
     }
 
-    private static int RunElevatedHost(string shell, string command, string windowMode)
+    private static int RunElevatedHost(string shell, string command, string windowMode, string lifetime)
     {
         string executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("Could not resolve the DeskMCP process host path.");
@@ -219,6 +266,7 @@ internal static class Program
             + " --command64 " + command64
             + " --window-mode " + windowMode
             + " --elevation admin"
+            + " --lifetime " + lifetime
             + " --error-file64 " + errorFile64;
         ProcessStartInfo start = new ProcessStartInfo
         {
@@ -318,6 +366,19 @@ internal static class Program
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+    {
+        public long TotalUserTime;
+        public long TotalKernelTime;
+        public long ThisPeriodTotalUserTime;
+        public long ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount;
+        public uint TotalProcesses;
+        public uint ActiveProcesses;
+        public uint TotalTerminatedProcesses;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
     {
         public long PerProcessUserTimeLimit;
@@ -391,11 +452,13 @@ internal static class Program
 
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool QueryInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength, IntPtr lpReturnLength);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateJobObject(IntPtr hJob, uint uExitCode);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr hObject);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForMultipleObjects(uint nCount, IntPtr[] lpHandles, bool bWaitAll, uint dwMilliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint ResumeThread(IntPtr hThread);

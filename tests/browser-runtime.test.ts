@@ -185,8 +185,9 @@ test('owned browser process controller constrains the whole process tree to an A
   const leaseId = '44444444-4444-4444-8444-444444444444';
   const placements: Array<{ pid: number; leaseId: string }> = [];
   const asserted: string[] = [];
+  const startCalls: unknown[][] = [];
   const bridge = {
-    async startProcess() { return { isError: false, text: 'Process started with PID 4242' }; },
+    async startProcess(...args: unknown[]) { startCalls.push(args); return { isError: false, text: 'Process started with PID 4242' }; },
     async listProcessSessions() { return { isError: false, text: 'PID: 4242' }; },
     async forceTerminateProcess() { return { isError: false, text: 'terminated' }; }
   } as unknown as DesktopBackendBridge;
@@ -198,6 +199,8 @@ test('owned browser process controller constrains the whole process tree to an A
 
   const sessionId = await controller.start('Write-Output test', leaseId);
   assert.match(sessionId, /^[0-9a-f-]{36}$/i);
+  assert.equal(startCalls.length, 1);
+  assert.equal(startCalls[0]?.[5], 'job');
   assert.deepEqual(placements, [{ pid: 4242, leaseId }]);
   assert.deepEqual(asserted, [leaseId, leaseId]);
 });
