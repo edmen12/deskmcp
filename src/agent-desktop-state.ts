@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock } from './cross-process-lock.js';
 import { renameFileWithRetry } from './fs-reliability.js';
-import type { AgentDesktopNativeBridge } from './agent-desktop-native.js';
+import type { AgentDesktopMoveProcessResult, AgentDesktopNativeBridge } from './agent-desktop-native.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const TASK_ID_PATTERN = /^tsk_[0-9a-f]{16}$/u;
@@ -494,15 +494,20 @@ export class AgentDesktopManager {
     await this.assertLease(leaseId);
   }
 
-  async placeProcessTreeWindows(processId: number, leaseId: string): Promise<void> {
+  async placeProcessTreeWindows(
+    processId: number,
+    leaseId: string,
+    options: { timeoutMs?: number } = {}
+  ): Promise<AgentDesktopMoveProcessResult> {
     const { binding } = await this.assertLease(leaseId);
     const moved = await this.native.moveProcessTreeWindows(processId, binding.desktopId, {
-      timeoutMs: 15000,
+      timeoutMs: options.timeoutMs ?? 15000,
       showNoActivate: true
     });
     if (moved.windows.some(window => window.desktopId.toLowerCase() !== binding.desktopId.toLowerCase())) {
       throw new Error('Agent Desktop process-tree placement verification failed.');
     }
     await this.assertLease(leaseId);
+    return moved;
   }
 }

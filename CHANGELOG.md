@@ -18,15 +18,17 @@ All notable changes to DeskMCP are documented here.
 - Uninstall self-removal now retries the install-directory deletion for a bounded period instead of making one fixed-delay attempt while the large single-file uninstaller may still be releasing its own image.
 - Browser Automation now uses an internal ProcessHost job-lifetime mode so Chromium launchers that exit immediately (reproduced with Chrome 153) no longer cause DeskMCP to close the Windows Job Object and kill the real browser process tree before `DevToolsActivePort` appears. Public process tools keep the existing root-lifetime behavior and still cannot daemonize descendants.
 - Browser startup now waits for the Playwright/CDP endpoint to become usable after `DevToolsActivePort` is published, fixing a reproduced Chrome 153 readiness race where the port file appeared 1–105 ms before the loopback CDP socket accepted connections and persistent headful profiles failed with `ECONNREFUSED`.
+- Agent Desktop Browser placement now waits until a real Chromium top-level window is observed on the leased virtual desktop before startup can succeed, and re-applies process-tree placement while the lease remains active and after page/window-creating browser actions. This fixes a live failure where the early process-tree scan saw zero windows, returned success, and Chrome later appeared on Desktop 1.
 
 ### Validation
 
 - A real 0.9.13 live-upgrade attempt reproduced the old failure safely: Setup returned exit 14 while an install-root ProcessHost was active, and the previous installation plus DeskMCP settings, Tunnel profile, and Startup shortcut remained unchanged.
 - The exact released 0.9.13 Setup passed an isolated install on the same machine, narrowing the failure to live install-root process contention rather than payload corruption.
-- Gateway/runtime regression suite: 183 passed, 0 failed.
+- Gateway/runtime regression suite: 184 passed, 0 failed.
 - ProcessHost lifetime regression proves ordinary root mode still kills descendants while Browser-only job mode waits for owned descendants to drain.
 - Five real Chrome 153 probes measured a 1–105 ms gap between `DevToolsActivePort` publication and loopback CDP socket readiness for the persistent `console-audit` profile on an Agent Desktop lease.
 - Real Chrome 153 BrowserRuntime E2E started an isolated profile, published `DevToolsActivePort`, connected through Playwright, captured a snapshot/console state, and closed cleanly.
+- Agent Desktop Browser regression covers delayed real-window creation: zero-window placement attempts cannot satisfy startup, and later page creation re-applies placement to the same lease.
 - WPF Release build: 0 warnings, 0 errors.
 - Installer release validation now launches a real install-root ProcessHost during upgrade and uninstall and requires both operations to terminate it cleanly before completion.
 
