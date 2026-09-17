@@ -704,7 +704,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             AgentDesktopCurrentDesktopDocument current = RunCurrentDesktopHost();
             if (current.DesktopCount < 2)
                 throw new InvalidOperationException("Create Desktop 2 first (Win + Ctrl + D), switch to it, then bind Agent Desktop.");
-            if (current.DesktopNumber <= 0)
+            if (current.DesktopNumber <= 1)
                 throw new InvalidOperationException("Desktop 1 is reserved for you. Switch to Desktop 2 (or later) before binding Agent Desktop.");
             Guid desktopId;
             if (!Guid.TryParse(current.DesktopId, out desktopId) || desktopId == Guid.Empty)

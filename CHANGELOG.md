@@ -4,6 +4,12 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.13 — 2026-09-18
+
+- Agent Desktop is now explicitly reserved for work that actually needs GUI interaction or a visible browser session; filesystem, terminal, MCP/network-only, code-review, and Task Room work should not acquire a desktop lease.
+- Desktop 1 is fail-closed for Agent Desktop: the Control Panel cannot bind it, and the Gateway refuses to allocate a binding that Windows has renumbered to Desktop 1.
+- Corrected Agent Desktop pool regression coverage so Windows renumbering to Desktop 1 is treated as unavailable instead of allocatable.
+
 ## 0.9.12 — 2026-09-14
 
 ### Changed

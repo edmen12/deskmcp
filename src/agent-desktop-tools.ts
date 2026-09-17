@@ -26,7 +26,7 @@ export function registerAgentDesktopTools(
     'desktop_agent_desktop',
     {
       title: 'Manage Agent Desktop',
-      description: 'Start, inspect, or stop a user-bound Agent Desktop control lease. DeskMCP allocates the first free desktop from the locally bound Agent Desktop pool, so multiple agents can control different virtual desktops concurrently. A native blue safety HUD must be heartbeating before control is granted. Browser sessions bound to a lease stay open for the lifetime of that Agent Control lease and are closed only when that lease exits or is revoked. Binding desktops is a local user action in the DeskMCP Control Panel.',
+      description: 'Start, inspect, or stop a user-bound Agent Desktop control lease. Agent Desktop is for tasks that actually require GUI interaction or a visible browser session. Do not start a lease for filesystem, terminal, MCP/network-only, code-review, or Task Room work, and never start one merely because a task exists. Start only immediately before GUI/browser work and stop it as soon as that work is finished. DeskMCP allocates the first free desktop from the locally bound Agent Desktop pool, so multiple agents can control different virtual desktops concurrently. Desktop 1 is reserved for the local user and is never a usable Agent Desktop. A native blue safety HUD must be heartbeating before control is granted. Browser sessions bound to a lease stay open for the lifetime of that Agent Control lease and are closed only when that lease exits or is revoked. Binding desktops is a local user action in the DeskMCP Control Panel.',
       inputSchema: z.object({
         action: z.enum(['status', 'start', 'stop']),
         lease_id: z.string().uuid().optional(),

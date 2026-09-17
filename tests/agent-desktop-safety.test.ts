@@ -191,8 +191,8 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
     const native = {
       async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
       async desktopById(desktopId: string) {
-        const desktopNumber = desktopId === desktopA ? 1 : desktopId === desktopB ? 2 : null;
-        return { desktopId, present: desktopNumber !== null, desktopNumber, desktopCount: 3, currentDesktopNumber: 0 };
+        const desktopNumber = desktopId === desktopA ? 2 : desktopId === desktopB ? 3 : null;
+        return { desktopId, present: desktopNumber !== null, desktopNumber, desktopCount: 3, currentDesktopNumber: 1 };
       }
     } as unknown as AgentDesktopNativeBridge;
     const manager = new AgentDesktopManager(root, native);
@@ -239,13 +239,13 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
     await armUntil(1);
     const first = await firstPromise;
     assert.equal(first.control.desktopId, desktopA);
-    assert.equal(first.control.desktopNumber, 1);
+    assert.equal(first.control.desktopNumber, 2);
 
     const secondPromise = manager.startControl('Agent B');
     await armUntil(2);
     const second = await secondPromise;
     assert.equal(second.control.desktopId, desktopB);
-    assert.equal(second.control.desktopNumber, 2);
+    assert.equal(second.control.desktopNumber, 3);
     assert.notEqual(second.control.leaseId, first.control.leaseId);
 
     const status = await manager.status();
@@ -292,14 +292,14 @@ test('Agent Desktop skips a bound Windows desktop that no longer exists', async 
 });
 
 
-test('Agent Desktop resolves a bound desktop by GUID after Windows renumbers it', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-renumber-'));
+test('Agent Desktop refuses a bound desktop after Windows renumbers it to Desktop 1', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-renumber-user-'));
   try {
     const desktopId = randomUUID();
     const native = {
       async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
       async desktopById(requestedId: string) {
-        return { desktopId: requestedId, present: true, desktopNumber: 1, desktopCount: 2, currentDesktopNumber: 0 };
+        return { desktopId: requestedId, present: true, desktopNumber: 1, desktopCount: 2, currentDesktopNumber: 1 };
       }
     } as unknown as AgentDesktopNativeBridge;
     const manager = new AgentDesktopManager(root, native);
@@ -309,31 +309,10 @@ test('Agent Desktop resolves a bound desktop by GUID after Windows renumbers it'
       bindings: [{ schemaVersion: 1, desktopId, desktopNumber: 3, boundAtUtc: new Date().toISOString() }]
     });
 
-    const started = manager.startControl('renumbered desktop');
-    const deadline = Date.now() + 2000;
-    let leaseId = '';
-    let generation = -1;
-    while (Date.now() < deadline) {
-      const raw = JSON.parse(await readFile(path.join(root, 'control.json'), 'utf8')) as {
-        controls?: Array<{ generation: number; leaseId: string; desktopId: string; desktopNumber: number }>;
-      };
-      const control = raw.controls?.[0];
-      if (control) {
-        assert.equal(control.desktopId, desktopId);
-        assert.equal(control.desktopNumber, 1);
-        leaseId = control.leaseId;
-        generation = control.generation;
-        break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    assert.ok(leaseId);
-    await writeJson(path.join(root, 'hud-state.json'), {
-      schemaVersion: 2,
-      entries: [{ schemaVersion: 1, generation, leaseId, armed: true, visible: false, processId: 1234, heartbeatAtUtc: new Date().toISOString() }]
-    });
-    const status = await started;
-    assert.equal(status.control.desktopNumber, 1);
+    const status = await manager.status();
+    assert.equal(status.configured, true);
+    assert.equal(status.available_desktops, 0);
+    await assert.rejects(manager.startControl('renumbered user desktop'), /no usable agent desktops remain/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
