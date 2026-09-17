@@ -231,6 +231,28 @@ async function pollDevToolsActivePort(profileDir: string, timeoutMs: number): Pr
   throw new Error(`Browser did not publish a CDP port within ${timeoutMs}ms.${detail}`);
 }
 
+async function waitForCdpPages(
+  cdp: BrowserCdpDriver,
+  port: number,
+  timeoutMs: number
+): Promise<readonly BrowserPageSummary[]> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    try {
+      const pages = await cdp.listPages(port, Math.min(remaining, 1000));
+      if (pages.length > 0) return pages;
+      lastError = new Error('Browser CDP endpoint is reachable but no controllable page was found.');
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : '';
+  throw new Error(`Browser did not become CDP-ready within ${timeoutMs}ms.${detail}`);
+}
+
 export class OwnedBrowserProcessController implements BrowserProcessController {
   constructor(
     private readonly bridge: DesktopBackendBridge,
@@ -563,10 +585,11 @@ export class BrowserRuntime {
           browserLaunchCommand(executable, profileDir, headless, viewport, agentDesktop),
           agentDesktopLeaseId
         );
+        const readinessDeadline = Date.now() + timeout;
         const port = await pollDevToolsActivePort(profileDir, timeout);
         if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
-        const pages = await this.cdp.listPages(port, Math.min(timeout, 10000));
-        if (pages.length === 0) throw new Error('Browser started but no controllable page was found.');
+        const readinessTimeout = Math.max(1, readinessDeadline - Date.now());
+        const pages = await waitForCdpPages(this.cdp, port, readinessTimeout);
         const first = pages[0]!;
         if (initialUrl) {
           if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);

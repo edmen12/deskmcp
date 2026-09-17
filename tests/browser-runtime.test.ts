@@ -169,18 +169,48 @@ class FakeCdpDriver implements BrowserCdpDriver {
   }
 }
 
-async function configuredRuntime(root: string, profileController?: FakeProcessController) {
+class DelayedReadyCdpDriver extends FakeCdpDriver {
+  refusedAttempts = 0;
+  constructor(private failuresRemaining = 2) { super(); }
+
+  async listPages(port: number): Promise<readonly BrowserPageSummary[]> {
+    if (this.failuresRemaining > 0) {
+      this.failuresRemaining -= 1;
+      this.refusedAttempts += 1;
+      throw new Error('browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:43210');
+    }
+    return await super.listPages(port);
+  }
+}
+
+async function configuredRuntime(
+  root: string,
+  profileController?: FakeProcessController,
+  cdpDriver?: FakeCdpDriver
+) {
   const executable = path.join(root, 'configured-browser.exe');
   await writeFile(executable, 'test browser placeholder', 'utf8');
   const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
   await artifacts.init();
   const controller = profileController ?? new FakeProcessController(path.join(root, 'browser'));
-  const cdp = new FakeCdpDriver();
+  const cdp = cdpDriver ?? new FakeCdpDriver();
   const browser = new BrowserRuntime(path.join(root, 'browser'), controller, artifacts, cdp, executable);
   await browser.init();
   return { browser, controller, cdp, artifacts };
 }
 
+test('browser start waits for CDP readiness after DevToolsActivePort is published', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const cdp = new DelayedReadyCdpDriver(2);
+  const { browser, controller } = await configuredRuntime(root, undefined, cdp);
+
+  const started = await browser.start({ profile_id: 'cdp-readiness-race', timeout_ms: 1000 });
+  assert.equal(started.active, true);
+  assert.equal(cdp.refusedAttempts, 2);
+  assert.deepEqual(controller.terminated, []);
+  await browser.close(started.session_id);
+});
 test('owned browser process controller constrains the whole process tree to an Agent Desktop lease', async () => {
   const leaseId = '44444444-4444-4444-8444-444444444444';
   const placements: Array<{ pid: number; leaseId: string }> = [];
