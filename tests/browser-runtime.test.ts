@@ -31,6 +31,8 @@ class FakeProcessController implements BrowserProcessController {
   readonly leaseIds: Array<string | undefined> = [];
   readonly terminated: string[] = [];
   readonly activeIds = new Set<string>();
+  readonly placements: Array<{ processSessionId: string; leaseId: string; timeoutMs: number }> = [];
+  placementWindows: number[] = [];
   failTerminate = false;
   private next = 1;
 
@@ -52,6 +54,12 @@ class FakeProcessController implements BrowserProcessController {
 
   async active(processSessionId: string): Promise<boolean> {
     return this.activeIds.has(processSessionId);
+  }
+
+  async place(processSessionId: string, leaseId: string, timeoutMs = 250) {
+    this.placements.push({ processSessionId, leaseId, timeoutMs });
+    const windows = this.placementWindows.length > 0 ? this.placementWindows.shift()! : 1;
+    return { moved: windows, windows };
   }
 
   async terminate(processSessionId: string): Promise<void> {
@@ -213,7 +221,7 @@ test('browser start waits for CDP readiness after DevToolsActivePort is publishe
 });
 test('owned browser process controller constrains the whole process tree to an Agent Desktop lease', async () => {
   const leaseId = '44444444-4444-4444-8444-444444444444';
-  const placements: Array<{ pid: number; leaseId: string }> = [];
+  const placements: Array<{ pid: number; leaseId: string; timeoutMs?: number }> = [];
   const asserted: string[] = [];
   const startCalls: unknown[][] = [];
   const bridge = {
@@ -223,7 +231,10 @@ test('owned browser process controller constrains the whole process tree to an A
   } as unknown as DesktopBackendBridge;
   const agentDesktop = {
     async assertLease(id: string) { asserted.push(id); return {}; },
-    async placeProcessTreeWindows(pid: number, id: string) { placements.push({ pid, leaseId: id }); }
+    async placeProcessTreeWindows(pid: number, id: string, options: { timeoutMs?: number } = {}) {
+      placements.push({ pid, leaseId: id, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}) });
+      return { processId: pid, moved: 1, windows: [{ hwnd: '1', desktopId: 'desktop-2' }] };
+    }
   } as unknown as AgentDesktopManager;
   const controller = new OwnedBrowserProcessController(bridge, new ProcessSessionRegistry(), agentDesktop);
 
@@ -231,8 +242,11 @@ test('owned browser process controller constrains the whole process tree to an A
   assert.match(sessionId, /^[0-9a-f-]{36}$/i);
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0]?.[5], 'job');
-  assert.deepEqual(placements, [{ pid: 4242, leaseId }]);
-  assert.deepEqual(asserted, [leaseId, leaseId]);
+  assert.deepEqual(placements, []);
+  const placed = await controller.place(sessionId, leaseId, 250);
+  assert.deepEqual(placed, { moved: 1, windows: 1 });
+  assert.deepEqual(placements, [{ pid: 4242, leaseId, timeoutMs: 250 }]);
+  assert.deepEqual(asserted, [leaseId, leaseId, leaseId, leaseId]);
 });
 
 test('browser runtime is disabled until an executable is configured locally', async t => {
@@ -524,6 +538,36 @@ test('closing an Agent Desktop lease only closes browser sessions owned by that 
 });
 
 
+test('Agent Desktop browser waits until a real window is placed before start succeeds', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const browserRoot = path.join(root, 'browser');
+  const controller = new FakeProcessController(browserRoot);
+  controller.placementWindows.push(0, 0, 1);
+  const cdp = new FakeCdpDriver();
+  const leaseId = '55555555-5555-4555-8555-555555555555';
+  const agentDesktop = {
+    async assertLease() { return {}; },
+    async isLeaseActive() { return true; }
+  } as unknown as AgentDesktopManager;
+  const browser = new BrowserRuntime(browserRoot, controller, artifacts, cdp, executable, agentDesktop);
+  await browser.init();
+
+  const started = await browser.start({ profile_id: 'delayed-window', agent_desktop_lease_id: leaseId, timeout_ms: 5000 });
+  assert.equal(started.active, true);
+  assert.equal(controller.placements.length, 3);
+  assert.deepEqual(controller.placements.map(row => row.leaseId), [leaseId, leaseId, leaseId]);
+  await browser.newPage(started.session_id);
+  assert.equal(controller.placements.length, 4);
+  assert.equal(controller.placements[3]?.leaseId, leaseId);
+  assert.deepEqual(controller.terminated, []);
+  await browser.closeAll();
+});
+
 test('Agent Desktop browser stays open until its control lease exits', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
@@ -552,6 +596,11 @@ test('Agent Desktop browser stays open until its control lease exits', async t =
     browser.close(session.session_id),
     /stay open until their Agent Control lease exits/i
   );
+  assert.equal((await browser.list()).length, 1);
+  assert.deepEqual(controller.terminated, []);
+  const placementsAfterStart = controller.placements.length;
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.ok(controller.placements.length > placementsAfterStart);
   assert.equal((await browser.list()).length, 1);
   assert.deepEqual(controller.terminated, []);
 

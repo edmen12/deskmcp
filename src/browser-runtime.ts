@@ -56,9 +56,15 @@ function browserActionMutatesObservedState(action: BrowserAction): boolean {
   }
 }
 
+export interface BrowserProcessPlacementResult {
+  readonly moved: number;
+  readonly windows: number;
+}
+
 export interface BrowserProcessController {
   start(command: string, agentDesktopLeaseId?: string): Promise<string>;
   active(processSessionId: string): Promise<boolean>;
+  place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs?: number): Promise<BrowserProcessPlacementResult>;
   terminate(processSessionId: string): Promise<void>;
 }
 
@@ -280,10 +286,7 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
       if (result.isError) throw new Error(`Browser process start failed: ${result.text}`);
       pid = extractStartedPid(result.text);
       sessionId = this.sessions.registerReserved(reservationId, pid, 'hidden');
-      if (agentDesktopLeaseId) {
-        await this.agentDesktop!.placeProcessTreeWindows(pid, agentDesktopLeaseId);
-        await this.agentDesktop!.assertLease(agentDesktopLeaseId);
-      }
+      if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
       return sessionId;
     } catch (error) {
       this.sessions.releaseStart(reservationId);
@@ -296,6 +299,19 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
   async active(processSessionId: string): Promise<boolean> {
     await this.reconcile();
     return this.sessions.isActive(processSessionId);
+  }
+
+  async place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs = 250): Promise<BrowserProcessPlacementResult> {
+    if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for browser process placement.');
+    await this.agentDesktop.assertLease(agentDesktopLeaseId);
+    await this.reconcile();
+    if (!this.sessions.has(processSessionId) || !this.sessions.isActive(processSessionId)) {
+      throw new Error('Owned browser process is no longer active.');
+    }
+    const pid = this.sessions.resolve(processSessionId);
+    const placed = await this.agentDesktop.placeProcessTreeWindows(pid, agentDesktopLeaseId, { timeoutMs });
+    await this.agentDesktop.assertLease(agentDesktopLeaseId);
+    return { moved: placed.moved, windows: placed.windows.length };
   }
 
   async terminate(processSessionId: string): Promise<void> {
@@ -518,10 +534,39 @@ export class BrowserRuntime {
     await this.serializeMutation(async () => {
       const leased = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
       for (const record of leased) {
-        if (record.agentDesktopLeaseId && await this.agentDesktop!.isLeaseActive(record.agentDesktopLeaseId)) continue;
-        await this.disposeRecord(record);
+        const leaseId = record.agentDesktopLeaseId!;
+        if (!await this.agentDesktop!.isLeaseActive(leaseId)) {
+          await this.disposeRecord(record);
+          continue;
+        }
+        try {
+          await this.processController.place(record.processSessionId, leaseId, 100);
+        } catch {
+          await this.disposeRecord(record);
+        }
       }
     });
+  }
+
+  private async waitForInitialAgentDesktopWindow(
+    processSessionId: string,
+    leaseId: string,
+    deadline: number
+  ): Promise<void> {
+    while (Date.now() < deadline) {
+      await this.agentDesktop!.assertLease(leaseId);
+      const remaining = deadline - Date.now();
+      const timeoutMs = Math.max(100, Math.min(250, remaining));
+      const placed = await this.processController.place(processSessionId, leaseId, timeoutMs);
+      if (placed.windows > 0) return;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error('Agent Desktop browser window did not appear on the requested desktop before timeout.');
+  }
+
+  private async refreshAgentDesktopPlacement(record: BrowserSessionRecord, timeoutMs = 250): Promise<void> {
+    if (!record.agentDesktopLeaseId) return;
+    await this.processController.place(record.processSessionId, record.agentDesktopLeaseId, timeoutMs);
   }
 
   private async configuredExecutable(): Promise<string> {
@@ -586,7 +631,11 @@ export class BrowserRuntime {
           agentDesktopLeaseId
         );
         const readinessDeadline = Date.now() + timeout;
-        const port = await pollDevToolsActivePort(profileDir, timeout);
+        if (agentDesktopLeaseId) {
+          await this.waitForInitialAgentDesktopWindow(processSessionId, agentDesktopLeaseId, readinessDeadline);
+        }
+        const portTimeout = Math.max(1, readinessDeadline - Date.now());
+        const port = await pollDevToolsActivePort(profileDir, portTimeout);
         if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
         const readinessTimeout = Math.max(1, readinessDeadline - Date.now());
         const pages = await waitForCdpPages(this.cdp, port, readinessTimeout);
@@ -707,6 +756,7 @@ export class BrowserRuntime {
       }
       const pageId = await this.cdp.createPage(record.port, url, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
+      await this.refreshAgentDesktopPlacement(record);
       if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
       return {
         session_id: record.sessionId,
@@ -932,6 +982,7 @@ export class BrowserRuntime {
       throw new Error('STALE browser observation: the page changed after the snapshot. Take a fresh browser snapshot before acting.');
     }
     const effectivePageId = await this.cdp.act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
+    await this.refreshAgentDesktopPlacement(record);
     if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
     return this.snapshot(record.sessionId, effectivePageId, options);
   }
