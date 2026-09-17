@@ -174,17 +174,27 @@ internal static class UninstallExecution
     private static void ScheduleRemoval(string installDir, bool purgeData)
     {
         string script = Path.Combine(Path.GetTempPath(), "DesktopMCP-uninstall-" + Guid.NewGuid().ToString("N") + ".cmd");
+        string escapedInstallDir = installDir.Replace("\"", "\"\"");
         StringBuilder text = new StringBuilder();
         text.AppendLine("@echo off");
-        text.AppendLine("timeout /t 2 /nobreak >nul");
-        text.AppendLine("rmdir /s /q \"" + installDir.Replace("\"", "\"\"") + "\"");
+        text.AppendLine("setlocal");
+        text.AppendLine("set DESKMCP_REMOVE_TRIES=0");
+        text.AppendLine(":deskmcp_remove_retry");
+        text.AppendLine("rmdir /s /q \"" + escapedInstallDir + "\" 2>nul");
+        text.AppendLine("if not exist \"" + escapedInstallDir + "\" goto deskmcp_remove_done");
+        text.AppendLine("set /a DESKMCP_REMOVE_TRIES+=1");
+        text.AppendLine("if %DESKMCP_REMOVE_TRIES% GEQ 120 goto deskmcp_remove_done");
+        text.AppendLine("ping 127.0.0.1 -n 2 >nul");
+        text.AppendLine("goto deskmcp_remove_retry");
+        text.AppendLine(":deskmcp_remove_done");
         if (purgeData)
         {
             string localData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopMCP");
             string roamingData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopMCP");
-            text.AppendLine("rmdir /s /q \"" + localData.Replace("\"", "\"\"") + "\"");
-            text.AppendLine("rmdir /s /q \"" + roamingData.Replace("\"", "\"\"") + "\"");
+            text.AppendLine("rmdir /s /q \"" + localData.Replace("\"", "\"\"") + "\" 2>nul");
+            text.AppendLine("rmdir /s /q \"" + roamingData.Replace("\"", "\"\"") + "\" 2>nul");
         }
+        text.AppendLine("endlocal");
         text.AppendLine("del /q \"%~f0\"");
         File.WriteAllText(script, text.ToString(), Encoding.ASCII);
         string comspec = Environment.GetEnvironmentVariable("ComSpec");

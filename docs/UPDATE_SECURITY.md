@@ -104,6 +104,7 @@ Update-capable Windows releases should be created as drafts, have every asset at
 - a target-specific schema-v2 manifest (`release-manifest.json` or `release-manifest-win-arm64.json`);
 - the matching target-specific SHA-256 list;
 - GitHub asset digests for the attached assets.
+- before publication, a real live upgrade from the currently published Latest version to the exact candidate must pass on Windows. The release attestation is bound to the target version, source commit, x64 Setup SHA-256, unchanged settings/Tunnel/Startup state, and Desktop 1 reservation; the publisher rejects a missing or mismatched attestation.
 
 Authenticode is recommended for publisher identity and reputation, but it is not a prerequisite for the user-initiated verified updater path. Signed releases must still pass every source/integrity gate; signing never replaces hash, target, or immutable-release verification.
 

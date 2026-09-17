@@ -11,6 +11,14 @@ on:
         description: Successful unsigned-release-candidate workflow run id
         required: true
         type: string
+      previous_version:
+        description: Currently published Latest version that was live-upgraded from (for example 0.9.13)
+        required: true
+        type: string
+      live_upgrade_attestation:
+        description: Exact DESKMCP_LIVE_UPGRADE_V1 token from scripts/new-live-upgrade-attestation.ps1
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -30,6 +38,8 @@ jobs:
       REPO: ${{ github.repository }}
       TAG: ${{ inputs.tag }}
       RUN_ID: ${{ inputs.candidate_run_id }}
+      PREVIOUS_VERSION: ${{ inputs.previous_version }}
+      LIVE_UPGRADE_ATTESTATION: ${{ inputs.live_upgrade_attestation }}
 
     steps:
       - name: Verify candidate run matches release tag
@@ -105,6 +115,18 @@ jobs:
           echo "X64_SHA256=$x_hash" >> "$GITHUB_ENV"
           echo "ARM64_SHA256=$a_hash" >> "$GITHUB_ENV"
           echo "CANDIDATE_INTEGRITY=PASS"
+
+      - name: Require real previous-version live-upgrade attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PREVIOUS_VERSION"
+          test "$PREVIOUS_VERSION" != "$VERSION"
+          latest_tag="$(gh api "repos/$REPO/releases/latest" --jq '.tag_name')"
+          test "$latest_tag" = "v$PREVIOUS_VERSION"
+          expected="DESKMCP_LIVE_UPGRADE_V1|from=$PREVIOUS_VERSION|to=$VERSION|source=$SOURCE_SHA|setup_sha256=$X64_SHA256|settings=unchanged|tunnel=unchanged|startup=unchanged|desktop1=reserved|result=PASS"
+          test "$LIVE_UPGRADE_ATTESTATION" = "$expected"
+          echo "LIVE_UPGRADE_RELEASE_GATE=PASS from=$PREVIOUS_VERSION to=$VERSION source=$SOURCE_SHA"
 
       - name: Upload verified release assets through API
         shell: bash

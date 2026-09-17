@@ -69,7 +69,7 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Exe failed with exit code $LASTEXITCODE" }
 }
-function Wait-PathGone([string]$Path, [int]$Seconds = 20) {
+function Wait-PathGone([string]$Path, [int]$Seconds = 60) {
     for ($i = 0; $i -lt $Seconds; $i++) {
         if (-not (Test-Path -LiteralPath $Path)) { return }
         Start-Sleep -Seconds 1
@@ -282,7 +282,7 @@ if (Test-Path -LiteralPath $SmokeRoot) {
     if ($oldUninstaller) {
         $old = Start-Process -FilePath $oldUninstaller -ArgumentList @('--test-root', ('"' + $SmokeRoot + '"')) -Wait -PassThru
         Require ($old.ExitCode -eq 0) "Old smoke uninstall failed: $($old.ExitCode)"
-        Wait-PathGone $SmokeRoot 20
+        Wait-PathGone $SmokeRoot 60
     } else {
         Remove-Item -LiteralPath $SmokeRoot -Recurse -Force
     }
@@ -446,7 +446,7 @@ try {
     $installedUninstaller = Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
     $uninstall = Start-Process -FilePath $installedUninstaller -ArgumentList @('--test-root', ('"' + $SmokeRoot + '"')) -Wait -PassThru
     Require ($uninstall.ExitCode -eq 0) "Smoke uninstall failed: $($uninstall.ExitCode)"
-    Wait-PathGone $SmokeRoot 20
+    Wait-PathGone $SmokeRoot 60
     try { Invoke-RestMethod ($installerSmokeBaseUrl + '/health') -TimeoutSec 1 | Out-Null; throw 'Gateway remained online after uninstall.' }
     catch { if ($_.Exception.Message -like 'Gateway remained*') { throw } }
 } finally {

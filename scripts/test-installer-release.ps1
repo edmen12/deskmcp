@@ -23,7 +23,7 @@ $expectedHostArch = if ($Target -eq 'win-arm64') { 'ARM64' } else { 'AMD64' }
 if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Installer release test for ' + $Target + ' requires native host architecture ' + $expectedHostArch + '.') }
 
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
-function Wait-Gone([string]$Path){ for($i=0;$i -lt 25;$i++){ if(-not(Test-Path -LiteralPath $Path)){ return }; Start-Sleep -Seconds 1 }; throw "Path remained: $Path" }
+function Wait-Gone([string]$Path){ for($i=0;$i -lt 60;$i++){ if(-not(Test-Path -LiteralPath $Path)){ return }; Start-Sleep -Seconds 1 }; throw "Path remained: $Path" }
 function Start-InstallRootProcessHost([string]$Root,[string]$Label) {
     $processHostPath = Join-Path $Root 'DeskMCP.ProcessHost.exe'
     Require (Test-Path -LiteralPath $processHostPath) ($Label + ' ProcessHost is missing.')

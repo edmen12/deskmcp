@@ -1,9 +1,10 @@
 ## What changed
 
 - Live upgrade now performs the normal graceful DeskMCP/Gateway shutdown and then drains every remaining process whose executable belongs to the old DeskMCP install root before the atomic directory swap. This includes `DeskMCP.ProcessHost.exe` and future helper runtimes that could otherwise keep the old installation locked.
-- Uninstall uses the same install-root process sweep so helper executables cannot leave the program directory behind after removal.
+- Uninstall uses the same install-root process sweep so helper executables cannot leave the program directory behind after removal, and its detached self-removal now retries the final directory deletion for a bounded period instead of making a one-shot attempt while the large single-file uninstaller may still be releasing its own image.
 - Installer release validation now starts a real long-running ProcessHost from the installed test root during both upgrade and uninstall and requires each operation to terminate it before completing.
 - The verified-release publisher now uploads assets individually, cleans failed `starter` assets, retries bounded failures, and checks online state, size, and SHA-256 before publishing.
+- Stable publication is blocked unless a live-upgrade attestation proves that the currently published Latest version was upgraded to the exact candidate while settings, Tunnel profile, and Startup state remained unchanged and Desktop 1 stayed reserved.
 
 ## Why this patch exists
 

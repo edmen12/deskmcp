@@ -6,11 +6,16 @@ All notable changes to DeskMCP are documented here.
 
 ## 0.9.14 — 2026-09-18
 
+### Changed
+
+- Publishing a stable release now requires a real live-upgrade attestation from the currently published Latest version. The attestation is bound to the target version, source commit, x64 Setup SHA-256, preserved settings/Tunnel/Startup state, and Desktop 1 reservation.
+- Release publishing uploads and verifies assets individually through the GitHub release asset API, cleans stale `starter` assets, and checks online state, size, and SHA-256 before publication.
+
 ### Fixed
 
 - Live upgrade now drains every remaining process whose executable belongs to the installed DeskMCP root before the atomic directory swap, including `DeskMCP.ProcessHost.exe` and future helper runtimes that are not part of the Gateway/node/tunnel trio.
 - Uninstall uses the same install-root process sweep, preventing helper executables from keeping the program directory locked after the normal graceful shutdown path.
-- Release publishing now uploads and verifies assets individually through the GitHub release asset API, cleans stale `starter` assets, and checks online state, size, and SHA-256 before publication.
+- Uninstall self-removal now retries the install-directory deletion for a bounded period instead of making one fixed-delay attempt while the large single-file uninstaller may still be releasing its own image.
 
 ### Validation
 
