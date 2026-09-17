@@ -125,7 +125,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_id="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.id')"
+          release_id="$(gh release view "$TAG" --repo "$REPO" --json databaseId --jq '.databaseId')"
           file="candidate/x64/DeskMCP-Setup-$VERSION.exe"
           name="$(basename "$file")"
           expected_size="$(stat -c '%s' "$file")"
@@ -181,7 +181,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_id="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.id')"
+          release_id="$(gh release view "$TAG" --repo "$REPO" --json databaseId --jq '.databaseId')"
           file="candidate/arm64/DeskMCP-Setup-$VERSION-win-arm64.exe"
           name="$(basename "$file")"
           expected_size="$(stat -c '%s' "$file")"
