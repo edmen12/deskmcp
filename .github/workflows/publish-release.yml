@@ -1,0 +1,144 @@
+name: Publish verified release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (for example v0.9.13)
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful unsigned-release-candidate workflow run id
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: publish-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish verified release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+      RUN_ID: ${{ inputs.candidate_run_id }}
+
+    steps:
+      - name: Verify candidate run matches release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/$REPO/actions/runs/$RUN_ID")"
+          test "$(jq -r '.status' <<<"$run_json")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$run_json")" = "success"
+          run_sha="$(jq -r '.head_sha' <<<"$run_json")"
+
+          ref_json="$(gh api "repos/$REPO/git/ref/tags/$TAG")"
+          tag_type="$(jq -r '.object.type' <<<"$ref_json")"
+          tag_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+          if [ "$tag_type" = "tag" ]; then
+            tag_object="$(gh api "repos/$REPO/git/tags/$tag_sha")"
+            tag_type="$(jq -r '.object.type' <<<"$tag_object")"
+            tag_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+          fi
+          test "$tag_type" = "commit"
+          test "$run_sha" = "$tag_sha"
+
+          version="${TAG#v}"
+          test "$version" != "$TAG"
+          echo "SOURCE_SHA=$tag_sha" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "CANDIDATE_PROVENANCE=PASS source=$tag_sha"
+
+      - name: Download exact candidate artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate/x64 candidate/arm64
+          gh run download "$RUN_ID" --repo "$REPO" --name "deskmcp-unsigned-win-x64-$SOURCE_SHA" --dir candidate/x64
+          gh run download "$RUN_ID" --repo "$REPO" --name "deskmcp-unsigned-win-arm64-$SOURCE_SHA" --dir candidate/arm64
+          find candidate -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Verify manifests and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          x_manifest="candidate/x64/release-manifest.json"
+          a_manifest="candidate/arm64/release-manifest-win-arm64.json"
+          x_setup="candidate/x64/DeskMCP-Setup-$VERSION.exe"
+          a_setup="candidate/arm64/DeskMCP-Setup-$VERSION-win-arm64.exe"
+
+          test -f "$x_setup"
+          test -f "$a_setup"
+          test -f "$x_manifest"
+          test -f "$a_manifest"
+          test -f candidate/x64/SHA256SUMS.txt
+          test -f candidate/arm64/SHA256SUMS-win-arm64.txt
+
+          test "$(jq -r '.version' "$x_manifest")" = "$VERSION"
+          test "$(jq -r '.version' "$a_manifest")" = "$VERSION"
+          test "$(jq -r '.target' "$x_manifest")" = "win-x64"
+          test "$(jq -r '.target' "$a_manifest")" = "win-arm64"
+          test "$(jq -r '.sourceCommit' "$x_manifest")" = "$SOURCE_SHA"
+          test "$(jq -r '.sourceCommit' "$a_manifest")" = "$SOURCE_SHA"
+          test "$(jq -r '.installerSmoke' "$x_manifest")" = "passed"
+          test "$(jq -r '.installerSmoke' "$a_manifest")" = "passed"
+          test "$(jq -r '.releaseStageSmoke' "$x_manifest")" = "passed"
+          test "$(jq -r '.releaseStageSmoke' "$a_manifest")" = "passed"
+
+          x_hash="$(sha256sum "$x_setup" | awk '{print $1}')"
+          a_hash="$(sha256sum "$a_setup" | awk '{print $1}')"
+          test "$x_hash" = "$(jq -r '.sha256' "$x_manifest")"
+          test "$a_hash" = "$(jq -r '.sha256' "$a_manifest")"
+          test "$(stat -c '%s' "$x_setup")" = "$(jq -r '.sizeBytes' "$x_manifest")"
+          test "$(stat -c '%s' "$a_setup")" = "$(jq -r '.sizeBytes' "$a_manifest")"
+          (cd candidate/x64 && sha256sum -c SHA256SUMS.txt)
+          (cd candidate/arm64 && sha256sum -c SHA256SUMS-win-arm64.txt)
+          echo "X64_SHA256=$x_hash" >> "$GITHUB_ENV"
+          echo "ARM64_SHA256=$a_hash" >> "$GITHUB_ENV"
+          echo "CANDIDATE_INTEGRITY=PASS"
+
+      - name: Upload all release assets from verified candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease)"
+          test "$(jq -r '.tagName' <<<"$release_json")" = "$TAG"
+          test "$(jq -r '.isDraft' <<<"$release_json")" = "true"
+          test "$(jq -r '.isPrerelease' <<<"$release_json")" = "false"
+
+          gh release upload "$TAG" --repo "$REPO" --clobber \
+            "candidate/x64/DeskMCP-Setup-$VERSION.exe" \
+            candidate/x64/release-manifest.json \
+            candidate/x64/SHA256SUMS.txt \
+            "candidate/arm64/DeskMCP-Setup-$VERSION-win-arm64.exe" \
+            candidate/arm64/release-manifest-win-arm64.json \
+            candidate/arm64/SHA256SUMS-win-arm64.txt
+
+      - name: Verify online asset digests and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets_json="$(gh release view "$TAG" --repo "$REPO" --json assets)"
+          test "$(jq '.assets | length' <<<"$assets_json")" -eq 6
+
+          x_digest="$(jq -r --arg n "DeskMCP-Setup-$VERSION.exe" '.assets[] | select(.name == $n) | .digest' <<<"$assets_json")"
+          a_digest="$(jq -r --arg n "DeskMCP-Setup-$VERSION-win-arm64.exe" '.assets[] | select(.name == $n) | .digest' <<<"$assets_json")"
+          test "$x_digest" = "sha256:$X64_SHA256"
+          test "$a_digest" = "sha256:$ARM64_SHA256"
+          test "$(jq '[.assets[] | select(.state == "uploaded")] | length' <<<"$assets_json")" -eq 6
+
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          published="$(gh api "repos/$REPO/releases/tags/$TAG")"
+          test "$(jq -r '.draft' <<<"$published")" = "false"
+          test "$(jq -r '.prerelease' <<<"$published")" = "false"
+          test "$(gh api "repos/$REPO/releases/latest" --jq '.tag_name')" = "$TAG"
+          echo "RELEASE_PUBLISH=PASS tag=$TAG immutable=$(jq -r '.immutable // false' <<<"$published")"
