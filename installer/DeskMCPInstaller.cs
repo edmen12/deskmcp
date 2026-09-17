@@ -15,8 +15,8 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("DeskMCP Setup")]
 [assembly: AssemblyProduct("DeskMCP")]
-[assembly: AssemblyVersion("0.9.13.0")]
-[assembly: AssemblyFileVersion("0.9.13.0")]
+[assembly: AssemblyVersion("0.9.14.0")]
+[assembly: AssemblyFileVersion("0.9.14.0")]
 
 internal sealed class InstallOptions
 {
@@ -31,7 +31,7 @@ internal sealed class InstallOptions
 
 internal static class InstallerEngine
 {
-    public const string Version = "0.9.13";
+    public const string Version = "0.9.14";
     private const string ProductKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DesktopMCP";
     private const string PayloadResource = "DesktopMCP.Payload.zip";
     private const string HashResource = "DesktopMCP.Payload.sha256";
@@ -329,6 +329,7 @@ internal static class InstallerEngine
         }
         StopExactProcesses("node", nodePath);
         StopProcessesUnderRoot("tunnel-client", installDir);
+        StopAllProcessesUnderRoot(installDir);
     }
 
     private static void StopExactProcesses(string processName, string expectedPath)
@@ -361,6 +362,32 @@ internal static class InstallerEngine
             }
             catch { }
             finally { try { p.Dispose(); } catch { } }
+        }
+    }
+
+    private static void StopAllProcessesUnderRoot(string root)
+    {
+        string prefix = Path.GetFullPath(root).TrimEnd('\\') + "\\";
+        int selfPid = Process.GetCurrentProcess().Id;
+        for (int pass = 0; pass < 3; pass++)
+        {
+            bool found = false;
+            foreach (Process p in Process.GetProcesses())
+            {
+                try
+                {
+                    if (p.Id == selfPid) continue;
+                    string actual = Path.GetFullPath(p.MainModule.FileName);
+                    if (!actual.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    found = true;
+                    p.Kill();
+                    p.WaitForExit(5000);
+                }
+                catch { }
+                finally { try { p.Dispose(); } catch { } }
+            }
+            if (!found) return;
+            Thread.Sleep(100);
         }
     }
     private static void ConfigureShortcuts(string installDir, bool autoStart)

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (for example v0.9.13)
+        description: Release tag to publish (for example v0.9.14)
         required: true
         type: string
       candidate_run_id:

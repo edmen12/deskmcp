@@ -4,6 +4,22 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.14 — 2026-09-18
+
+### Fixed
+
+- Live upgrade now drains every remaining process whose executable belongs to the installed DeskMCP root before the atomic directory swap, including `DeskMCP.ProcessHost.exe` and future helper runtimes that are not part of the Gateway/node/tunnel trio.
+- Uninstall uses the same install-root process sweep, preventing helper executables from keeping the program directory locked after the normal graceful shutdown path.
+- Release publishing now uploads and verifies assets individually through the GitHub release asset API, cleans stale `starter` assets, and checks online state, size, and SHA-256 before publication.
+
+### Validation
+
+- A real 0.9.13 live-upgrade attempt reproduced the old failure safely: Setup returned exit 14 while an install-root ProcessHost was active, and the previous installation plus DeskMCP settings, Tunnel profile, and Startup shortcut remained unchanged.
+- The exact released 0.9.13 Setup passed an isolated install on the same machine, narrowing the failure to live install-root process contention rather than payload corruption.
+- Gateway/runtime regression suite: 182 passed, 0 failed.
+- WPF Release build: 0 warnings, 0 errors.
+- Installer release validation now launches a real install-root ProcessHost during upgrade and uninstall and requires both operations to terminate it cleanly before completion.
+
 ## 0.9.13 — 2026-09-18
 
 - Agent Desktop is now explicitly reserved for work that actually needs GUI interaction or a visible browser session; filesystem, terminal, MCP/network-only, code-review, and Task Room work should not acquire a desktop lease.

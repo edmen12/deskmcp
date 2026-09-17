@@ -24,6 +24,16 @@ if ([string]$env:PROCESSOR_ARCHITECTURE -ne $expectedHostArch) { throw ('Install
 
 function Require([bool]$Condition,[string]$Message){ if(-not $Condition){ throw $Message } }
 function Wait-Gone([string]$Path){ for($i=0;$i -lt 25;$i++){ if(-not(Test-Path -LiteralPath $Path)){ return }; Start-Sleep -Seconds 1 }; throw "Path remained: $Path" }
+function Start-InstallRootProcessHost([string]$Root,[string]$Label) {
+    $processHostPath = Join-Path $Root 'DeskMCP.ProcessHost.exe'
+    Require (Test-Path -LiteralPath $processHostPath) ($Label + ' ProcessHost is missing.')
+    $command64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('Start-Sleep -Seconds 300'))
+    $proc = Start-Process -FilePath $processHostPath -ArgumentList @('--shell','powershell.exe','--command64',$command64,'--window-mode','hidden','--elevation','standard') -WindowStyle Hidden -PassThru
+    Start-Sleep -Milliseconds 500
+    $proc.Refresh()
+    Require (-not $proc.HasExited) ($Label + ' ProcessHost did not stay running.')
+    return $proc
+}
 function Get-FreeLoopbackPort {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     try { $listener.Start(); return ([Net.IPEndPoint]$listener.LocalEndpoint).Port } finally { $listener.Stop() }
@@ -61,6 +71,8 @@ $health = $null
 $p = $null
 $u = $null
 $x = $null
+$upgradeHelper = $null
+$uninstallHelper = $null
 try {
     New-Item -ItemType Directory -Force -Path $SmokeParent,$DataRoot,$SettingsDir,$StartupDir,$TunnelProfileDir | Out-Null
     $smokeSettings = @{ onboardingCompleted=$true; profile='read-only'; autoStartTunnel=$false; theme='system'; workspace=(Join-Path $StateRoot 'workspace') } | ConvertTo-Json -Compress
@@ -122,9 +134,13 @@ try {
 
     $marker=Join-Path $SmokeRoot 'UPGRADE_MARKER.txt'
     Set-Content -LiteralPath $marker -Value 'old' -Encoding ASCII
+    $upgradeHelper = Start-InstallRootProcessHost $SmokeRoot 'Upgrade'
+    $upgradeHelperPid = $upgradeHelper.Id
+    Write-Output ('INSTALLER_UPGRADE_LIVE_HELPER_PID=' + $upgradeHelperPid)
     Write-Output 'TEST=upgrade'
     $u=Start-Process -FilePath $Setup -ArgumentList @('--install-test',('"'+$SmokeRoot+'"')) -Wait -PassThru
     Require ($u.ExitCode -eq 0) "Upgrade exit=$($u.ExitCode)"
+    Require (-not(Get-Process -Id $upgradeHelperPid -ErrorAction SilentlyContinue)) 'Upgrade left an install-root ProcessHost alive.'
     Require (-not(Test-Path -LiteralPath $marker)) 'Upgrade marker survived.'
     Require (@(Get-ChildItem -LiteralPath $SmokeParent -Directory -Filter 'DesktopMCP.backup-*' -ErrorAction SilentlyContinue).Count -eq 0) 'Backup directory remained.'
     Require (@(Get-ChildItem -LiteralPath $SmokeParent -Directory -Filter 'DesktopMCP.install-*' -ErrorAction SilentlyContinue).Count -eq 0) 'Install temp remained.'
@@ -164,15 +180,21 @@ try {
     Require ($runtimeTunnelCount -eq 0) "Installer release runtime started a tunnel-client despite tunnel isolation: count=$runtimeTunnelCount"
     Write-Output 'INSTALLER_RELEASE_TUNNEL_PROCESS_COUNT=0'
 
+    $uninstallHelper = Start-InstallRootProcessHost $SmokeRoot 'Uninstall'
+    $uninstallHelperPid = $uninstallHelper.Id
+    Write-Output ('INSTALLER_UNINSTALL_LIVE_HELPER_PID=' + $uninstallHelperPid)
     Write-Output 'TEST=uninstall'
     $uninstaller=Join-Path $SmokeRoot 'DeskMCPUninstaller.exe'
     $x=Start-Process -FilePath $uninstaller -ArgumentList @('--test-root',('"'+$SmokeRoot+'"')) -Wait -PassThru
     Require ($x.ExitCode -eq 0) "Uninstall exit=$($x.ExitCode)"
+    Require (-not(Get-Process -Id $uninstallHelperPid -ErrorAction SilentlyContinue)) 'Uninstall left an install-root ProcessHost alive.'
     Wait-Gone $SmokeRoot
     $left=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
     Require ($left.Count -eq 0) "Installed node cleanup left=$($left.Count)"
     try{ Invoke-RestMethod ($TestBaseUrl + '/health') -TimeoutSec 1 | Out-Null; throw 'Gateway remained online.' }catch{ if($_.Exception.Message -like 'Gateway remained*'){ throw } }
 } finally {
+    if ($upgradeHelper -and -not $upgradeHelper.HasExited) { Stop-Process -Id $upgradeHelper.Id -Force -ErrorAction SilentlyContinue }
+    if ($uninstallHelper -and -not $uninstallHelper.HasExited) { Stop-Process -Id $uninstallHelper.Id -Force -ErrorAction SilentlyContinue }
     if ($panel -and -not $panel.HasExited) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
     $env:DESKTOP_MCP_DATA_ROOT = $PreviousDataRoot
     $env:DESKTOP_MCP_SETTINGS_DIR = $PreviousSettingsDir

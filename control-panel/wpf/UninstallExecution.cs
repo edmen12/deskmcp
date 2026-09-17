@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using Microsoft.Win32;
 using System.Windows.Forms;
 
@@ -108,6 +109,7 @@ internal static class UninstallExecution
         }
         StopExactProcesses("node", nodePath);
         StopProcessesUnderRoot("tunnel-client", installDir);
+        StopAllProcessesUnderRoot(installDir);
     }
 
     private static void StopExactProcesses(string processName, string expectedPath)
@@ -140,6 +142,32 @@ internal static class UninstallExecution
             }
             catch { }
             finally { try { p.Dispose(); } catch { } }
+        }
+    }
+
+    private static void StopAllProcessesUnderRoot(string root)
+    {
+        string prefix = Path.GetFullPath(root).TrimEnd('\\') + "\\";
+        int selfPid = Process.GetCurrentProcess().Id;
+        for (int pass = 0; pass < 3; pass++)
+        {
+            bool found = false;
+            foreach (Process p in Process.GetProcesses())
+            {
+                try
+                {
+                    if (p.Id == selfPid) continue;
+                    string actual = Path.GetFullPath(p.MainModule.FileName);
+                    if (!actual.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    found = true;
+                    p.Kill();
+                    p.WaitForExit(5000);
+                }
+                catch { }
+                finally { try { p.Dispose(); } catch { } }
+            }
+            if (!found) return;
+            Thread.Sleep(100);
         }
     }
 
