@@ -192,8 +192,8 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
     const native = {
       async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
       async desktopById(desktopId: string) {
-        const desktopNumber = desktopId === desktopA ? 2 : desktopId === desktopB ? 3 : null;
-        return { desktopId, present: desktopNumber !== null, desktopNumber, desktopCount: 3, currentDesktopNumber: 1 };
+        const desktopNumber = desktopId === desktopA ? 1 : desktopId === desktopB ? 2 : null;
+        return { desktopId, present: desktopNumber !== null, desktopNumber, desktopCount: 3, currentDesktopNumber: 0 };
       }
     } as unknown as AgentDesktopNativeBridge;
     const manager = new AgentDesktopManager(root, native);
@@ -240,13 +240,13 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
     await armUntil(1);
     const first = await firstPromise;
     assert.equal(first.control.desktopId, desktopA);
-    assert.equal(first.control.desktopNumber, 2);
+    assert.equal(first.control.desktopNumber, 1);
 
     const secondPromise = manager.startControl('Agent B');
     await armUntil(2);
     const second = await secondPromise;
     assert.equal(second.control.desktopId, desktopB);
-    assert.equal(second.control.desktopNumber, 3);
+    assert.equal(second.control.desktopNumber, 2);
     assert.notEqual(second.control.leaseId, first.control.leaseId);
 
     const status = await manager.status();
@@ -300,7 +300,7 @@ test('Agent Desktop refuses a bound desktop after Windows renumbers it to Deskto
     const native = {
       async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
       async desktopById(requestedId: string) {
-        return { desktopId: requestedId, present: true, desktopNumber: 1, desktopCount: 2, currentDesktopNumber: 1 };
+        return { desktopId: requestedId, present: true, desktopNumber: 0, desktopCount: 2, currentDesktopNumber: 0 };
       }
     } as unknown as AgentDesktopNativeBridge;
     const manager = new AgentDesktopManager(root, native);

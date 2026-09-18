@@ -581,6 +581,24 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       assert.match(JSON.stringify(agentAdminDenied.content), /Administrator process launch is not supported inside Agent Desktop background control/);
       assert.equal(processSessions.size(), 0);
 
+      for (const browserCommand of [
+        'chrome.exe https://example.com',
+        'start https://example.com',
+        'powershell.exe -Command "Start-Process https://example.com"'
+      ]) {
+        const browserDenied = await fullControlClient.callTool({
+          name: 'desktop_start_process',
+          arguments: {
+            command: browserCommand,
+            timeout_ms: 1000,
+            ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {})
+          }
+        });
+        assert.equal(browserDenied.isError, true);
+        assert.match(JSON.stringify(browserDenied.content), /desktop_browser_session.*Agent Desktop lease/i);
+        assert.equal(processSessions.size(), 0);
+      }
+
       const processCommand = 'node -i';
       const started = await fullControlClient.callTool({
         name: 'desktop_start_process',
