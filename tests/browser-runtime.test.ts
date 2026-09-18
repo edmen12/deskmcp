@@ -291,6 +291,7 @@ test('browser session owns a dedicated profile and never places navigation URL i
   assert.match(command, /--remote-debugging-address=127\.0\.0\.1/);
   assert.match(command, /--remote-debugging-port=0/);
   assert.match(command, /--headless=new/);
+  assert.doesNotMatch(command, /--do-not-de-elevate/);
   assert.match(command, /about:blank/);
   assert.doesNotMatch(command, /example\.com/);
   assert.equal(cdp.actions.length, 1);
@@ -569,6 +570,8 @@ test('Agent Desktop browser waits until a real window is placed before start suc
 
   const started = await browser.start({ profile_id: 'delayed-window', agent_desktop_lease_id: leaseId, timeout_ms: 5000 });
   assert.equal(started.active, true);
+  assert.match(controller.starts[0]!, /--do-not-de-elevate/);
+  assert.match(controller.starts[0]!, /--start-minimized/);
   assert.equal(controller.placements.length, 3);
   assert.deepEqual(controller.placements.map(row => row.leaseId), [leaseId, leaseId, leaseId]);
   assert.deepEqual(controller.placements.map(row => row.reconcile), [false, false, false]);
