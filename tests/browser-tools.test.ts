@@ -344,6 +344,31 @@ test('browser MCP tools allow Full Control and Fully Unlocked through the stable
   }
 });
 
+
+test('visible Browser start requires an Agent Desktop lease', async () => {
+  await withBrowserClient('full-control', async (client, browser) => {
+    const denied = await client.callTool({
+      name: 'desktop_browser_session',
+      arguments: { action: 'start', profile_id: 'visible-no-lease', headless: false }
+    });
+    assert.equal(denied.isError, true);
+    assert.match(contentText(denied), /Visible Browser sessions require an active Agent Desktop lease/i);
+    assert.equal(browser.startCalls, 0);
+
+    const allowed = await client.callTool({
+      name: 'desktop_browser_session',
+      arguments: {
+        action: 'start',
+        profile_id: 'visible-agent-desktop',
+        headless: false,
+        agent_desktop_lease_id: '44444444-4444-4444-8444-444444444444'
+      }
+    });
+    assert.equal(allowed.isError, undefined);
+    assert.equal(browser.startCalls, 1);
+  });
+});
+
 test('browser MCP act accepts observation refs and rejects ambiguous selector/ref targets', async () => {
   await withBrowserClient('full-control', async (client, browser) => {
     const byRef = await client.callTool({

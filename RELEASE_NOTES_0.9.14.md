@@ -8,6 +8,8 @@
 - Agent Desktop Browser startup now requires a real Chromium top-level window to be observed on the leased virtual desktop before reporting success. Placement is refreshed while the lease is active and after browser actions that can create pages/windows, preventing delayed Chrome windows from falling back onto Desktop 1.
 - Browser startup no longer reconciles a just-created ProcessHost against the backend session list before that list has had time to publish the new PID. Startup placement trusts only the freshly registered owned session for that bounded transaction; normal post-start checks still reconcile ownership, preventing the live `Owned browser process is no longer active` teardown race.
 - Agent Desktop Chromium starts with `--do-not-de-elevate`, preventing Chrome 153 from auto-restarting into a replacement browser PID before DeskMCP can constrain its window to the leased virtual desktop. Normal non-Agent Browser sessions keep their existing launch behavior.
+- Visible Browser sessions are now Agent-Desktop-only. A `desktop_browser_session` start with `headless:false` is rejected unless an `agent_desktop_lease_id` is supplied, while headless automation remains available without a GUI lease.
+- Process tools now fail closed on common browser/default-URL activation commands when no Agent Desktop lease is present, preventing an agent from routing a URL into the user's already-running personal Chrome on Desktop 1. Non-GUI HTTP clients, ordinary terminal commands, and explicit headless Chromium remain unaffected.
 - The verified-release publisher now uploads assets individually, cleans failed `starter` assets, retries bounded failures, and checks online state, size, and SHA-256 before publishing.
 - Stable publication is blocked unless a live-upgrade attestation proves that the currently published Latest version was upgraded to the exact candidate while settings, Tunnel profile, and Startup state remained unchanged and Desktop 1 stayed reserved.
 
@@ -21,6 +23,8 @@ A later live Agent Desktop gate exposed a second Browser isolation bug: the proc
 
 A subsequent final installed gate exposed a third startup race: the new fail-closed placement path reconciled the just-created ProcessHost before the backend session list had published it, so Browser startup could tear down the owned Chrome job with `Owned browser process is no longer active`. Startup placement now skips only that premature reconcile; post-start ownership checks remain unchanged.
 
+The same live investigation proved that the visible AQP page on Desktop 1 belonged to the user's normal Chrome process, not a DeskMCP Browser profile. DeskMCP therefore now closes both escape routes: visible Browser sessions require an Agent Desktop lease, and process-tool commands that activate a visible/default browser require the same lease.
+
 ## Validation target
 
-0.9.14 must pass the 184-test Gateway/runtime suite, WPF Release build, real install-root ProcessHost upgrade/uninstall regression, installer clean-install/rollback/upgrade/interrupted-recovery/runtime/uninstall chain, release provenance, release readiness, secret hygiene, Windows x64/ARM64 candidate validation, and post-install live verification before the release is considered closed.
+0.9.14 must pass the 186-test Gateway/runtime suite, WPF Release build, real install-root ProcessHost upgrade/uninstall regression, installer clean-install/rollback/upgrade/interrupted-recovery/runtime/uninstall chain, release provenance, release readiness, secret hygiene, Windows x64/ARM64 candidate validation, and post-install live verification before the release is considered closed.

@@ -75,6 +75,40 @@ export function requireSupportedProcessPresentation(
   }
 }
 
+
+const CMD_START_PREFIX = '(?:^|[;&|]\\s*|\\bcmd(?:\\.exe)?\\s+\\/[ck]\\s+)';
+const CMD_START_URL_PATTERN = new RegExp(`${CMD_START_PREFIX}start\\b[^\r\n]*https?:\\/\\/`, 'iu');
+const POWERSHELL_URL_ACTIVATION_PATTERN = /\b(?:start-process|invoke-item|ii)\b[^\r\n]*https?:\/\//iu;
+const EXPLORER_URL_PATTERN = /(?:^|[;&|]\s*)explorer(?:\.exe)?\b[^\r\n]*https?:\/\//iu;
+const PROCESS_START_URL_PATTERN = /(?:system\.)?diagnostics\.process(?:\]|\b)(?:::|\.)start\s*\([^\r\n)]*https?:\/\//iu;
+const FILE_PROTOCOL_HANDLER_PATTERN = /\brundll32(?:\.exe)?\b[^\r\n]*url\.dll[^\r\n]*fileprotocolhandler[^\r\n]*https?:\/\//iu;
+const BROWSER_EXECUTABLE_NAME = '(?:chrome|msedge|firefox|brave|opera|vivaldi)(?:\\.exe)?';
+const DIRECT_BROWSER_PATTERN = new RegExp(`^\\s*(?:&\\s*)?(?:[\"']?[^\r\n\"']*[\\\\/])?${BROWSER_EXECUTABLE_NAME}(?:[\"'])?(?:\\s|$)`, 'iu');
+const START_BROWSER_PATTERN = new RegExp(`${CMD_START_PREFIX}(?:start-process|start)\\b[^\r\n]*\\b${BROWSER_EXECUTABLE_NAME}\\b`, 'iu');
+
+export function commandRequestsUserDesktopBrowser(command: string): boolean {
+  const candidate = command.trim();
+  if (
+    CMD_START_URL_PATTERN.test(candidate)
+    || POWERSHELL_URL_ACTIVATION_PATTERN.test(candidate)
+    || EXPLORER_URL_PATTERN.test(candidate)
+    || PROCESS_START_URL_PATTERN.test(candidate)
+    || FILE_PROTOCOL_HANDLER_PATTERN.test(candidate)
+  ) {
+    return true;
+  }
+  if (/--headless(?:=new)?\b/iu.test(candidate)) return false;
+  return DIRECT_BROWSER_PATTERN.test(candidate) || START_BROWSER_PATTERN.test(candidate);
+}
+
+function requireAgentDesktopForBrowserActivation(command: string, agentDesktopLeaseId?: string): void {
+  if (!agentDesktopLeaseId && commandRequestsUserDesktopBrowser(command)) {
+    throw new PolicyDeniedError(
+      'Launching a visible/default browser from desktop_start_process requires an active Agent Desktop lease. Use desktop_browser_session for browser work, or supply agent_desktop_lease_id.'
+    );
+  }
+}
+
 async function reconcileActiveProcessSessions(
   bridge: DesktopBackendBridge,
   sessions: ProcessSessionRegistry
@@ -147,7 +181,7 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails. Commands that launch a visible/default web browser must use an Agent Desktop lease; browser automation should use desktop_browser_session.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -177,6 +211,7 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        requireAgentDesktopForBrowserActivation(command, agent_desktop_lease_id);
         if (agent_desktop_lease_id) {
           if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
           if (elevation === 'admin') {

@@ -21,17 +21,20 @@ All notable changes to DeskMCP are documented here.
 - Agent Desktop Browser placement now waits until a real Chromium top-level window is observed on the leased virtual desktop before startup can succeed, and re-applies process-tree placement while the lease remains active and after page/window-creating browser actions. This fixes a live failure where the early process-tree scan saw zero windows, returned success, and Chrome later appeared on Desktop 1.
 - Agent Desktop Browser startup now keeps its newly created owned process session authoritative during the startup placement transaction instead of reconciling it immediately against the backend session list. This fixes a live race where the backend list had not yet published the new ProcessHost PID, causing DeskMCP to mark the Browser inactive and tear down Chrome before placement could complete. Normal post-start placement and lease reaping still reconcile ownership.
 - Agent Desktop Chromium launches now pass `--do-not-de-elevate` so Chrome 153 cannot auto-restart into a different browser PID before virtual-desktop placement. A live probe reproduced the old launcher handoff and verified that the guarded minimized launch keeps the original browser PID alive with a movable top-level window on Desktop 2.
+- Visible DeskMCP Browser sessions now fail closed unless they are bound to an active Agent Desktop lease. Headless Browser work remains available without a desktop lease, preventing an agent from intentionally or accidentally opening a DeskMCP Browser window on the user-reserved Desktop 1.
+- `desktop_start_process` now blocks common visible/default-browser activation paths unless an Agent Desktop lease is supplied, including shell URL activation and direct Chrome/Edge/Firefox-style launches. HTTP CLI tools and explicitly headless browser processes remain allowed, preventing process-tool browser work from reusing the user's personal Chrome on Desktop 1.
 
 ### Validation
 
 - A real 0.9.13 live-upgrade attempt reproduced the old failure safely: Setup returned exit 14 while an install-root ProcessHost was active, and the previous installation plus DeskMCP settings, Tunnel profile, and Startup shortcut remained unchanged.
 - The exact released 0.9.13 Setup passed an isolated install on the same machine, narrowing the failure to live install-root process contention rather than payload corruption.
-- Gateway/runtime regression suite: 184 passed, 0 failed.
+- Gateway/runtime regression suite: 186 passed, 0 failed.
 - ProcessHost lifetime regression proves ordinary root mode still kills descendants while Browser-only job mode waits for owned descendants to drain.
 - Five real Chrome 153 probes measured a 1–105 ms gap between `DevToolsActivePort` publication and loopback CDP socket readiness for the persistent `console-audit` profile on an Agent Desktop lease.
 - Real Chrome 153 BrowserRuntime E2E started an isolated profile, published `DevToolsActivePort`, connected through Playwright, captured a snapshot/console state, and closed cleanly.
 - Agent Desktop Browser regression covers delayed real-window creation: zero-window placement attempts cannot satisfy startup, and later page creation re-applies placement to the same lease.
 - Browser ownership regression now covers an eventually-consistent backend process-session list: startup placement succeeds without premature reconciliation, then normal placement resumes reconciliation once the Browser startup transaction has completed.
+- Desktop 1 escape regressions verify that visible Browser start is denied without an Agent Desktop lease and that process-tool browser/default-URL activation is detected without blocking `curl`, `Invoke-WebRequest`, normal build/test commands, or explicitly headless Chromium.
 - WPF Release build: 0 warnings, 0 errors.
 - Installer release validation now launches a real install-root ProcessHost during upgrade and uninstall and requires both operations to terminate it cleanly before completion.
 

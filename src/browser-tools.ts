@@ -164,7 +164,7 @@ export function registerBrowserTools(
     'desktop_browser_session',
     {
       title: 'Manage Isolated Browser Session',
-      description: 'Start, list, or close DeskMCP-owned isolated Chromium browser sessions, create/select/close tabs, handle a blocking JavaScript dialog, and list or delete persistent DeskMCP browser profiles. Browser start requires a local Edge/Chrome/Chromium configured through DeskMCP Settings or the explicit development environment override, and never reuses a personal browser/CDP session.',
+      description: 'Start, list, or close DeskMCP-owned isolated Chromium browser sessions, create/select/close tabs, handle a blocking JavaScript dialog, and list or delete persistent DeskMCP browser profiles. Browser start requires a local Edge/Chrome/Chromium configured through DeskMCP Settings or the explicit development environment override, and never reuses a personal browser/CDP session. Visible Browser sessions require an active Agent Desktop lease; Browser sessions without a lease must remain headless.',
       inputSchema: z.object({
         action: z.enum(['start', 'list', 'close', 'new_page', 'select_page', 'close_page', 'handle_dialog', 'list_profiles', 'delete_profile']),
         session_id: sessionIdSchema.optional(),
@@ -199,6 +199,9 @@ export function registerBrowserTools(
         requireBrowserControl(policy);
         let result: unknown;
         if (input.action === 'start') {
+          if (input.headless === false && !input.agent_desktop_lease_id) {
+            throw new PolicyDeniedError('Visible Browser sessions require an active Agent Desktop lease. Use headless mode or supply agent_desktop_lease_id.');
+          }
           result = await browser.start({
             ...(input.url ? { url: input.url } : {}),
             headless: input.headless,
