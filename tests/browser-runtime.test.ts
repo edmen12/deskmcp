@@ -219,9 +219,9 @@ test('browser start waits for CDP readiness after DevToolsActivePort is publishe
   assert.deepEqual(controller.terminated, []);
   await browser.close(started.session_id);
 });
-test('owned browser process controller constrains the whole process tree to an Agent Desktop lease', async () => {
+test('owned browser process controller constrains the named Browser job to an Agent Desktop lease', async () => {
   const leaseId = '44444444-4444-4444-8444-444444444444';
-  const placements: Array<{ pid: number; leaseId: string; timeoutMs?: number }> = [];
+  const placements: Array<{ jobToken: string; leaseId: string; timeoutMs?: number }> = [];
   const asserted: string[] = [];
   const startCalls: unknown[][] = [];
   let listedText = '';
@@ -233,9 +233,9 @@ test('owned browser process controller constrains the whole process tree to an A
   } as unknown as DesktopBackendBridge;
   const agentDesktop = {
     async assertLease(id: string) { asserted.push(id); return {}; },
-    async placeProcessTreeWindows(pid: number, id: string, options: { timeoutMs?: number } = {}) {
-      placements.push({ pid, leaseId: id, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}) });
-      return { processId: pid, moved: 1, windows: [{ hwnd: '1', desktopId: 'desktop-2' }] };
+    async placeProcessJobWindows(jobToken: string, id: string, options: { timeoutMs?: number } = {}) {
+      placements.push({ jobToken, leaseId: id, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}) });
+      return { jobToken, moved: 1, windows: [{ hwnd: '1', desktopId: 'desktop-2' }] };
     }
   } as unknown as AgentDesktopManager;
   const controller = new OwnedBrowserProcessController(bridge, new ProcessSessionRegistry(), agentDesktop);
@@ -244,6 +244,9 @@ test('owned browser process controller constrains the whole process tree to an A
   assert.match(sessionId, /^[0-9a-f-]{36}$/i);
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0]?.[5], 'job');
+  const jobToken = startCalls[0]?.[6];
+  assert.equal(typeof jobToken, 'string');
+  assert.match(String(jobToken), /^[0-9a-f]{32}$/);
   assert.deepEqual(placements, []);
   const placedDuringStartup = await controller.place(sessionId, leaseId, 250, false);
   assert.deepEqual(placedDuringStartup, { moved: 1, windows: 1 });
@@ -253,8 +256,8 @@ test('owned browser process controller constrains the whole process tree to an A
   assert.deepEqual(placedAfterStartup, { moved: 1, windows: 1 });
   assert.equal(listCalls, 1);
   assert.deepEqual(placements, [
-    { pid: 4242, leaseId, timeoutMs: 250 },
-    { pid: 4242, leaseId, timeoutMs: 250 }
+    { jobToken, leaseId, timeoutMs: 250 },
+    { jobToken, leaseId, timeoutMs: 250 }
   ]);
   assert.deepEqual(asserted, [leaseId, leaseId, leaseId, leaseId, leaseId, leaseId]);
 });

@@ -41,7 +41,7 @@ internal static class Program
 
         try
         {
-            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out elevatedChild, out int ownerPid, out errorFile);
+            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? jobToken, out elevatedChild, out int ownerPid, out errorFile);
             if (elevation == "admin" && !elevatedChild)
             {
                 ElevationDisclosure.ShowIfEnabled(shell, command);
@@ -55,7 +55,10 @@ internal static class Program
             if (parentHandle == IntPtr.Zero)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the owning terminal process.");
 
-            jobHandle = CreateJobObjectW(IntPtr.Zero, null);
+            string? jobName = lifetime == "job" && !String.IsNullOrWhiteSpace(jobToken)
+                ? BuildJobName(jobToken)
+                : null;
+            jobHandle = CreateJobObjectW(IntPtr.Zero, jobName);
             if (jobHandle == IntPtr.Zero)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the DeskMCP process job.");
 
@@ -202,13 +205,16 @@ internal static class Program
         }
     }
 
-    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out bool elevatedChild, out int ownerPid, out string? errorFile)
+    private static string BuildJobName(string jobToken) => "Local\\DeskMCP.ProcessHost.Job." + jobToken;
+
+    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? jobToken, out bool elevatedChild, out int ownerPid, out string? errorFile)
     {
         string? shellValue = null;
         string? command64 = null;
         string? windowModeValue = null;
         string? elevationValue = null;
         string? lifetimeValue = null;
+        string? jobTokenValue = null;
         string? ownerPidValue = null;
         string? errorFile64 = null;
         elevatedChild = false;
@@ -219,6 +225,7 @@ internal static class Program
             else if (args[index] == "--window-mode" && index + 1 < args.Length) windowModeValue = args[++index];
             else if (args[index] == "--elevation" && index + 1 < args.Length) elevationValue = args[++index];
             else if (args[index] == "--lifetime" && index + 1 < args.Length) lifetimeValue = args[++index];
+            else if (args[index] == "--job-token" && index + 1 < args.Length) jobTokenValue = args[++index];
             else if (args[index] == "--owner-pid" && index + 1 < args.Length) ownerPidValue = args[++index];
             else if (args[index] == "--elevated-child") elevatedChild = true;
             else if (args[index] == "--error-file64" && index + 1 < args.Length) errorFile64 = args[++index];
@@ -239,6 +246,13 @@ internal static class Program
         lifetime = (lifetimeValue ?? "root").ToLowerInvariant();
         if (lifetime != "root" && lifetime != "job")
             throw new ArgumentException("Unsupported process lifetime mode.");
+        jobToken = null;
+        if (!String.IsNullOrWhiteSpace(jobTokenValue))
+        {
+            if (lifetime != "job" || elevation != "standard" || jobTokenValue.Length != 32 || !IsLowerHex(jobTokenValue))
+                throw new ArgumentException("Invalid process-host job token.");
+            jobToken = jobTokenValue;
+        }
         errorFile = null;
         if (!String.IsNullOrWhiteSpace(errorFile64))
         {
@@ -252,6 +266,16 @@ internal static class Program
         try { command = Encoding.UTF8.GetString(Convert.FromBase64String(command64)); }
         catch (FormatException) { throw new ArgumentException("Invalid encoded process command."); }
         if (String.IsNullOrWhiteSpace(command)) throw new ArgumentException("Process command is empty.");
+    }
+
+
+    private static bool IsLowerHex(string value)
+    {
+        foreach (char ch in value)
+        {
+            if ((ch < '0' || ch > '9') && (ch < 'a' || ch > 'f')) return false;
+        }
+        return true;
     }
 
     private static int RunElevatedHost(string shell, string command, string windowMode, string lifetime)
@@ -450,7 +474,7 @@ internal static class Program
         public uint dwThreadId;
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool QueryInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength, IntPtr lpReturnLength);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
