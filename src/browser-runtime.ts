@@ -203,7 +203,7 @@ function browserLaunchCommand(
     '--disable-sync',
     '--metrics-recording-only',
     `--window-size=${viewport.width},${viewport.height}`,
-    ...(agentDesktop ? ['--start-minimized'] : []),
+    ...(agentDesktop ? ['--do-not-de-elevate', '--start-minimized'] : []),
     ...(headless ? ['--headless=new'] : []),
     'about:blank'
   ];
