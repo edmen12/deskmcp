@@ -6,6 +6,7 @@
 - Browser Automation now keeps its owned Chromium Windows Job Object alive across short-lived launcher PID handoff, fixing the reproduced Chrome 153 failure where the browser process tree was killed before `DevToolsActivePort` appeared. Ordinary process tools keep root-lifetime semantics and still kill descendants when the root command exits.
 - Browser startup now treats `DevToolsActivePort` as discovery only and waits until the Playwright/CDP endpoint is actually usable. This closes the reproduced Chrome 153 race where the port file appeared 1–105 ms before the loopback CDP socket accepted connections, causing persistent headful profiles to fail with `ECONNREFUSED`.
 - Agent Desktop Browser startup now requires a real Chromium top-level window to be observed on the leased virtual desktop before reporting success. Placement is refreshed while the lease is active and after browser actions that can create pages/windows, preventing delayed Chrome windows from falling back onto Desktop 1.
+- Browser startup no longer reconciles a just-created ProcessHost against the backend session list before that list has had time to publish the new PID. Startup placement trusts only the freshly registered owned session for that bounded transaction; normal post-start checks still reconcile ownership, preventing the live `Owned browser process is no longer active` teardown race.
 - The verified-release publisher now uploads assets individually, cleans failed `starter` assets, retries bounded failures, and checks online state, size, and SHA-256 before publishing.
 - Stable publication is blocked unless a live-upgrade attestation proves that the currently published Latest version was upgraded to the exact candidate while settings, Tunnel profile, and Startup state remained unchanged and Desktop 1 stayed reserved.
 
@@ -16,6 +17,8 @@ A real 0.9.13 live-upgrade attempt on Windows reproduced an exit-code 14 failure
 The final installed-browser gate then reproduced a separate startup race with the persistent `console-audit` profile: `DevToolsActivePort` was already present while the loopback CDP endpoint still refused connections. Five real Chrome 153 probes measured a 1–105 ms gap between port-file publication and socket readiness, so Browser startup now retries CDP readiness within the existing bounded start timeout instead of treating the file alone as proof that Chrome is ready.
 
 A later live Agent Desktop gate exposed a second Browser isolation bug: the process-tree mover could spend its startup window observing zero Chromium windows and still return success, after which Chrome created its first real window on Desktop 1. Startup now waits for a verified leased-desktop window and keeps placement refreshed for the lease lifetime.
+
+A subsequent final installed gate exposed a third startup race: the new fail-closed placement path reconciled the just-created ProcessHost before the backend session list had published it, so Browser startup could tear down the owned Chrome job with `Owned browser process is no longer active`. Startup placement now skips only that premature reconcile; post-start ownership checks remain unchanged.
 
 ## Validation target
 

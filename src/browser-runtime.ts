@@ -64,7 +64,7 @@ export interface BrowserProcessPlacementResult {
 export interface BrowserProcessController {
   start(command: string, agentDesktopLeaseId?: string): Promise<string>;
   active(processSessionId: string): Promise<boolean>;
-  place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs?: number): Promise<BrowserProcessPlacementResult>;
+  place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs?: number, reconcile?: boolean): Promise<BrowserProcessPlacementResult>;
   terminate(processSessionId: string): Promise<void>;
 }
 
@@ -301,10 +301,15 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     return this.sessions.isActive(processSessionId);
   }
 
-  async place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs = 250): Promise<BrowserProcessPlacementResult> {
+  async place(
+    processSessionId: string,
+    agentDesktopLeaseId: string,
+    timeoutMs = 250,
+    reconcile = true
+  ): Promise<BrowserProcessPlacementResult> {
     if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for browser process placement.');
     await this.agentDesktop.assertLease(agentDesktopLeaseId);
-    await this.reconcile();
+    if (reconcile) await this.reconcile();
     if (!this.sessions.has(processSessionId) || !this.sessions.isActive(processSessionId)) {
       throw new Error('Owned browser process is no longer active.');
     }
@@ -557,7 +562,7 @@ export class BrowserRuntime {
       await this.agentDesktop!.assertLease(leaseId);
       const remaining = deadline - Date.now();
       const timeoutMs = Math.max(100, Math.min(250, remaining));
-      const placed = await this.processController.place(processSessionId, leaseId, timeoutMs);
+      const placed = await this.processController.place(processSessionId, leaseId, timeoutMs, false);
       if (placed.windows > 0) return;
       await new Promise(resolve => setTimeout(resolve, 25));
     }
