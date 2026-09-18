@@ -1087,6 +1087,8 @@ internal sealed partial class ControlPanelRuntime
         psi.EnvironmentVariables["DESKTOP_MCP_ALLOWED_ROOTS"] = scope;
         psi.EnvironmentVariables["DESKTOP_MCP_AUDIT_LOG"] = Path.Combine(logsDir, "audit.jsonl");
         psi.EnvironmentVariables["DESKTOP_MCP_PORT"] = gatewayPort.ToString();
+        psi.EnvironmentVariables["DESKMCP_BACKEND_ENTRY"] = Path.Combine(projectRoot, "node_modules", "@wonderwhy-er", "desktop-commander", "dist", "index.js");
+        psi.EnvironmentVariables["DESKTOP_MCP_PROCESS_HOST"] = Path.Combine(AppContext.BaseDirectory, "DeskMCP.ProcessHost.exe");
         ApplyBrowserExecutableEnvironment(psi, ResolveBrowserExecutableForGateway(), null);
         Process p = Process.Start(psi);
         if (p == null) throw new InvalidOperationException("Could not start DeskMCP Gateway.");
