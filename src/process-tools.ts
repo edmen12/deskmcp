@@ -75,6 +75,21 @@ export function requireSupportedProcessPresentation(
   }
 }
 
+const DIRECT_INTERACTIVE_CHROMIUM = /^\s*(?:&\s*)?(?:"[^"\r\n]*[\\/])?(?:chrome|msedge|chromium)(?:\.exe)?"?(?:\s|$)/iu;
+const SHELL_INTERACTIVE_CHROMIUM = /\b(?:start|start-process)\b[^\r\n]*(?:chrome|msedge|chromium)(?:\.exe)?/iu;
+const SHELL_DEFAULT_BROWSER_URL = /\b(?:start|start-process|explorer(?:\.exe)?)\b[^\r\n]*https?:\/\//iu;
+const HEADLESS_BROWSER_FLAG = /(?:^|\s)--headless(?:=|\s|$)/iu;
+
+export function rejectInteractiveBrowserProcessLaunch(command: string): void {
+  if (HEADLESS_BROWSER_FLAG.test(command)) return;
+  if (!DIRECT_INTERACTIVE_CHROMIUM.test(command)
+    && !SHELL_INTERACTIVE_CHROMIUM.test(command)
+    && !SHELL_DEFAULT_BROWSER_URL.test(command)) return;
+  throw new PolicyDeniedError(
+    'Interactive browser launch through desktop_start_process is blocked because the browser can hand off to an existing personal Chrome/Edge process outside the owned process tree. Use desktop_browser_session with an Agent Desktop lease instead. Headless browser CLI remains allowed.'
+  );
+}
+
 async function reconcileActiveProcessSessions(
   bridge: DesktopBackendBridge,
   sessions: ProcessSessionRegistry
@@ -147,7 +162,7 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails. Interactive Chrome/Edge/Chromium or default-browser URL launches are rejected because browser singleton handoff can escape the owned process tree; use desktop_browser_session with an Agent Desktop lease instead.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -177,6 +192,7 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        rejectInteractiveBrowserProcessLaunch(command);
         if (agent_desktop_lease_id) {
           if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
           if (elevation === 'admin') {

@@ -268,7 +268,8 @@ export class AgentDesktopManager {
         throw new Error('Agent Desktop native host returned a mismatched desktop id.');
       }
       if (!info.present) continue;
-      if (!Number.isInteger(info.desktopNumber) || Number(info.desktopNumber) <= 1) continue;
+      // VirtualDesktopAccessor is zero-based: Windows UI Desktop 1 is native index 0.
+      if (!Number.isInteger(info.desktopNumber) || Number(info.desktopNumber) <= 0) continue;
       live.push({ ...binding, desktopNumber: Number(info.desktopNumber) });
     }
     return live.sort((a, b) => (a.desktopNumber ?? Number.MAX_SAFE_INTEGER) - (b.desktopNumber ?? Number.MAX_SAFE_INTEGER));
