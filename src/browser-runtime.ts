@@ -260,6 +260,8 @@ async function waitForCdpPages(
 }
 
 export class OwnedBrowserProcessController implements BrowserProcessController {
+  private readonly jobTokens = new Map<string, string>();
+
   constructor(
     private readonly bridge: DesktopBackendBridge,
     private readonly sessions: ProcessSessionRegistry,
@@ -281,16 +283,21 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     const reservationId = this.sessions.reserveStart();
     let pid: number | undefined;
     let sessionId: string | undefined;
+    const jobToken = agentDesktopLeaseId ? randomUUID().replaceAll('-', '') : undefined;
     try {
-      const result = await this.bridge.startProcess(command, 3000, 'powershell.exe', 'hidden', 'standard', 'job');
+      const result = await this.bridge.startProcess(command, 3000, 'powershell.exe', 'hidden', 'standard', 'job', jobToken);
       if (result.isError) throw new Error(`Browser process start failed: ${result.text}`);
       pid = extractStartedPid(result.text);
       sessionId = this.sessions.registerReserved(reservationId, pid, 'hidden');
+      if (jobToken) this.jobTokens.set(sessionId, jobToken);
       if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
       return sessionId;
     } catch (error) {
       this.sessions.releaseStart(reservationId);
-      if (sessionId) this.sessions.forget(sessionId);
+      if (sessionId) {
+        this.jobTokens.delete(sessionId);
+        this.sessions.forget(sessionId);
+      }
       if (pid !== undefined) await this.bridge.forceTerminateProcess(pid).catch(() => undefined);
       throw error;
     }
@@ -313,8 +320,9 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     if (!this.sessions.has(processSessionId) || !this.sessions.isActive(processSessionId)) {
       throw new Error('Owned browser process is no longer active.');
     }
-    const pid = this.sessions.resolve(processSessionId);
-    const placed = await this.agentDesktop.placeProcessTreeWindows(pid, agentDesktopLeaseId, { timeoutMs });
+    const jobToken = this.jobTokens.get(processSessionId);
+    if (!jobToken) throw new Error('Owned Agent Desktop Browser job token is unavailable.');
+    const placed = await this.agentDesktop.placeProcessJobWindows(jobToken, agentDesktopLeaseId, { timeoutMs });
     await this.agentDesktop.assertLease(agentDesktopLeaseId);
     return { moved: placed.moved, windows: placed.windows.length };
   }
@@ -323,6 +331,7 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     await this.reconcile();
     if (!this.sessions.has(processSessionId)) return;
     if (!this.sessions.isActive(processSessionId)) {
+      this.jobTokens.delete(processSessionId);
       this.sessions.forget(processSessionId);
       return;
     }
@@ -332,6 +341,7 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     if (result.isError && this.sessions.isActive(processSessionId)) {
       throw new Error(`Browser process termination failed: ${result.text}`);
     }
+    this.jobTokens.delete(processSessionId);
     this.sessions.forget(processSessionId);
   }
 }

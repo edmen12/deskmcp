@@ -8,6 +8,8 @@
 - Agent Desktop Browser startup now requires a real Chromium top-level window to be observed on the leased virtual desktop before reporting success. Placement is refreshed while the lease is active and after browser actions that can create pages/windows, preventing delayed Chrome windows from falling back onto Desktop 1.
 - Browser startup no longer reconciles a just-created ProcessHost against the backend session list before that list has had time to publish the new PID. Startup placement trusts only the freshly registered owned session for that bounded transaction; normal post-start checks still reconcile ownership, preventing the live `Owned browser process is no longer active` teardown race.
 - Agent Desktop Chromium starts with `--do-not-de-elevate`, preventing Chrome 153 from auto-restarting into a replacement browser PID before DeskMCP can constrain its window to the leased virtual desktop. Normal non-Agent Browser sessions keep their existing launch behavior.
+- Agent Desktop Browser ownership no longer depends on reconstructing a Chrome parent-PID tree. Leased Browsers use a random private named Windows Job; AgentDesktopHost queries the Job membership directly and constrains every live Job-member window to the leased virtual desktop, including windows created after launcher handoff.
+- Fixed a native interop bug where `CreateJobObjectW` lacked Unicode marshaling, producing a Job name that could not be reopened by AgentDesktopHost. Release validation now explicitly reopens the named Job by token before accepting ProcessHost.
 - The verified-release publisher now uploads assets individually, cleans failed `starter` assets, retries bounded failures, and checks online state, size, and SHA-256 before publishing.
 - Stable publication is blocked unless a live-upgrade attestation proves that the currently published Latest version was upgraded to the exact candidate while settings, Tunnel profile, and Startup state remained unchanged and Desktop 1 stayed reserved.
 
@@ -20,6 +22,8 @@ The final installed-browser gate then reproduced a separate startup race with th
 A later live Agent Desktop gate exposed a second Browser isolation bug: the process-tree mover could spend its startup window observing zero Chromium windows and still return success, after which Chrome created its first real window on Desktop 1. Startup now waits for a verified leased-desktop window and keeps placement refreshed for the lease lifetime.
 
 A subsequent final installed gate exposed a third startup race: the new fail-closed placement path reconciled the just-created ProcessHost before the backend session list had published it, so Browser startup could tear down the owned Chrome job with `Owned browser process is no longer active`. Startup placement now skips only that premature reconcile; post-start ownership checks remain unchanged.
+
+The next real Chrome gate exposed the remaining structural flaw: process-tree placement followed live parent PIDs, but Chrome launcher handoff can break that ancestry even while the Browser remains correctly owned by the ProcessHost Job Object. DeskMCP now treats live Job membership as the authoritative Browser placement boundary. The first named-job implementation also uncovered and fixed an incorrect `CreateJobObjectW` string marshaling declaration; a dedicated native regression now catches that class of failure.
 
 ## Validation target
 

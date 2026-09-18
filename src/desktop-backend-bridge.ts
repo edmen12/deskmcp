@@ -53,10 +53,12 @@ function buildProcessHostCommand(
   command: string,
   windowMode: 'hidden' | 'visible' = 'hidden',
   elevation: 'standard' | 'admin' = 'standard',
-  lifetime: 'root' | 'job' = 'root'
+  lifetime: 'root' | 'job' = 'root',
+  jobToken?: string
 ): string {
   const command64 = Buffer.from(command, 'utf8').toString('base64');
-  return `"${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}`;
+  const jobArg = jobToken ? ` --job-token ${jobToken}` : '';
+  return `"${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}${jobArg}`;
 }
 
 function elapsedMs(startedAt: number): number {
@@ -280,7 +282,8 @@ export class DesktopBackendBridge {
     shell?: 'powershell.exe' | 'cmd.exe',
     windowMode: 'hidden' | 'visible' = 'hidden',
     elevation: 'standard' | 'admin' = 'standard',
-    lifetime: 'root' | 'job' = 'root'
+    lifetime: 'root' | 'job' = 'root',
+    jobToken?: string
   ): Promise<DesktopBackendToolResult> {
     if (process.platform !== 'win32') {
       return this.callTextTool('start_process', {
@@ -293,13 +296,17 @@ export class DesktopBackendBridge {
     }
 
     await access(this.processHostEntry);
+    if (jobToken && (lifetime !== 'job' || elevation !== 'standard' || !/^[0-9a-f]{32}$/u.test(jobToken))) {
+      throw new Error('Internal ProcessHost job token is invalid.');
+    }
     const ownedCommand = buildProcessHostCommand(
       this.processHostEntry,
       shell ?? 'cmd.exe',
       command,
       windowMode,
       elevation,
-      lifetime
+      lifetime,
+      jobToken
     );
     return this.callTextTool('start_process', {
       command: ownedCommand,

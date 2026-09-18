@@ -179,6 +179,9 @@ internal static class Program
     private static extern bool ShowWindow(IntPtr hwnd, int command);
 
     private const uint Th32csSnapProcess = 0x00000002;
+    private const uint JobObjectQuery = 0x0004;
+    private const int JobObjectBasicProcessIdList = 3;
+    private const int ErrorMoreData = 234;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct ProcessEntry32
@@ -210,6 +213,13 @@ internal static class Program
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenJobObjectW(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, uint infoLength, out uint returnLength);
+
     private const int SwShowNoActivate = 4;
     private const int SwRestore = 9;
 
@@ -234,6 +244,7 @@ internal static class Program
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
+                "move-job" => MoveJob(ParseJobToken(Required(options, "job-token")), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "self-test" => SelfTest(vda),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };
@@ -482,6 +493,67 @@ internal static class Program
         return new { processId, moved = moved.Count, windows };
     }
 
+    private static string BuildJobName(string jobToken) => "Local\\DeskMCP.ProcessHost.Job." + jobToken;
+
+    private static object MoveJob(string jobToken, Guid desktopId, int timeoutMs, bool restore, bool showNoActivate, VirtualDesktopAccessor vda)
+    {
+        if (restore && showNoActivate) throw new ArgumentException("restore and show-no-activate cannot be combined.");
+        if (!vda.Available) throw new InvalidOperationException("VirtualDesktopAccessor is required to move an Agent Desktop process job.");
+        int? desktopNumber = vda.DesktopNumberById(desktopId);
+        if (!desktopNumber.HasValue) throw new InvalidOperationException("Agent Desktop id is not present in the current Windows virtual desktop set.");
+
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        IntPtr job = IntPtr.Zero;
+        try
+        {
+            do
+            {
+                job = OpenJobObjectW(JobObjectQuery, false, BuildJobName(jobToken));
+                if (job != IntPtr.Zero) break;
+                Thread.Sleep(25);
+            } while (DateTime.UtcNow < deadline);
+            if (job == IntPtr.Zero) throw new InvalidOperationException("Owned Browser job is unavailable for Agent Desktop placement.");
+
+            HashSet<IntPtr> moved = new();
+            do
+            {
+                foreach (int pid in EnumerateJobProcessIds(job))
+                {
+                    foreach (IntPtr hwnd in EnumerateTopLevelWindows(pid))
+                    {
+                        try
+                        {
+                            Guid currentDesktopId = GetDesktopId(hwnd);
+                            if (currentDesktopId != desktopId)
+                                MoveWindowCore(hwnd, desktopId, desktopNumber.Value, restore, showNoActivate, vda);
+                            moved.Add(hwnd);
+                        }
+                        catch (InvalidOperationException) { }
+                    }
+                }
+                Thread.Sleep(50);
+            } while (DateTime.UtcNow < deadline);
+
+            List<object> windows = new();
+            foreach (int pid in EnumerateJobProcessIds(job))
+            {
+                foreach (IntPtr hwnd in EnumerateTopLevelWindows(pid))
+                {
+                    if (!IsWindow(hwnd)) continue;
+                    Guid actual = GetDesktopId(hwnd);
+                    if (actual != desktopId)
+                        throw new InvalidOperationException("An Agent Desktop Browser job window remained on a different virtual desktop after placement.");
+                    windows.Add(new { hwnd = HwndText(hwnd), desktopId = actual.ToString("D"), desktopNumber = vda.WindowDesktopNumber(hwnd) });
+                }
+            }
+            return new { jobToken, moved = moved.Count, windows };
+        }
+        finally
+        {
+            if (job != IntPtr.Zero) CloseHandle(job);
+        }
+    }
+
     private static object SelfTest(VirtualDesktopAccessor vda)
     {
         IVirtualDesktopManager manager = CreateManager();
@@ -539,6 +611,36 @@ internal static class Program
             return true;
         }, IntPtr.Zero);
         return windows;
+    }
+
+    private static HashSet<int> EnumerateJobProcessIds(IntPtr job)
+    {
+        int size = 4096;
+        while (size <= 1024 * 1024)
+        {
+            IntPtr buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, buffer, (uint)size, out _))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error == ErrorMoreData) { size *= 2; continue; }
+                    throw new Win32Exception(error, "Could not inspect the owned Browser job.");
+                }
+                uint count = unchecked((uint)Marshal.ReadInt32(buffer, 4));
+                int capacity = (size - 8) / IntPtr.Size;
+                if (count > capacity) { size *= 2; continue; }
+                HashSet<int> result = new();
+                for (int index = 0; index < count; index++)
+                {
+                    long raw = Marshal.ReadIntPtr(buffer, 8 + index * IntPtr.Size).ToInt64();
+                    if (raw > 0 && raw <= Int32.MaxValue) result.Add(unchecked((int)raw));
+                }
+                return result;
+            }
+            finally { Marshal.FreeHGlobal(buffer); }
+        }
+        throw new InvalidOperationException("Owned Browser job process list exceeded the supported bound.");
     }
 
     private static HashSet<int> EnumerateProcessTree(int rootProcessId)
@@ -623,6 +725,17 @@ internal static class Program
     {
         if (!Guid.TryParse(value, out Guid result) || result == Guid.Empty) throw new ArgumentException("Invalid desktop id.");
         return result;
+    }
+
+    private static string ParseJobToken(string value)
+    {
+        if (value.Length != 32) throw new ArgumentException("Invalid Browser job token.");
+        foreach (char ch in value)
+        {
+            if ((ch < '0' || ch > '9') && (ch < 'a' || ch > 'f'))
+                throw new ArgumentException("Invalid Browser job token.");
+        }
+        return value;
     }
 
     private static int ParsePositiveInt(string value, string name, bool allowZero = false)

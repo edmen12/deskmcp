@@ -21,6 +21,8 @@ All notable changes to DeskMCP are documented here.
 - Agent Desktop Browser placement now waits until a real Chromium top-level window is observed on the leased virtual desktop before startup can succeed, and re-applies process-tree placement while the lease remains active and after page/window-creating browser actions. This fixes a live failure where the early process-tree scan saw zero windows, returned success, and Chrome later appeared on Desktop 1.
 - Agent Desktop Browser startup now keeps its newly created owned process session authoritative during the startup placement transaction instead of reconciling it immediately against the backend session list. This fixes a live race where the backend list had not yet published the new ProcessHost PID, causing DeskMCP to mark the Browser inactive and tear down Chrome before placement could complete. Normal post-start placement and lease reaping still reconcile ownership.
 - Agent Desktop Chromium launches now pass `--do-not-de-elevate` so Chrome 153 cannot auto-restart into a different browser PID before virtual-desktop placement. A live probe reproduced the old launcher handoff and verified that the guarded minimized launch keeps the original browser PID alive with a movable top-level window on Desktop 2.
+- Agent Desktop Browser placement now follows the Browser-only Windows Job Object directly instead of reconstructing ownership from live parent-process ancestry. Each leased Browser receives a random private job token; `DeskMCP.AgentDesktopHost` opens that named job, enumerates its live member PIDs with `QueryInformationJobObject(JobObjectBasicProcessIdList)`, and moves/verifies every top-level job window on the leased desktop. Chrome launcher handoff, PID replacement, and later windows therefore stay inside the same placement boundary.
+- Fixed the named Browser Job initially being created under a corrupted object name because `CreateJobObjectW` was declared without Unicode string marshaling. The ProcessHost lifetime test now reopens the named job by token and fails the build if the name is not externally resolvable.
 
 ### Validation
 
@@ -32,6 +34,8 @@ All notable changes to DeskMCP are documented here.
 - Real Chrome 153 BrowserRuntime E2E started an isolated profile, published `DevToolsActivePort`, connected through Playwright, captured a snapshot/console state, and closed cleanly.
 - Agent Desktop Browser regression covers delayed real-window creation: zero-window placement attempts cannot satisfy startup, and later page creation re-applies placement to the same lease.
 - Browser ownership regression now covers an eventually-consistent backend process-session list: startup placement succeeds without premature reconciliation, then normal placement resumes reconciliation once the Browser startup transaction has completed.
+- Real Chrome 153 named-job E2E moved the first isolated Browser window to Desktop 2, verified the HWND through the native virtual-desktop API, then created a second page/window over CDP and verified both live Job-member windows remained on Desktop 2.
+- ProcessHost regression now reports `PROCESS_HOST_NAMED_JOB=PASS` only after a Browser-style named Job can be reopened by its exact random token while its owned process is live.
 - WPF Release build: 0 warnings, 0 errors.
 - Installer release validation now launches a real install-root ProcessHost during upgrade and uninstall and requires both operations to terminate it cleanly before completion.
 

@@ -39,6 +39,16 @@ export interface AgentDesktopMoveProcessResult {
   }>;
 }
 
+export interface AgentDesktopMoveJobResult {
+  readonly jobToken: string;
+  readonly moved: number;
+  readonly windows: ReadonlyArray<{
+    readonly hwnd: string;
+    readonly desktopId: string;
+    readonly desktopNumber?: number | null;
+  }>;
+}
+
 function targetName(): 'win-arm64' | 'win-x64' {
   return process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
 }
@@ -139,6 +149,25 @@ export class AgentDesktopNativeBridge {
     if (options.restore) args.push('--restore');
     if (options.showNoActivate) args.push('--show-no-activate');
     return this.run<AgentDesktopMoveProcessResult>(args, timeoutMs + 3000);
+  }
+
+  async moveJobWindows(
+    jobToken: string,
+    desktopId: string,
+    options: { timeoutMs?: number; restore?: boolean; showNoActivate?: boolean } = {}
+  ): Promise<AgentDesktopMoveJobResult> {
+    if (!/^[0-9a-f]{32}$/u.test(jobToken)) throw new Error('Invalid Agent Desktop Browser job token.');
+    if (options.restore && options.showNoActivate) throw new Error('Agent Desktop move cannot combine restore and showNoActivate.');
+    const timeoutMs = options.timeoutMs ?? 15000;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) throw new Error('Invalid Agent Desktop move timeout.');
+    const args = [
+      'move-job', '--job-token', jobToken,
+      '--desktop-id', normalizeDesktopId(desktopId),
+      '--timeout-ms', String(timeoutMs)
+    ];
+    if (options.restore) args.push('--restore');
+    if (options.showNoActivate) args.push('--show-no-activate');
+    return this.run<AgentDesktopMoveJobResult>(args, timeoutMs + 3000);
   }
 
   async moveProcessTreeWindows(
