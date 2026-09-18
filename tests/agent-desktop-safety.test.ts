@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import type { AgentDesktopNativeBridge } from '../src/agent-desktop-native.js';
 import { AgentDesktopManager } from '../src/agent-desktop-state.js';
+import { renameFileWithRetry } from '../src/fs-reliability.js';
 
 async function writeJson(pathname: string, value: unknown): Promise<void> {
   const temp = `${pathname}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
-  await rename(temp, pathname);
+  await renameFileWithRetry(temp, pathname);
 }
 
 async function deadPid(): Promise<number> {
