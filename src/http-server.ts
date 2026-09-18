@@ -87,6 +87,51 @@ function writeJson(res: http.ServerResponse, status: number, body: unknown): voi
   res.end(payload);
 }
 
+function writeHtml(res: http.ServerResponse, status: number, body: string): void {
+  const payload = Buffer.from(body, 'utf8');
+  res.writeHead(status, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': payload.byteLength,
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(payload);
+}
+
+function oauthCallbackName(pathname: string): string | undefined {
+  const match = /^\/oauth\/callback\/([^/]+)$/u.exec(pathname);
+  if (!match) return undefined;
+  try {
+    return decodeURIComponent(match[1]!);
+  } catch {
+    return undefined;
+  }
+}
+
+async function serveOAuthCallback(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  hub: DynamicMcpHub,
+  name: string
+): Promise<void> {
+  try {
+    const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
+    await hub.finishOAuthCallback(name, parsed.searchParams);
+    writeHtml(
+      res,
+      200,
+      '<!doctype html><meta charset="utf-8"><title>DeskMCP authorization complete</title><p>DeskMCP authorization completed. You can close this window.</p>'
+    );
+  } catch {
+    console.error('[deskmcp] Dynamic MCP OAuth callback failed.');
+    writeHtml(
+      res,
+      400,
+      '<!doctype html><meta charset="utf-8"><title>DeskMCP authorization failed</title><p>DeskMCP authorization failed. Return to DeskMCP and start authorization again.</p>'
+    );
+  }
+}
+
 function publicArtifactPath(pathname: string): { artifactId: string; filename: string } | undefined {
   const match = /^\/artifacts\/public\/([^/]+)\/([^/]+)$/u.exec(pathname);
   if (!match) return undefined;
@@ -208,6 +253,17 @@ export async function startHttpServer(
       return;
     }
 
+    const oauthName = oauthCallbackName(pathname);
+    if (oauthName) {
+      if (!dynamicMcpHub || req.method !== 'GET') {
+        writeJson(res, dynamicMcpHub ? 405 : 404, { error: dynamicMcpHub ? 'method_not_allowed' : 'not_found' });
+        return;
+      }
+      if (!validateHost(req, res)) return;
+      void serveOAuthCallback(req, res, dynamicMcpHub, oauthName);
+      return;
+    }
+
     const artifactRoute = publicArtifactPath(pathname);
     if (artifactRoute) {
       if (!artifactStore || req.method !== 'GET') {
@@ -244,6 +300,7 @@ export async function startHttpServer(
   const actualPort = address.port;
   const serverUrl = `http://${host}:${actualPort}`;
   artifactStore?.setLocalBaseUrl(serverUrl);
+  dynamicMcpHub?.setOAuthCallbackBaseUrl(serverUrl);
   return {
     host,
     port: actualPort,

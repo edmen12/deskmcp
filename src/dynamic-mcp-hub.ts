@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
+import { DynamicMcpOAuthManager } from './dynamic-mcp-oauth-manager.js';
 import { renameFileWithRetry } from './fs-reliability.js';
+import type { SecretStore } from './secure-secret-store.js';
 
 const REGISTRY_SCHEMA_VERSION = 1;
 const MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
@@ -17,6 +19,7 @@ const MAX_TOOL_DESCRIPTION_BYTES = 16 * 1024;
 const MAX_TOOL_SCHEMA_BYTES = 256 * 1024;
 const MAX_TOOL_ANNOTATIONS_BYTES = 64 * 1024;
 const MAX_TOOL_RESULT_BYTES = 8 * 1024 * 1024;
+const MAX_OAUTH_SCOPE_BYTES = 8 * 1024;
 const MAX_REFRESH_ALL_MS = 120_000;
 const REGISTRY_LOCK_TIMEOUT_MS = 5_000;
 const REGISTRY_LOCK_INITIALIZATION_GRACE_MS = 5_000;
@@ -46,12 +49,18 @@ export interface DynamicMcpToolDefinition extends DynamicMcpToolSummary {
   readonly annotations?: unknown;
 }
 
+export interface DynamicMcpOAuthConfig {
+  readonly enabled: true;
+  readonly scope?: string;
+}
+
 export interface DynamicMcpServerConfig {
   readonly name: string;
   readonly description?: string;
   readonly transport: 'streamable_http';
   readonly url: string;
   readonly header_env: Readonly<Record<string, string>>;
+  readonly oauth?: DynamicMcpOAuthConfig;
   readonly enabled: boolean;
   readonly timeout_ms: number;
   readonly tools: readonly DynamicMcpToolDefinition[];
@@ -72,6 +81,8 @@ export interface AddDynamicMcpServerInput {
   readonly description?: string;
   readonly url: string;
   readonly header_env?: Readonly<Record<string, string>>;
+  readonly oauth?: boolean;
+  readonly oauth_scope?: string;
   readonly enabled?: boolean;
   readonly timeout_ms?: number;
 }
@@ -86,13 +97,15 @@ export interface RefreshResult {
 
 export interface DynamicMcpHubTestHooks {
   readonly beforePersistRefresh?: () => Promise<void> | void;
+  readonly secretStore?: SecretStore;
 }
 
 function sameRefreshTarget(left: DynamicMcpServerConfig, right: DynamicMcpServerConfig): boolean {
   if (left.url !== right.url || left.transport !== right.transport) return false;
   const leftHeaders = Object.entries(left.header_env).sort(([a], [b]) => a.localeCompare(b));
   const rightHeaders = Object.entries(right.header_env).sort(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify(leftHeaders) === JSON.stringify(rightHeaders);
+  if (JSON.stringify(leftHeaders) !== JSON.stringify(rightHeaders)) return false;
+  return JSON.stringify(left.oauth ?? null) === JSON.stringify(right.oauth ?? null);
 }
 
 function normalizeName(value: string): string {
@@ -152,6 +165,35 @@ function normalizeHeaderEnv(value: Readonly<Record<string, string>> | undefined)
   return out;
 }
 
+function normalizeOAuthScope(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const tokens = value.trim().split(/\s+/u).filter(Boolean);
+  if (tokens.length === 0) return undefined;
+  const normalized = [...new Set(tokens)].join(' ');
+  if (Buffer.byteLength(normalized, 'utf8') > MAX_OAUTH_SCOPE_BYTES) {
+    throw new Error(`Dynamic MCP OAuth scope exceeds ${MAX_OAUTH_SCOPE_BYTES} bytes.`);
+  }
+  if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/u.test(normalized)) {
+    throw new Error('Dynamic MCP OAuth scope contains invalid characters.');
+  }
+  return normalized;
+}
+
+function normalizeOAuth(
+  enabled: boolean | undefined,
+  scope: string | undefined
+): DynamicMcpOAuthConfig | undefined {
+  if (scope !== undefined && enabled !== true) {
+    throw new Error('Dynamic MCP oauth_scope requires oauth=true.');
+  }
+  if (enabled !== true) return undefined;
+  const normalizedScope = normalizeOAuthScope(scope);
+  return {
+    enabled: true,
+    ...(normalizedScope ? { scope: normalizedScope } : {})
+  };
+}
+
 function publicConfig(server: DynamicMcpServerConfig) {
   return {
     name: server.name,
@@ -159,6 +201,7 @@ function publicConfig(server: DynamicMcpServerConfig) {
     transport: server.transport,
     url: server.url,
     header_env: { ...server.header_env },
+    ...(server.oauth ? { oauth: { ...server.oauth } } : {}),
     enabled: server.enabled,
     timeout_ms: server.timeout_ms,
     tool_count: server.tools.length,
@@ -245,6 +288,17 @@ function parseRegistry(value: unknown): RegistryFile {
     const description = normalizeDescription(entry.description);
     const url = normalizeUrl(entry.url);
     const headerEnv = normalizeHeaderEnv(entry.header_env);
+    let oauth: DynamicMcpOAuthConfig | undefined;
+    if (entry.oauth !== undefined) {
+      if (!entry.oauth || typeof entry.oauth !== 'object' || entry.oauth.enabled !== true) {
+        throw new Error(`Dynamic MCP OAuth configuration for ${name} is invalid.`);
+      }
+      const rawScope = entry.oauth.scope;
+      if (rawScope !== undefined && typeof rawScope !== 'string') {
+        throw new Error(`Dynamic MCP OAuth scope for ${name} is invalid.`);
+      }
+      oauth = normalizeOAuth(true, rawScope);
+    }
     const timeout = normalizeTimeout(entry.timeout_ms);
     const enabled = entry.enabled !== false;
     const rawTools = Array.isArray(entry.tools) ? entry.tools : [];
@@ -268,6 +322,7 @@ function parseRegistry(value: unknown): RegistryFile {
       transport: 'streamable_http' as const,
       url,
       header_env: headerEnv,
+      ...(oauth ? { oauth } : {}),
       enabled,
       timeout_ms: timeout,
       tools,
@@ -313,11 +368,31 @@ function timeoutPromise<T>(promise: Promise<T>, timeoutMs: number, label: string
 
 export class DynamicMcpHub {
   private mutationChain: Promise<void> = Promise.resolve();
+  private readonly oauthManager: DynamicMcpOAuthManager;
 
   constructor(
     readonly root: string,
     private readonly testHooks: DynamicMcpHubTestHooks = {}
-  ) {}
+  ) {
+    const oauthRoot = path.join(root, 'oauth-secrets');
+    this.oauthManager = testHooks.secretStore
+      ? new DynamicMcpOAuthManager(oauthRoot, testHooks.secretStore)
+      : new DynamicMcpOAuthManager(oauthRoot);
+  }
+
+  setOAuthCallbackBaseUrl(baseUrl: string): void {
+    this.oauthManager.setCallbackBaseUrl(baseUrl);
+  }
+
+  private oauthTarget(server: DynamicMcpServerConfig) {
+    if (!server.oauth) throw new Error(`Dynamic MCP OAuth is not enabled for ${server.name}.`);
+    return {
+      name: server.name,
+      url: server.url,
+      ...(server.oauth.scope ? { scope: server.oauth.scope } : {}),
+      timeout_ms: server.timeout_ms
+    };
+  }
 
   private get registryPath(): string {
     return path.join(this.root, 'servers.json');
@@ -421,12 +496,14 @@ export class DynamicMcpHub {
         throw new Error(`Dynamic MCP registry is limited to ${MAX_SERVERS} servers.`);
       }
       const description = normalizeDescription(input.description);
+      const oauth = normalizeOAuth(input.oauth, input.oauth_scope);
       const server: DynamicMcpServerConfig = {
         name,
         ...(description ? { description } : {}),
         transport: 'streamable_http',
         url: normalizeUrl(input.url),
         header_env: normalizeHeaderEnv(input.header_env),
+        ...(oauth ? { oauth } : {}),
         enabled: input.enabled !== false,
         timeout_ms: normalizeTimeout(input.timeout_ms),
         tools: []
@@ -440,9 +517,13 @@ export class DynamicMcpHub {
     return this.serializeMutation(async () => {
       const registry = await this.load();
       const normalized = normalizeName(name);
-      const next = registry.servers.filter(server => server.name !== normalized);
-      if (next.length === registry.servers.length) return false;
-      await this.save({ ...registry, servers: next });
+      const current = registry.servers.find(server => server.name === normalized);
+      if (!current) return false;
+      if (current.oauth) await this.oauthManager.disconnect(this.oauthTarget(current));
+      await this.save({
+        ...registry,
+        servers: registry.servers.filter(server => server.name !== normalized)
+      });
       return true;
     });
   }
@@ -462,6 +543,52 @@ export class DynamicMcpHub {
     });
   }
 
+  async setOAuth(name: string, enabled: boolean, scope?: string): Promise<unknown> {
+    return this.serializeMutation(async () => {
+      const registry = await this.load();
+      const normalized = normalizeName(name);
+      const index = registry.servers.findIndex(server => server.name === normalized);
+      if (index < 0) throw new Error(`Dynamic MCP server not found: ${normalized}.`);
+      const current = registry.servers[index]!;
+      const nextOAuth = normalizeOAuth(enabled, scope);
+      if (current.oauth && JSON.stringify(current.oauth) !== JSON.stringify(nextOAuth ?? null)) {
+        await this.oauthManager.disconnect(this.oauthTarget(current));
+      }
+      const { oauth: _oauth, ...withoutOAuth } = current;
+      const updated: DynamicMcpServerConfig = nextOAuth
+        ? { ...withoutOAuth, oauth: nextOAuth }
+        : withoutOAuth;
+      const servers = [...registry.servers];
+      servers[index] = updated;
+      await this.save({ ...registry, servers });
+      return publicConfig(updated);
+    });
+  }
+
+  async oauthStatus(name: string): Promise<unknown> {
+    const server = await this.requireServer(name);
+    return this.oauthManager.status(this.oauthTarget(server));
+  }
+
+  async startOAuth(name: string, force = false): Promise<unknown> {
+    const server = await this.requireServer(name);
+    return this.oauthManager.start(
+      this.oauthTarget(server),
+      this.requestHeaders(server),
+      force
+    );
+  }
+
+  async disconnectOAuth(name: string): Promise<unknown> {
+    const server = await this.requireServer(name);
+    return this.oauthManager.disconnect(this.oauthTarget(server));
+  }
+
+  async finishOAuthCallback(name: string, params: URLSearchParams): Promise<unknown> {
+    const server = await this.requireServer(name);
+    return this.oauthManager.finishCallback(this.oauthTarget(server), params);
+  }
+
   private async requireServer(name: string): Promise<DynamicMcpServerConfig> {
     const normalized = normalizeName(name);
     const registry = await this.load();
@@ -473,6 +600,7 @@ export class DynamicMcpHub {
   private requestHeaders(server: DynamicMcpServerConfig): Record<string, string> {
     const headers: Record<string, string> = {};
     for (const [header, envName] of Object.entries(server.header_env)) {
+      if (server.oauth && header.toLowerCase() === 'authorization') continue;
       const value = process.env[envName];
       if (!value) throw new Error(`Required environment variable is not configured: ${envName}.`);
       headers[header] = value;
@@ -493,8 +621,13 @@ export class DynamicMcpHub {
       if (value <= 0) throw new Error(`${label} exceeded the ${budgetMs} ms total timeout budget.`);
       return value;
     };
+    const authProvider = server.oauth
+      ? await this.oauthManager.authProvider(this.oauthTarget(server))
+      : undefined;
     const transport = new StreamableHTTPClientTransport(new URL(server.url), {
-      requestInit: { headers: this.requestHeaders(server) }
+      ...(authProvider ? { authProvider } : {}),
+      requestInit: { headers: this.requestHeaders(server) },
+      onInsufficientScope: 'throw'
     });
     const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.14' });
     let connected = false;
