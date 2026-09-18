@@ -4,7 +4,19 @@ import type { AuditLogger, AuditRisk } from './audit.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import { DynamicMcpHub } from './dynamic-mcp-hub.js';
 
-const MANAGE_ACTIONS = ['list', 'inspect', 'add', 'remove', 'enable', 'disable', 'refresh'] as const;
+const MANAGE_ACTIONS = [
+  'list',
+  'inspect',
+  'add',
+  'remove',
+  'enable',
+  'disable',
+  'set_oauth',
+  'auth_start',
+  'auth_status',
+  'auth_disconnect',
+  'refresh'
+] as const;
 type ManageAction = typeof MANAGE_ACTIONS[number];
 
 function failure(prefix: string, error: unknown) {
@@ -30,7 +42,7 @@ function requireFullControl(policy: DesktopPolicy): void {
 }
 
 function manageRisk(action: ManageAction): AuditRisk {
-  return action === 'list' || action === 'inspect' ? 'read' : 'write';
+  return action === 'list' || action === 'inspect' || action === 'auth_status' ? 'read' : 'write';
 }
 
 async function audited<T>(
@@ -73,13 +85,16 @@ export function registerDynamicMcpTools(
     'desktop_mcp_manage',
     {
       title: 'Manage Dynamic MCP Servers',
-      description: 'Manage DeskMCP\'s dynamic Streamable HTTP MCP registry. Registry entries store only endpoint metadata and environment-variable names for headers; secret values are never persisted or returned. Remote HTTP is rejected; remote endpoints must use HTTPS, while loopback HTTP is allowed.',
+      description: 'Manage DeskMCP\'s dynamic Streamable HTTP MCP registry and OAuth 2.1 authorization. Registry metadata never stores OAuth tokens, refresh tokens, PKCE verifiers, client secrets, or header secret values. OAuth secrets are kept in OS-protected storage. Remote HTTP is rejected; remote endpoints must use HTTPS, while loopback HTTP is allowed.',
       inputSchema: z.object({
         action: z.enum(MANAGE_ACTIONS),
         name: z.string().max(64).optional(),
         description: z.string().max(1024).optional(),
         url: z.string().max(4096).optional(),
         header_env: z.record(z.string(), z.string()).optional(),
+        oauth: z.boolean().optional(),
+        oauth_scope: z.string().max(8192).optional(),
+        force: z.boolean().optional(),
         enabled: z.boolean().optional(),
         timeout_ms: z.number().int().min(250).max(300000).optional()
       }),
@@ -114,6 +129,8 @@ export function registerDynamicMcpTools(
                 url: input.url,
                 ...(input.description ? { description: input.description } : {}),
                 ...(input.header_env ? { header_env: input.header_env } : {}),
+                ...(input.oauth !== undefined ? { oauth: input.oauth } : {}),
+                ...(input.oauth_scope !== undefined ? { oauth_scope: input.oauth_scope } : {}),
                 ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
                 ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {})
               })
@@ -130,6 +147,28 @@ export function registerDynamicMcpTools(
             policy.assertCanWrite();
             if (!input.name) throw new Error('disable requires name.');
             return { action: input.action, server: await hub.setEnabled(input.name, false) };
+          case 'set_oauth':
+            policy.assertCanWrite();
+            if (!input.name || input.oauth === undefined) throw new Error('set_oauth requires name and oauth.');
+            return {
+              action: input.action,
+              server: await hub.setOAuth(input.name, input.oauth, input.oauth_scope)
+            };
+          case 'auth_start':
+            policy.assertCanWrite();
+            requireFullControl(policy);
+            if (!input.name) throw new Error('auth_start requires name.');
+            return {
+              action: input.action,
+              authorization: await hub.startOAuth(input.name, input.force === true)
+            };
+          case 'auth_status':
+            if (!input.name) throw new Error('auth_status requires name.');
+            return { action: input.action, authorization: await hub.oauthStatus(input.name) };
+          case 'auth_disconnect':
+            policy.assertCanWrite();
+            if (!input.name) throw new Error('auth_disconnect requires name.');
+            return { action: input.action, authorization: await hub.disconnectOAuth(input.name) };
           case 'refresh':
             requireFullControl(policy);
             return { action: input.action, results: await hub.refresh(input.name) };

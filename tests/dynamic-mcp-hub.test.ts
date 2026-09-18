@@ -59,6 +59,29 @@ test('dynamic MCP registry persists only secret environment names, never secret 
   });
 });
 
+test('dynamic MCP registry persists OAuth metadata but never OAuth credentials', async () => {
+  await withHub(async ({ hub }) => {
+    const added = await hub.addServer({
+      name: 'oauth-metadata',
+      url: 'https://example.com/mcp',
+      oauth: true,
+      oauth_scope: 'admin read write admin',
+      enabled: false
+    }) as { oauth?: { enabled: boolean; scope?: string } };
+    assert.deepEqual(added.oauth, { enabled: true, scope: 'admin read write' });
+
+    const registry = await readFile(path.join(hub.root, 'servers.json'), 'utf8');
+    assert.match(registry, /"oauth"/u);
+    assert.match(registry, /"scope": "admin read write"/u);
+    assert.doesNotMatch(registry, /access_token|refresh_token|code_verifier|client_secret/iu);
+
+    const updated = await hub.setOAuth('oauth-metadata', true) as {
+      oauth?: { enabled: boolean; scope?: string };
+    };
+    assert.deepEqual(updated.oauth, { enabled: true });
+  });
+});
+
 test('dynamic MCP refresh, cached search, inspect, and live call work through one facade registry', async () => {
   const upstream = await startHttpServer('127.0.0.1', 0);
   try {
