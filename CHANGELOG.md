@@ -19,6 +19,7 @@ All notable changes to DeskMCP are documented here.
 - Browser Automation now uses an internal ProcessHost job-lifetime mode so Chromium launchers that exit immediately (reproduced with Chrome 153) no longer cause DeskMCP to close the Windows Job Object and kill the real browser process tree before `DevToolsActivePort` appears. Public process tools keep the existing root-lifetime behavior and still cannot daemonize descendants.
 - Browser startup now waits for the Playwright/CDP endpoint to become usable after `DevToolsActivePort` is published, fixing a reproduced Chrome 153 readiness race where the port file appeared 1–105 ms before the loopback CDP socket accepted connections and persistent headful profiles failed with `ECONNREFUSED`.
 - Agent Desktop Browser placement now waits until a real Chromium top-level window is observed on the leased virtual desktop before startup can succeed, and re-applies process-tree placement while the lease remains active and after page/window-creating browser actions. This fixes a live failure where the early process-tree scan saw zero windows, returned success, and Chrome later appeared on Desktop 1.
+- Agent Desktop Browser startup now keeps its newly created owned process session authoritative during the startup placement transaction instead of reconciling it immediately against the backend session list. This fixes a live race where the backend list had not yet published the new ProcessHost PID, causing DeskMCP to mark the Browser inactive and tear down Chrome before placement could complete. Normal post-start placement and lease reaping still reconcile ownership.
 
 ### Validation
 
@@ -29,6 +30,7 @@ All notable changes to DeskMCP are documented here.
 - Five real Chrome 153 probes measured a 1–105 ms gap between `DevToolsActivePort` publication and loopback CDP socket readiness for the persistent `console-audit` profile on an Agent Desktop lease.
 - Real Chrome 153 BrowserRuntime E2E started an isolated profile, published `DevToolsActivePort`, connected through Playwright, captured a snapshot/console state, and closed cleanly.
 - Agent Desktop Browser regression covers delayed real-window creation: zero-window placement attempts cannot satisfy startup, and later page creation re-applies placement to the same lease.
+- Browser ownership regression now covers an eventually-consistent backend process-session list: startup placement succeeds without premature reconciliation, then normal placement resumes reconciliation once the Browser startup transaction has completed.
 - WPF Release build: 0 warnings, 0 errors.
 - Installer release validation now launches a real install-root ProcessHost during upgrade and uninstall and requires both operations to terminate it cleanly before completion.
 

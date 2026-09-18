@@ -31,7 +31,7 @@ class FakeProcessController implements BrowserProcessController {
   readonly leaseIds: Array<string | undefined> = [];
   readonly terminated: string[] = [];
   readonly activeIds = new Set<string>();
-  readonly placements: Array<{ processSessionId: string; leaseId: string; timeoutMs: number }> = [];
+  readonly placements: Array<{ processSessionId: string; leaseId: string; timeoutMs: number; reconcile: boolean }> = [];
   placementWindows: number[] = [];
   failTerminate = false;
   private next = 1;
@@ -56,8 +56,8 @@ class FakeProcessController implements BrowserProcessController {
     return this.activeIds.has(processSessionId);
   }
 
-  async place(processSessionId: string, leaseId: string, timeoutMs = 250) {
-    this.placements.push({ processSessionId, leaseId, timeoutMs });
+  async place(processSessionId: string, leaseId: string, timeoutMs = 250, reconcile = true) {
+    this.placements.push({ processSessionId, leaseId, timeoutMs, reconcile });
     const windows = this.placementWindows.length > 0 ? this.placementWindows.shift()! : 1;
     return { moved: windows, windows };
   }
@@ -224,9 +224,11 @@ test('owned browser process controller constrains the whole process tree to an A
   const placements: Array<{ pid: number; leaseId: string; timeoutMs?: number }> = [];
   const asserted: string[] = [];
   const startCalls: unknown[][] = [];
+  let listedText = '';
+  let listCalls = 0;
   const bridge = {
     async startProcess(...args: unknown[]) { startCalls.push(args); return { isError: false, text: 'Process started with PID 4242' }; },
-    async listProcessSessions() { return { isError: false, text: 'PID: 4242' }; },
+    async listProcessSessions() { listCalls += 1; return { isError: false, text: listedText }; },
     async forceTerminateProcess() { return { isError: false, text: 'terminated' }; }
   } as unknown as DesktopBackendBridge;
   const agentDesktop = {
@@ -243,10 +245,18 @@ test('owned browser process controller constrains the whole process tree to an A
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0]?.[5], 'job');
   assert.deepEqual(placements, []);
-  const placed = await controller.place(sessionId, leaseId, 250);
-  assert.deepEqual(placed, { moved: 1, windows: 1 });
-  assert.deepEqual(placements, [{ pid: 4242, leaseId, timeoutMs: 250 }]);
-  assert.deepEqual(asserted, [leaseId, leaseId, leaseId, leaseId]);
+  const placedDuringStartup = await controller.place(sessionId, leaseId, 250, false);
+  assert.deepEqual(placedDuringStartup, { moved: 1, windows: 1 });
+  assert.equal(listCalls, 0, 'startup placement must not reconcile against eventually-consistent backend session listing');
+  listedText = 'PID: 4242';
+  const placedAfterStartup = await controller.place(sessionId, leaseId, 250);
+  assert.deepEqual(placedAfterStartup, { moved: 1, windows: 1 });
+  assert.equal(listCalls, 1);
+  assert.deepEqual(placements, [
+    { pid: 4242, leaseId, timeoutMs: 250 },
+    { pid: 4242, leaseId, timeoutMs: 250 }
+  ]);
+  assert.deepEqual(asserted, [leaseId, leaseId, leaseId, leaseId, leaseId, leaseId]);
 });
 
 test('browser runtime is disabled until an executable is configured locally', async t => {
@@ -561,9 +571,11 @@ test('Agent Desktop browser waits until a real window is placed before start suc
   assert.equal(started.active, true);
   assert.equal(controller.placements.length, 3);
   assert.deepEqual(controller.placements.map(row => row.leaseId), [leaseId, leaseId, leaseId]);
+  assert.deepEqual(controller.placements.map(row => row.reconcile), [false, false, false]);
   await browser.newPage(started.session_id);
   assert.equal(controller.placements.length, 4);
   assert.equal(controller.placements[3]?.leaseId, leaseId);
+  assert.equal(controller.placements[3]?.reconcile, true);
   assert.deepEqual(controller.terminated, []);
   await browser.closeAll();
 });
