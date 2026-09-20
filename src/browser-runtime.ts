@@ -43,6 +43,8 @@ const PROFILE_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const PROFILE_LOCK_TIMEOUT_MS = 250;
 const MAX_PERSISTENT_PROFILES = 32;
 const MAX_BROWSER_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+const DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const SESSION_REAPER_INTERVAL_MS = 1000;
 
 function browserActionMutatesObservedState(action: BrowserAction): boolean {
   switch (action.type) {
@@ -133,6 +135,7 @@ interface BrowserSessionRecord {
   readonly port: number;
   readonly agentDesktopLeaseId?: string;
   readonly createdAt: string;
+  lastActivityAt: number;
 }
 
 interface BrowserObservationRecord {
@@ -343,7 +346,7 @@ export class BrowserRuntime {
   private readonly cdp: BrowserCdpDriver;
   private readonly browserEngine: BrowserRuntimeInfo['engine'];
   private mutationChain: Promise<void> = Promise.resolve();
-  private leaseReaper: NodeJS.Timeout | undefined;
+  private sessionReaper: NodeJS.Timeout | undefined;
 
   constructor(
     readonly root: string,
@@ -351,7 +354,8 @@ export class BrowserRuntime {
     private readonly artifacts: ArtifactStore,
     cdp: BrowserCdpDriver | undefined = undefined,
     private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
-    private readonly agentDesktop?: AgentDesktopManager
+    private readonly agentDesktop?: AgentDesktopManager,
+    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS
   ) {
     if (cdp) {
       this.cdp = cdp;
@@ -376,11 +380,14 @@ export class BrowserRuntime {
     await mkdir(path.join(this.root, 'profiles'), { recursive: true, mode: 0o700 });
     await mkdir(path.join(this.root, 'profile-locks'), { recursive: true, mode: 0o700 });
     await mkdir(path.join(this.root, 'downloads'), { recursive: true, mode: 0o700 });
-    if (this.agentDesktop && !this.leaseReaper) {
-      this.leaseReaper = setInterval(() => {
-        void this.reapRevokedAgentDesktopLeases().catch(() => undefined);
-      }, 1000);
-      this.leaseReaper.unref();
+    if (!Number.isInteger(this.directSessionIdleTimeoutMs) || this.directSessionIdleTimeoutMs < 1000) {
+      throw new Error('Browser direct-session idle timeout must be at least 1000ms.');
+    }
+    if (!this.sessionReaper) {
+      this.sessionReaper = setInterval(() => {
+        void this.reapSessions().catch(() => undefined);
+      }, SESSION_REAPER_INTERVAL_MS);
+      this.sessionReaper.unref();
     }
   }
 
@@ -534,21 +541,31 @@ export class BrowserRuntime {
     if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  private async reapRevokedAgentDesktopLeases(): Promise<void> {
-    if (!this.agentDesktop) return;
+  private async reapSessions(): Promise<void> {
     await this.serializeMutation(async () => {
-      const leased = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
-      for (const record of leased) {
-        const leaseId = record.agentDesktopLeaseId!;
-        if (!await this.agentDesktop!.isLeaseActive(leaseId)) {
-          await this.disposeRecord(record);
-          continue;
+      if (this.agentDesktop) {
+        const leased = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
+        for (const record of leased) {
+          const leaseId = record.agentDesktopLeaseId!;
+          if (!await this.agentDesktop.isLeaseActive(leaseId)) {
+            await this.disposeRecord(record);
+            continue;
+          }
+          try {
+            await this.processController.place(record.processSessionId, leaseId, 100);
+          } catch {
+            await this.disposeRecord(record);
+          }
         }
-        try {
-          await this.processController.place(record.processSessionId, leaseId, 100);
-        } catch {
-          await this.disposeRecord(record);
-        }
+      }
+
+      const now = Date.now();
+      const idleDirectSessions = [...this.sessions.values()].filter(record =>
+        !record.agentDesktopLeaseId && now - record.lastActivityAt >= this.directSessionIdleTimeoutMs
+      );
+      for (const record of idleDirectSessions) {
+        try { await this.disposeRecord(record); }
+        catch { /* Keep ownership if termination fails; retry on the next reaper pass. */ }
       }
     });
   }
@@ -605,6 +622,7 @@ export class BrowserRuntime {
   private session(sessionId: string): BrowserSessionRecord {
     const selected = this.sessions.get(validateSessionId(sessionId));
     if (!selected) throw new Error('Browser session not found or no longer active.');
+    selected.lastActivityAt = Date.now();
     return selected;
   }
 
@@ -661,7 +679,8 @@ export class BrowserRuntime {
           headless,
           port,
           ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {}),
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          lastActivityAt: Date.now()
         };
         this.sessions.set(sessionId, record);
         return {
@@ -1017,9 +1036,9 @@ export class BrowserRuntime {
   }
 
   async closeAll(): Promise<void> {
-    if (this.leaseReaper) {
-      clearInterval(this.leaseReaper);
-      this.leaseReaper = undefined;
+    if (this.sessionReaper) {
+      clearInterval(this.sessionReaper);
+      this.sessionReaper = undefined;
     }
     await this.serializeMutation(async () => {
       const records = [...this.sessions.values()];
