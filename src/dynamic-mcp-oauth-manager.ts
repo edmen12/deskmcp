@@ -3,7 +3,6 @@ import {
   StreamableHTTPClientTransport,
   UnauthorizedError
 } from '@modelcontextprotocol/client';
-import { createHash } from 'node:crypto';
 import { DeskMcpOAuthProvider, type StaticOAuthClientCredentials } from './dynamic-mcp-oauth.js';
 import { PlatformSecretStore } from './platform-secret-store.js';
 import type { SecretStore } from './secure-secret-store.js';
@@ -23,7 +22,7 @@ interface OAuthTarget {
 }
 
 interface PendingOAuthFlow {
-  readonly targetKey: string;
+  readonly targetIdentity: string;
   readonly provider: DeskMcpOAuthProvider;
   readonly transport: StreamableHTTPClientTransport;
   readonly client: Client;
@@ -43,25 +42,20 @@ function isLoopbackUrl(value: string): boolean {
   return parsed.protocol === 'http:' && (host === '127.0.0.1' || host === 'localhost' || host === '::1');
 }
 
-function targetKey(
+function targetIdentity(
   name: string,
   url: string,
   scope: string | undefined,
   clientId: string | undefined,
   tokenEndpointAuthMethod: 'client_secret_basic' | 'client_secret_post' | 'none' | undefined
 ): string {
-  // This is a stable namespace key, not a credential hash. Deliberately accept
-  // only non-secret primitives so client-secret values and secret env names
-  // cannot enter the hashing data flow.
-  return createHash('sha256')
-    .update(JSON.stringify([
-      name,
-      url,
-      scope ?? '',
-      clientId ?? '',
-      tokenEndpointAuthMethod ?? ''
-    ]), 'utf8')
-    .digest('hex');
+  return JSON.stringify([
+    name,
+    url,
+    scope ?? '',
+    clientId ?? '',
+    tokenEndpointAuthMethod ?? ''
+  ]);
 }
 
 export class DynamicMcpOAuthManager {
@@ -90,7 +84,7 @@ export class DynamicMcpOAuthManager {
   }
 
   private storageKey(target: OAuthTarget): string {
-    return `dynamic-mcp:${targetKey(target.name, target.url, target.scope, target.static_client?.client_id, target.static_client?.token_endpoint_auth_method)}`;
+    return `dynamic-mcp:${target.name}`;
   }
 
   private staticClient(target: OAuthTarget, requireSecret: boolean): StaticOAuthClientCredentials | undefined {
@@ -202,7 +196,7 @@ export class DynamicMcpOAuthManager {
         throw error;
       }
       this.pending.set(target.name, {
-        targetKey: targetKey(target.name, target.url, target.scope, target.static_client?.client_id, target.static_client?.token_endpoint_auth_method),
+        targetIdentity: targetIdentity(target.name, target.url, target.scope, target.static_client?.client_id, target.static_client?.token_endpoint_auth_method),
         provider,
         transport,
         client,
@@ -224,7 +218,7 @@ export class DynamicMcpOAuthManager {
       await this.closePending(target.name);
       throw new Error('Dynamic MCP OAuth authorization expired. Start authorization again.');
     }
-    if (pending.targetKey !== targetKey(target.name, target.url, target.scope, target.static_client?.client_id, target.static_client?.token_endpoint_auth_method)) {
+    if (pending.targetIdentity !== targetIdentity(target.name, target.url, target.scope, target.static_client?.client_id, target.static_client?.token_endpoint_auth_method)) {
       await this.closePending(target.name);
       throw new Error('Dynamic MCP server configuration changed during OAuth authorization.');
     }
