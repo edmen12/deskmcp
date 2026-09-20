@@ -512,6 +512,36 @@ test('browser reconciliation removes sessions whose owned process has disappeare
 });
 
 
+test('idle direct browser sessions are automatically reaped and ephemeral profiles are removed', async t => {
+  const root = await tempRoot();
+  const browserRoot = path.join(root, 'browser');
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const controller = new FakeProcessController(browserRoot);
+  const browser = new BrowserRuntime(browserRoot, controller, artifacts, new FakeCdpDriver(), executable, undefined, 1000);
+  await browser.init();
+  t.after(async () => {
+    await browser.closeAll().catch(() => undefined);
+    await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true }));
+  });
+
+  const started = await browser.start();
+  const profileDir = path.join(browserRoot, 'profiles', started.profile_id);
+  assert.equal((await stat(profileDir)).isDirectory(), true);
+
+  const deadline = Date.now() + 3500;
+  while ((await browser.list()).length > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  assert.equal((await browser.list()).length, 0);
+  assert.deepEqual(controller.terminated, ['process-1']);
+  await assert.rejects(() => stat(profileDir), /ENOENT/);
+});
+
+
 test('closing an Agent Desktop lease only closes browser sessions owned by that lease', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
