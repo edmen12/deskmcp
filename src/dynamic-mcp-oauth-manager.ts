@@ -4,7 +4,7 @@ import {
   UnauthorizedError
 } from '@modelcontextprotocol/client';
 import { createHash } from 'node:crypto';
-import { DeskMcpOAuthProvider } from './dynamic-mcp-oauth.js';
+import { DeskMcpOAuthProvider, type StaticOAuthClientCredentials } from './dynamic-mcp-oauth.js';
 import { PlatformSecretStore } from './platform-secret-store.js';
 import type { SecretStore } from './secure-secret-store.js';
 
@@ -14,6 +14,11 @@ interface OAuthTarget {
   readonly name: string;
   readonly url: string;
   readonly scope?: string;
+  readonly static_client?: {
+    readonly client_id: string;
+    readonly client_secret_env?: string;
+    readonly token_endpoint_auth_method: 'client_secret_basic' | 'client_secret_post' | 'none';
+  };
   readonly timeout_ms: number;
 }
 
@@ -38,9 +43,16 @@ function isLoopbackUrl(value: string): boolean {
   return parsed.protocol === 'http:' && (host === '127.0.0.1' || host === 'localhost' || host === '::1');
 }
 
-function targetKey(target: Pick<OAuthTarget, 'name' | 'url' | 'scope'>): string {
+function targetKey(target: OAuthTarget): string {
   return createHash('sha256')
-    .update(JSON.stringify([target.name, target.url, target.scope ?? '']), 'utf8')
+    .update(JSON.stringify([
+      target.name,
+      target.url,
+      target.scope ?? '',
+      target.static_client?.client_id ?? '',
+      target.static_client?.client_secret_env ?? '',
+      target.static_client?.token_endpoint_auth_method ?? ''
+    ]), 'utf8')
     .digest('hex');
 }
 
@@ -73,24 +85,61 @@ export class DynamicMcpOAuthManager {
     return `dynamic-mcp:${targetKey(target)}`;
   }
 
-  async authProvider(target: OAuthTarget): Promise<DeskMcpOAuthProvider> {
+  private staticClient(target: OAuthTarget, requireSecret: boolean): StaticOAuthClientCredentials | undefined {
+    const configured = target.static_client;
+    if (!configured) return undefined;
+    const secret = configured.client_secret_env === undefined
+      ? undefined
+      : process.env[configured.client_secret_env];
+    if (requireSecret && configured.token_endpoint_auth_method !== 'none' && !secret) {
+      throw new Error(
+        `OAuth client secret environment variable is not configured: ${configured.client_secret_env ?? '(missing configuration)'}.`
+      );
+    }
+    return {
+      clientId: configured.client_id,
+      ...(secret ? { clientSecret: secret } : {}),
+      tokenEndpointAuthMethod: configured.token_endpoint_auth_method
+    };
+  }
+
+  private async createProvider(
+    target: OAuthTarget,
+    onRedirect?: (url: URL) => void | Promise<void>,
+    requireStaticSecret = true
+  ): Promise<DeskMcpOAuthProvider> {
     await this.store.init?.();
     const provider = new DeskMcpOAuthProvider(
       this.storageKey(target),
       this.store,
       this.callbackUrl(target.name),
-      target.scope
+      target.scope,
+      onRedirect,
+      this.staticClient(target, requireStaticSecret)
     );
     await provider.init();
     return provider;
   }
 
+  async authProvider(target: OAuthTarget): Promise<DeskMcpOAuthProvider> {
+    return this.createProvider(target);
+  }
+
   async status(target: OAuthTarget): Promise<unknown> {
-    const provider = await this.authProvider(target);
+    const provider = await this.createProvider(target, undefined, false);
     return {
       name: target.name,
       callback_url: this.callbackUrl(target.name),
       ...(await provider.publicStatus()),
+      ...(target.static_client ? {
+        static_client: {
+          client_id: target.static_client.client_id,
+          token_endpoint_auth_method: target.static_client.token_endpoint_auth_method,
+          client_secret_configured: target.static_client.client_secret_env
+            ? Boolean(process.env[target.static_client.client_secret_env])
+            : true
+        }
+      } : {}),
       pending_authorization: this.pending.has(target.name)
     };
   }
@@ -116,14 +165,10 @@ export class DynamicMcpOAuthManager {
     const callbackUrl = this.callbackUrl(target.name);
     let capturedAuthorizationUrl: URL | undefined;
     await this.store.init?.();
-    const provider = new DeskMcpOAuthProvider(
-      this.storageKey(target),
-      this.store,
-      callbackUrl,
-      target.scope,
+    const provider = await this.createProvider(
+      target,
       url => { capturedAuthorizationUrl = new URL(url); }
     );
-    await provider.init();
     if (force) {
       await provider.invalidateCredentials?.('tokens');
       await provider.invalidateCredentials?.('verifier');

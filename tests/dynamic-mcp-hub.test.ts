@@ -73,12 +73,67 @@ test('dynamic MCP registry persists OAuth metadata but never OAuth credentials',
     const registry = await readFile(path.join(hub.root, 'servers.json'), 'utf8');
     assert.match(registry, /"oauth"/u);
     assert.match(registry, /"scope": "admin read write"/u);
-    assert.doesNotMatch(registry, /access_token|refresh_token|code_verifier|client_secret/iu);
+    assert.doesNotMatch(registry, /access_token|refresh_token|code_verifier|github-client-secret/iu);
 
     const updated = await hub.setOAuth('oauth-metadata', true) as {
       oauth?: { enabled: boolean; scope?: string };
     };
     assert.deepEqual(updated.oauth, { enabled: true });
+  });
+});
+
+test('dynamic MCP registry supports static OAuth clients through environment variable references only', async () => {
+  await withHub(async ({ hub }) => {
+    const added = await hub.addServer({
+      name: 'github',
+      url: 'https://api.githubcopilot.com/mcp/',
+      oauth: true,
+      oauth_scope: 'read:user repo',
+      oauth_client_id: 'github-oauth-client-id',
+      oauth_client_secret_env: 'DESKMCP_GITHUB_OAUTH_CLIENT_SECRET',
+      enabled: false
+    }) as {
+      oauth?: {
+        enabled: boolean;
+        scope?: string;
+        static_client?: {
+          client_id: string;
+          client_secret_env?: string;
+          token_endpoint_auth_method: string;
+        };
+      };
+    };
+    assert.deepEqual(added.oauth, {
+      enabled: true,
+      scope: 'read:user repo',
+      static_client: {
+        client_id: 'github-oauth-client-id',
+        client_secret_env: 'DESKMCP_GITHUB_OAUTH_CLIENT_SECRET',
+        token_endpoint_auth_method: 'client_secret_post'
+      }
+    });
+
+    const registry = await readFile(path.join(hub.root, 'servers.json'), 'utf8');
+    assert.match(registry, /DESKMCP_GITHUB_OAUTH_CLIENT_SECRET/u);
+    assert.doesNotMatch(registry, /github-client-secret/u);
+
+    await assert.rejects(
+      hub.addServer({
+        name: 'invalid-static-client',
+        url: 'https://example.com/mcp',
+        oauth: true,
+        oauth_client_secret_env: 'DESKMCP_GITHUB_OAUTH_CLIENT_SECRET'
+      }),
+      /require oauth_client_id/i
+    );
+
+    const tamperedRegistryPath = path.join(hub.root, 'servers.json');
+    const tampered = JSON.parse(await readFile(tamperedRegistryPath, 'utf8')) as {
+      servers: Array<{ oauth?: { static_client?: Record<string, unknown> } }>;
+    };
+    tampered.servers[0]!.oauth!.static_client!.client_secret = 'github-client-secret';
+    await writeFile(tamperedRegistryPath, `${JSON.stringify(tampered, null, 2)}\n`, 'utf8');
+    await assert.rejects(hub.listServers(), /must reference a secret environment variable/i);
   });
 });
 

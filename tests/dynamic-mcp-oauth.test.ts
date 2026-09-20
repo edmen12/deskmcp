@@ -79,6 +79,60 @@ test('DeskMCP OAuth provider persists protocol state without exposing secrets in
   assert.equal((await reloaded.publicStatus()).authenticated, false);
 });
 
+test('DeskMCP OAuth provider uses a pre-registered client without persisting its secret', async () => {
+  const store = new MemorySecretStore();
+  const provider = new DeskMcpOAuthProvider(
+    'oauth:static-client',
+    store,
+    'http://127.0.0.1:8765/oauth/callback/github',
+    'read:user',
+    undefined,
+    {
+      clientId: 'github-client-id',
+      clientSecret: 'github-client-secret',
+      tokenEndpointAuthMethod: 'client_secret_post'
+    }
+  );
+  await provider.init();
+
+  const client = await provider.clientInformation({ issuer: 'https://github.com/login/oauth' });
+  assert.deepEqual(client, {
+    client_id: 'github-client-id',
+    client_secret: 'github-client-secret',
+    token_endpoint_auth_method: 'client_secret_post',
+    issuer: 'https://github.com/login/oauth'
+  });
+
+  await provider.saveClientInformation(
+    { client_id: 'must-not-be-persisted', client_secret: 'must-not-be-persisted' } as StoredOAuthClientInformation,
+    { issuer: 'https://github.com/login/oauth' }
+  );
+  assert.equal(await store.get('oauth:static-client'), undefined);
+  assert.equal(
+    (await provider.clientInformation({ issuer: 'https://github.com/login/oauth' }))?.client_id,
+    'github-client-id'
+  );
+});
+
+test('DeskMCP OAuth provider enforces the configured authorization scope at redirect time', async () => {
+  const store = new MemorySecretStore();
+  let redirected: URL | undefined;
+  const provider = new DeskMcpOAuthProvider(
+    'oauth:scoped',
+    store,
+    'http://127.0.0.1:8765/oauth/callback/github',
+    'read:user repo',
+    (url) => { redirected = url; }
+  );
+
+  await provider.redirectToAuthorization(new URL(
+    'https://github.com/login/oauth/authorize?client_id=test&scope=repo+admin%3Aorg+offline_access'
+  ));
+
+  assert.equal(redirected?.searchParams.get('scope'), 'read:user repo offline_access');
+  assert.equal(provider.authorizationUrl?.searchParams.get('scope'), 'read:user repo offline_access');
+});
+
 test('Windows OAuth secret store uses CurrentUser protection and supports overwrite/delete', {
   skip: process.platform !== 'win32'
 }, async () => {

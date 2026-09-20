@@ -26,6 +26,17 @@ export interface OAuthPublicStatus {
   readonly issuer?: string;
 }
 
+/**
+ * Credentials for an OAuth client that was registered with an authorization
+ * server out of band. The secret is supplied at runtime only and is never
+ * persisted by this provider.
+ */
+export interface StaticOAuthClientCredentials {
+  readonly clientId: string;
+  readonly clientSecret?: string;
+  readonly tokenEndpointAuthMethod: 'client_secret_basic' | 'client_secret_post' | 'none';
+}
+
 function emptyState(): PersistedOAuthState {
   return { version: 1, clients: {} };
 }
@@ -66,7 +77,8 @@ export class DeskMcpOAuthProvider implements OAuthClientProvider {
     private readonly store: SecretStore,
     readonly redirectUrl: string,
     private readonly requestedScope?: string,
-    private readonly onRedirect?: (url: URL) => void | Promise<void>
+    private readonly onRedirect?: (url: URL) => void | Promise<void>,
+    private readonly staticClient?: StaticOAuthClientCredentials
   ) {}
 
   async init(): Promise<void> {
@@ -98,6 +110,14 @@ export class DeskMcpOAuthProvider implements OAuthClientProvider {
 
   async clientInformation(ctx?: OAuthClientInformationContext): Promise<StoredOAuthClientInformation | undefined> {
     await this.init();
+    if (this.staticClient) {
+      return {
+        client_id: this.staticClient.clientId,
+        ...(this.staticClient.clientSecret ? { client_secret: this.staticClient.clientSecret } : {}),
+        token_endpoint_auth_method: this.staticClient.tokenEndpointAuthMethod,
+        ...(ctx ? { issuer: ctx.issuer } : {})
+      };
+    }
     if (!ctx) return undefined;
     return this.stateValue.clients[ctx.issuer];
   }
@@ -107,6 +127,10 @@ export class DeskMcpOAuthProvider implements OAuthClientProvider {
     ctx?: OAuthClientInformationContext
   ): Promise<void> {
     await this.init();
+    // A static client is configured by the registry and may include a secret
+    // read from an environment variable. Never persist that secret in the
+    // OAuth state, even if an SDK caller attempts to save it.
+    if (this.staticClient) return;
     if (!ctx?.issuer) throw new Error('OAuth client registration is missing its authorization-server issuer binding.');
     this.stateValue = {
       ...this.stateValue,
@@ -133,8 +157,11 @@ export class DeskMcpOAuthProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
-    this.authorizationUrlValue = new URL(authorizationUrl);
-    await this.onRedirect?.(new URL(authorizationUrl));
+    const redirectUrl = new URL(authorizationUrl);
+    const scope = this.authorizationScope(redirectUrl);
+    if (scope) redirectUrl.searchParams.set('scope', scope);
+    this.authorizationUrlValue = redirectUrl;
+    await this.onRedirect?.(new URL(redirectUrl));
   }
 
   state(): string {
@@ -235,5 +262,23 @@ export class DeskMcpOAuthProvider implements OAuthClientProvider {
 
   private async persist(): Promise<void> {
     await this.store.set(this.storageKey, JSON.stringify(this.stateValue));
+  }
+
+  /**
+   * Resource metadata can advertise a broad set of available scopes. Some
+   * OAuth transports pass that list as an explicit request, which takes
+   * precedence over client metadata in the SDK. Enforce the scope selected in
+   * the DeskMCP registry at the final redirect boundary. Keep offline_access
+   * only when the authorization server already requested it, so refresh-token
+   * support is not accidentally disabled.
+   */
+  private authorizationScope(authorizationUrl: URL): string | undefined {
+    if (!this.requestedScope) return undefined;
+    const requested = this.requestedScope.split(/\s+/u).filter(Boolean);
+    const offered = authorizationUrl.searchParams.get('scope')?.split(/\s+/u).filter(Boolean) ?? [];
+    if (offered.includes('offline_access') && !requested.includes('offline_access')) {
+      requested.push('offline_access');
+    }
+    return requested.join(' ');
   }
 }
