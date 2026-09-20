@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { renameFileWithRetry } from './fs-reliability.js';
@@ -11,8 +11,10 @@ const KEYCHAIN_SERVICE = 'com.deskmcp.oauth';
 const ENTROPY = 'DeskMCP OAuth Secret Store v1';
 
 function idFor(key: string): string {
-  if (!key.trim()) throw new Error('Secret store key is required.');
-  return createHash('sha256').update(key, 'utf8').digest('hex');
+  const normalized = key.trim();
+  if (!normalized) throw new Error('Secret store key is required.');
+  if (Buffer.byteLength(normalized, 'utf8') > 256) throw new Error('Secret store key is too long.');
+  return Buffer.from(normalized, 'utf8').toString('base64url');
 }
 
 async function runHelper(
