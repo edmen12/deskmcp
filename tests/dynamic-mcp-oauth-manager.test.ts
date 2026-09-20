@@ -145,3 +145,100 @@ test('OAuth manager discovers maximum resource scopes, validates state, and stor
     await running.close();
   }
 });
+
+test('OAuth manager bypasses dynamic registration for a static client and posts its secret only to the token endpoint', async () => {
+  let base = '';
+  let registerRequests = 0;
+  let tokenRequest = '';
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      const parsed = new URL(req.url ?? '/', base || 'http://127.0.0.1');
+      if (parsed.pathname === '/mcp') {
+        res.writeHead(401, {
+          'www-authenticate': `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`
+        });
+        res.end();
+        return;
+      }
+      if (parsed.pathname.startsWith('/.well-known/oauth-protected-resource')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ resource: `${base}/mcp`, authorization_servers: [base] }));
+        return;
+      }
+      if (
+        parsed.pathname.startsWith('/.well-known/oauth-authorization-server') ||
+        parsed.pathname.startsWith('/.well-known/openid-configuration')
+      ) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          issuer: base,
+          authorization_endpoint: `${base}/authorize`,
+          token_endpoint: `${base}/token`,
+          response_types_supported: ['code'],
+          grant_types_supported: ['authorization_code', 'refresh_token'],
+          token_endpoint_auth_methods_supported: ['client_secret_post'],
+          code_challenge_methods_supported: ['S256']
+        }));
+        return;
+      }
+      if (parsed.pathname === '/register') {
+        registerRequests += 1;
+        res.writeHead(500).end();
+        return;
+      }
+      if (parsed.pathname === '/token' && req.method === 'POST') {
+        tokenRequest = await readBody(req);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          access_token: 'static-access-token-secret',
+          token_type: 'Bearer'
+        }));
+        return;
+      }
+      res.writeHead(404).end();
+    })().catch(() => {
+      res.writeHead(500).end();
+    });
+  });
+
+  const running = await listen(server);
+  base = running.base;
+  const envName = 'DESKMCP_STATIC_OAUTH_TEST_SECRET';
+  const previous = process.env[envName];
+  process.env[envName] = 'static-client-secret';
+  try {
+    const manager = new DynamicMcpOAuthManager('unused-test-root', new MemorySecretStore());
+    manager.setCallbackBaseUrl('http://127.0.0.1:8765');
+    const target = {
+      name: 'static-oauth-test',
+      url: `${base}/mcp`,
+      timeout_ms: 5000,
+      static_client: {
+        client_id: 'static-client-id',
+        client_secret_env: envName,
+        token_endpoint_auth_method: 'client_secret_post' as const
+      }
+    };
+
+    const started = await manager.start(target, {});
+    assert.equal(started.status, 'authorization_required');
+    assert.equal(new URL(started.authorization_url!).searchParams.get('client_id'), 'static-client-id');
+    assert.equal(registerRequests, 0);
+    const state = new URL(started.authorization_url!).searchParams.get('state');
+    assert.ok(state);
+
+    await manager.finishCallback(target, new URLSearchParams({ code: 'static-code', state: state! }));
+    assert.equal(registerRequests, 0);
+    assert.match(tokenRequest, /client_id=static-client-id/u);
+    assert.match(tokenRequest, /client_secret=static-client-secret/u);
+    assert.match(tokenRequest, /code_verifier=/u);
+
+    const status = await manager.status(target);
+    assert.equal(JSON.stringify(status).includes('static-client-secret'), false);
+    assert.match(JSON.stringify(status), /client_secret_configured/u);
+  } finally {
+    if (previous === undefined) delete process.env[envName];
+    else process.env[envName] = previous;
+    await running.close();
+  }
+});

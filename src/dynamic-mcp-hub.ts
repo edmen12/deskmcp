@@ -20,6 +20,7 @@ const MAX_TOOL_SCHEMA_BYTES = 256 * 1024;
 const MAX_TOOL_ANNOTATIONS_BYTES = 64 * 1024;
 const MAX_TOOL_RESULT_BYTES = 8 * 1024 * 1024;
 const MAX_OAUTH_SCOPE_BYTES = 8 * 1024;
+const MAX_OAUTH_CLIENT_ID_BYTES = 1024;
 const MAX_REFRESH_ALL_MS = 120_000;
 const REGISTRY_LOCK_TIMEOUT_MS = 5_000;
 const REGISTRY_LOCK_INITIALIZATION_GRACE_MS = 5_000;
@@ -52,6 +53,11 @@ export interface DynamicMcpToolDefinition extends DynamicMcpToolSummary {
 export interface DynamicMcpOAuthConfig {
   readonly enabled: true;
   readonly scope?: string;
+  readonly static_client?: {
+    readonly client_id: string;
+    readonly client_secret_env?: string;
+    readonly token_endpoint_auth_method: 'client_secret_basic' | 'client_secret_post' | 'none';
+  };
 }
 
 export interface DynamicMcpServerConfig {
@@ -83,6 +89,9 @@ export interface AddDynamicMcpServerInput {
   readonly header_env?: Readonly<Record<string, string>>;
   readonly oauth?: boolean;
   readonly oauth_scope?: string;
+  readonly oauth_client_id?: string;
+  readonly oauth_client_secret_env?: string;
+  readonly oauth_client_auth_method?: 'client_secret_basic' | 'client_secret_post' | 'none';
   readonly enabled?: boolean;
   readonly timeout_ms?: number;
 }
@@ -181,16 +190,49 @@ function normalizeOAuthScope(value: string | undefined): string | undefined {
 
 function normalizeOAuth(
   enabled: boolean | undefined,
-  scope: string | undefined
+  scope: string | undefined,
+  clientId?: string,
+  clientSecretEnv?: string,
+  clientAuthMethod?: 'client_secret_basic' | 'client_secret_post' | 'none'
 ): DynamicMcpOAuthConfig | undefined {
-  if (scope !== undefined && enabled !== true) {
-    throw new Error('Dynamic MCP oauth_scope requires oauth=true.');
+  if ((scope !== undefined || clientId !== undefined || clientSecretEnv !== undefined || clientAuthMethod !== undefined)
+    && enabled !== true) {
+    throw new Error('Dynamic MCP OAuth settings require oauth=true.');
   }
   if (enabled !== true) return undefined;
   const normalizedScope = normalizeOAuthScope(scope);
+  let staticClient: DynamicMcpOAuthConfig['static_client'];
+  if (clientId !== undefined) {
+    const normalizedClientId = clientId.trim();
+    if (!normalizedClientId || Buffer.byteLength(normalizedClientId, 'utf8') > MAX_OAUTH_CLIENT_ID_BYTES) {
+      throw new Error(`Dynamic MCP OAuth client ID is invalid or exceeds ${MAX_OAUTH_CLIENT_ID_BYTES} bytes.`);
+    }
+    let normalizedSecretEnv: string | undefined;
+    if (clientSecretEnv !== undefined) {
+      normalizedSecretEnv = clientSecretEnv.trim();
+      if (!ENV_NAME_PATTERN.test(normalizedSecretEnv)) {
+        throw new Error('Dynamic MCP OAuth client secret environment variable name is invalid.');
+      }
+    }
+    const authMethod = clientAuthMethod ?? (normalizedSecretEnv ? 'client_secret_post' : 'none');
+    if (authMethod !== 'none' && !normalizedSecretEnv) {
+      throw new Error(`Dynamic MCP OAuth ${authMethod} requires oauth_client_secret_env.`);
+    }
+    if (authMethod === 'none' && normalizedSecretEnv) {
+      throw new Error('Dynamic MCP OAuth client secret environment requires client_secret_basic or client_secret_post.');
+    }
+    staticClient = {
+      client_id: normalizedClientId,
+      ...(normalizedSecretEnv ? { client_secret_env: normalizedSecretEnv } : {}),
+      token_endpoint_auth_method: authMethod
+    };
+  } else if (clientSecretEnv !== undefined || clientAuthMethod !== undefined) {
+    throw new Error('Dynamic MCP oauth_client_secret_env and oauth_client_auth_method require oauth_client_id.');
+  }
   return {
     enabled: true,
-    ...(normalizedScope ? { scope: normalizedScope } : {})
+    ...(normalizedScope ? { scope: normalizedScope } : {}),
+    ...(staticClient ? { static_client: staticClient } : {})
   };
 }
 
@@ -293,11 +335,43 @@ function parseRegistry(value: unknown): RegistryFile {
       if (!entry.oauth || typeof entry.oauth !== 'object' || entry.oauth.enabled !== true) {
         throw new Error(`Dynamic MCP OAuth configuration for ${name} is invalid.`);
       }
-      const rawScope = entry.oauth.scope;
+      const rawOAuth = entry.oauth as unknown as Record<string, unknown>;
+      if ('client_secret' in rawOAuth || 'oauth_client_secret' in rawOAuth) {
+        throw new Error(`Dynamic MCP OAuth configuration for ${name} must reference a secret environment variable, not contain a client secret.`);
+      }
+      const rawScope = rawOAuth.scope;
       if (rawScope !== undefined && typeof rawScope !== 'string') {
         throw new Error(`Dynamic MCP OAuth scope for ${name} is invalid.`);
       }
-      oauth = normalizeOAuth(true, rawScope);
+      const rawStaticClient = rawOAuth.static_client;
+      let clientId: string | undefined;
+      let clientSecretEnv: string | undefined;
+      let clientAuthMethod: 'client_secret_basic' | 'client_secret_post' | 'none' | undefined;
+      if (rawStaticClient !== undefined) {
+        if (!rawStaticClient || typeof rawStaticClient !== 'object' || Array.isArray(rawStaticClient)) {
+          throw new Error(`Dynamic MCP static OAuth client for ${name} is invalid.`);
+        }
+        const client = rawStaticClient as Record<string, unknown>;
+        if ('client_secret' in client || 'oauth_client_secret' in client) {
+          throw new Error(`Dynamic MCP static OAuth client for ${name} must reference a secret environment variable, not contain a client secret.`);
+        }
+        if (typeof client.client_id !== 'string') {
+          throw new Error(`Dynamic MCP static OAuth client ID for ${name} is invalid.`);
+        }
+        if (client.client_secret_env !== undefined && typeof client.client_secret_env !== 'string') {
+          throw new Error(`Dynamic MCP static OAuth client secret environment for ${name} is invalid.`);
+        }
+        if (client.token_endpoint_auth_method !== undefined
+          && client.token_endpoint_auth_method !== 'client_secret_basic'
+          && client.token_endpoint_auth_method !== 'client_secret_post'
+          && client.token_endpoint_auth_method !== 'none') {
+          throw new Error(`Dynamic MCP static OAuth client authentication method for ${name} is invalid.`);
+        }
+        clientId = client.client_id;
+        clientSecretEnv = client.client_secret_env as string | undefined;
+        clientAuthMethod = client.token_endpoint_auth_method as typeof clientAuthMethod;
+      }
+      oauth = normalizeOAuth(true, rawScope, clientId, clientSecretEnv, clientAuthMethod);
     }
     const timeout = normalizeTimeout(entry.timeout_ms);
     const enabled = entry.enabled !== false;
@@ -390,6 +464,7 @@ export class DynamicMcpHub {
       name: server.name,
       url: server.url,
       ...(server.oauth.scope ? { scope: server.oauth.scope } : {}),
+      ...(server.oauth.static_client ? { static_client: server.oauth.static_client } : {}),
       timeout_ms: server.timeout_ms
     };
   }
@@ -496,7 +571,13 @@ export class DynamicMcpHub {
         throw new Error(`Dynamic MCP registry is limited to ${MAX_SERVERS} servers.`);
       }
       const description = normalizeDescription(input.description);
-      const oauth = normalizeOAuth(input.oauth, input.oauth_scope);
+      const oauth = normalizeOAuth(
+        input.oauth,
+        input.oauth_scope,
+        input.oauth_client_id,
+        input.oauth_client_secret_env,
+        input.oauth_client_auth_method
+      );
       const server: DynamicMcpServerConfig = {
         name,
         ...(description ? { description } : {}),
@@ -543,14 +624,21 @@ export class DynamicMcpHub {
     });
   }
 
-  async setOAuth(name: string, enabled: boolean, scope?: string): Promise<unknown> {
+  async setOAuth(
+    name: string,
+    enabled: boolean,
+    scope?: string,
+    clientId?: string,
+    clientSecretEnv?: string,
+    clientAuthMethod?: 'client_secret_basic' | 'client_secret_post' | 'none'
+  ): Promise<unknown> {
     return this.serializeMutation(async () => {
       const registry = await this.load();
       const normalized = normalizeName(name);
       const index = registry.servers.findIndex(server => server.name === normalized);
       if (index < 0) throw new Error(`Dynamic MCP server not found: ${normalized}.`);
       const current = registry.servers[index]!;
-      const nextOAuth = normalizeOAuth(enabled, scope);
+      const nextOAuth = normalizeOAuth(enabled, scope, clientId, clientSecretEnv, clientAuthMethod);
       if (current.oauth && JSON.stringify(current.oauth) !== JSON.stringify(nextOAuth ?? null)) {
         await this.oauthManager.disconnect(this.oauthTarget(current));
       }

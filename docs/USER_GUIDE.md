@@ -88,6 +88,14 @@ Use **Unbind** only on an idle or unavailable binding. A controlling desktop sho
 
 When an agent controls a desktop, the blue safety edge and **Exit Agent Control** HUD appear only while you are viewing that controlled desktop. Switching back to Desktop 1 hides the HUD without stopping the agent. Browser Automation started with an Agent Desktop lease keeps its page/login state for the lifetime of that lease and closes when Agent Control exits, is revoked, or its linked Task Room completes.
 
+### Dynamic MCP OAuth
+
+Dynamic MCP connections use Streamable HTTP. For providers that support automatic OAuth client registration, DeskMCP registers a client and stores tokens in OS-protected storage. Some providers, including GitHub MCP, require a pre-created OAuth App instead.
+
+For a pre-created app, configure `desktop_mcp_manage` with `oauth=true`, `oauth_client_id`, and the name of a local `oauth_client_secret_env`; do not provide the secret itself to DeskMCP or an agent. If the provider uses a confidential client, set `oauth_client_auth_method` to the method it documents. GitHub OAuth Apps use `client_secret_post`, which DeskMCP selects by default when a secret environment variable is supplied.
+
+Create the environment variable locally, then restart DeskMCP so the Gateway inherits it. Use `auth_status` to obtain the exact loopback callback URL, add that URL to the OAuth App's callback URLs, and then run `auth_start`. DeskMCP keeps the client ID and environment-variable name in its registry, but never the client secret; tokens and PKCE state remain in OS-protected storage.
+
 ## 4. Tray behavior
 
 - **Quit Control Panel (Keep Services Running)** closes the UI but leaves services running.

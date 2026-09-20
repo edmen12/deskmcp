@@ -85,7 +85,7 @@ export function registerDynamicMcpTools(
     'desktop_mcp_manage',
     {
       title: 'Manage Dynamic MCP Servers',
-      description: 'Manage DeskMCP\'s dynamic Streamable HTTP MCP registry and OAuth 2.1 authorization. Registry metadata never stores OAuth tokens, refresh tokens, PKCE verifiers, client secrets, or header secret values. OAuth secrets are kept in OS-protected storage. Remote HTTP is rejected; remote endpoints must use HTTPS, while loopback HTTP is allowed.',
+      description: 'Manage DeskMCP\'s dynamic Streamable HTTP MCP registry and OAuth 2.1 authorization. For pre-registered OAuth clients, set oauth_client_id and reference (never provide) a local oauth_client_secret_env. Registry metadata never stores OAuth tokens, refresh tokens, PKCE verifiers, client secrets, or header secret values. OAuth tokens are kept in OS-protected storage. Remote HTTP is rejected; remote endpoints must use HTTPS, while loopback HTTP is allowed.',
       inputSchema: z.object({
         action: z.enum(MANAGE_ACTIONS),
         name: z.string().max(64).optional(),
@@ -94,6 +94,9 @@ export function registerDynamicMcpTools(
         header_env: z.record(z.string(), z.string()).optional(),
         oauth: z.boolean().optional(),
         oauth_scope: z.string().max(8192).optional(),
+        oauth_client_id: z.string().max(1024).optional(),
+        oauth_client_secret_env: z.string().max(256).optional(),
+        oauth_client_auth_method: z.enum(['client_secret_basic', 'client_secret_post', 'none']).optional(),
         force: z.boolean().optional(),
         enabled: z.boolean().optional(),
         timeout_ms: z.number().int().min(250).max(300000).optional()
@@ -131,6 +134,9 @@ export function registerDynamicMcpTools(
                 ...(input.header_env ? { header_env: input.header_env } : {}),
                 ...(input.oauth !== undefined ? { oauth: input.oauth } : {}),
                 ...(input.oauth_scope !== undefined ? { oauth_scope: input.oauth_scope } : {}),
+                ...(input.oauth_client_id !== undefined ? { oauth_client_id: input.oauth_client_id } : {}),
+                ...(input.oauth_client_secret_env !== undefined ? { oauth_client_secret_env: input.oauth_client_secret_env } : {}),
+                ...(input.oauth_client_auth_method !== undefined ? { oauth_client_auth_method: input.oauth_client_auth_method } : {}),
                 ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
                 ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {})
               })
@@ -152,7 +158,14 @@ export function registerDynamicMcpTools(
             if (!input.name || input.oauth === undefined) throw new Error('set_oauth requires name and oauth.');
             return {
               action: input.action,
-              server: await hub.setOAuth(input.name, input.oauth, input.oauth_scope)
+              server: await hub.setOAuth(
+                input.name,
+                input.oauth,
+                input.oauth_scope,
+                input.oauth_client_id,
+                input.oauth_client_secret_env,
+                input.oauth_client_auth_method
+              )
             };
           case 'auth_start':
             policy.assertCanWrite();
