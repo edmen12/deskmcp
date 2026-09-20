@@ -4,6 +4,32 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.15 — 2026-09-21
+
+### Added
+
+- Added OAuth 2.1 authorization for Dynamic MCP Streamable HTTP servers, including protected-resource discovery, PKCE/state validation, loopback callback handling, refresh-token capable token storage, explicit connect/disconnect/status actions, and Windows CurrentUser-protected secret persistence.
+- Added support for pre-registered/static OAuth clients for providers that do not support Dynamic Client Registration. DeskMCP persists only the public client ID, client-auth method, and the name of a local client-secret environment variable; the secret value itself is read only at runtime and is never written to the Dynamic MCP registry or public status.
+- Added explicit configured-scope enforcement at the final OAuth authorization redirect so a provider-advertised broad scope set cannot silently widen the scope selected in DeskMCP. `offline_access` is preserved only when the authorization server already requested it.
+
+### Fixed
+
+- Fixed installed/bundled Gateway runtime path resolution so the Control Panel can start the packaged Gateway from the installed runtime layout.
+- Fixed direct/headless Browser sessions accumulating indefinitely when an agent forgets to close them. Non-Agent-Desktop sessions now track activity and are automatically reaped after 30 minutes of inactivity; ephemeral profiles are removed and failed termination is retried without releasing ownership prematurely.
+- Preserved Agent Desktop Browser lease semantics while adding the direct-session reaper, so lease-owned browsers continue to live until their Agent Control lease exits or is revoked.
+
+### Security
+
+- Static OAuth client secrets are referenced by environment-variable name only in persisted configuration and are injected into the OAuth client only when required by the selected token-endpoint authentication method.
+- Dynamic MCP OAuth callback state, PKCE verifier and tokens remain in OS-protected storage and are not returned by normal status/configuration APIs.
+
+### Validation
+
+- TypeScript typecheck and build pass for 0.9.15.
+- Gateway/runtime JavaScript regression suite: 194 passed, 0 failed.
+- Release secret hygiene scan: 0 findings.
+- Browser Runtime focused regression: 24 passed, 0 failed, including idle direct-session cleanup and Agent Desktop lease lifetime coverage.
+
 ## 0.9.14 — 2026-09-18
 
 ### Changed

@@ -120,7 +120,7 @@ export class DesktopBackendBridge {
     });
 
     const client = new Client(
-      { name: 'deskmcp-gateway', version: '0.9.14' },
+      { name: 'deskmcp-gateway', version: '0.9.15' },
       { versionNegotiation: { mode: 'legacy' } }
     );
     let closed = false;
