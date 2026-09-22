@@ -225,7 +225,7 @@ Invoke-Native $csc @(
     '/nologo', '/target:winexe', ('/platform:' + $TargetConfig.CscPlatform), '/optimize+',
     ('/win32icon:' + $BrandIcon), ('/out:' + $SetupExe), '/reference:System.Windows.Forms.dll',
     '/reference:System.Drawing.dll', '/reference:System.IO.Compression.dll',
-    '/reference:System.IO.Compression.FileSystem.dll',
+    '/reference:System.IO.Compression.FileSystem.dll', '/reference:System.Management.dll',
     ('/resource:' + $PayloadZip + ',DesktopMCP.Payload.zip'),
     ('/resource:' + $PayloadHashFile + ',DesktopMCP.Payload.sha256'),
     ('/resource:' + $SourceCommitFile + ',DesktopMCP.SourceCommit.txt'),
@@ -273,6 +273,30 @@ try {
 }
 Require $mutexHolderClean 'Setup mutex holder did not finish cleanly.'
 Write-Output 'INSTALLER_SINGLE_INSTANCE=OK'
+Write-Output 'STEP=installer-smoke-owned-wrapper-discovery'
+$ownedWrapperProbeRoot = Join-Path $RuntimeRoot ('installer-owned-wrapper-probe\\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
+$ownedWrapperMarker = Join-Path $ownedWrapperProbeRoot 'DeskMCP.ProcessHost.exe'
+$ownedWrapper = $null
+try {
+    New-Item -ItemType Directory -Force -Path $ownedWrapperProbeRoot | Out-Null
+    $ownedWrapperPsi = [Diagnostics.ProcessStartInfo]::new()
+    $ownedWrapperPsi.FileName = 'cmd.exe'
+    $ownedWrapperPsi.Arguments = '/d /c "echo ' + $ownedWrapperMarker + ' >nul & ping -n 30 127.0.0.1 >nul"'
+    $ownedWrapperPsi.UseShellExecute = $false
+    $ownedWrapperPsi.CreateNoWindow = $true
+    $ownedWrapper = [Diagnostics.Process]::Start($ownedWrapperPsi)
+    Start-Sleep -Milliseconds 350
+    Require ($ownedWrapper -and -not $ownedWrapper.HasExited) 'Legacy owned-wrapper probe did not stay alive long enough for discovery.'
+    $ownedWrapperCheck = Start-Process -FilePath $SetupExe -ArgumentList @('--owned-wrapper-test', ('"' + $ownedWrapperProbeRoot + '"'), [string]$ownedWrapper.Id) -Wait -PassThru
+    Require ($ownedWrapperCheck.ExitCode -eq 0) ('Setup did not discover a legacy ProcessHost cmd wrapper outside the install root: ' + $ownedWrapperCheck.ExitCode)
+    Write-Output 'INSTALLER_OWNED_WRAPPER_DISCOVERY=OK'
+} finally {
+    if ($ownedWrapper -and -not $ownedWrapper.HasExited) {
+        try { Start-Process -FilePath 'taskkill.exe' -ArgumentList @('/PID',[string]$ownedWrapper.Id,'/T','/F') -Wait -WindowStyle Hidden | Out-Null } catch { }
+    }
+    if ($ownedWrapper) { try { $ownedWrapper.Dispose() } catch { } }
+    if (Test-Path -LiteralPath $ownedWrapperProbeRoot) { Remove-Item -LiteralPath $ownedWrapperProbeRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
 Write-Output 'STEP=installer-smoke-clean'
 if (Test-Path -LiteralPath $SmokeRoot) {
     $oldUninstaller = @(
