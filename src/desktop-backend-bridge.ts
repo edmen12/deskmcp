@@ -56,7 +56,7 @@ function buildProcessHostCommand(
   lifetime: 'root' | 'job' = 'root'
 ): string {
   const command64 = Buffer.from(command, 'utf8').toString('base64');
-  return `"${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}`;
+  return `cd /d "%USERPROFILE%" && "${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}`;
 }
 
 function elapsedMs(startedAt: number): number {

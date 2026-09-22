@@ -342,10 +342,41 @@ Require (Test-Path -LiteralPath $rollbackMarker) 'Failed upgrade did not restore
 
 $marker = Join-Path $SmokeRoot 'UPGRADE_OLD_MARKER.txt'
 [IO.File]::WriteAllText($marker, 'old-install-marker', [Text.Encoding]::ASCII)
-Write-Output 'STEP=installer-smoke-upgrade'
-$upgrade = Invoke-IsolatedInstallerTest $SetupExe @('--install-test', ('"' + $SmokeRoot + '"')) 'upgrade'
-Require-InstallerTest $upgrade 0 'Smoke upgrade'
-Require (-not (Test-Path -LiteralPath $marker)) 'Upgrade did not atomically replace the old install.'
+$lockTreeScript = Join-Path $SmokeRoot 'installer-lock-tree.cjs'
+$lockTreePidFile = Join-Path $RuntimeRoot ('installer-lock-tree-' + [guid]::NewGuid().ToString('N') + '.pid')
+$lockTreeSource = @'
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const cwd = process.argv[2];
+const pidFile = process.argv[3];
+const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'ping -n 120 127.0.0.1 >nul'], {
+  cwd,
+  stdio: 'ignore'
+});
+fs.writeFileSync(pidFile, String(child.pid));
+setInterval(() => {}, 1000);
+'@
+[IO.File]::WriteAllText($lockTreeScript, $lockTreeSource, [Text.UTF8Encoding]::new($false))
+$lockRoot = Start-Process -FilePath (Join-Path $SmokeRoot 'node\node.exe') -ArgumentList @($lockTreeScript, (Join-Path $SmokeRoot 'gateway'), $lockTreePidFile) -PassThru -WindowStyle Hidden
+$lockDeadline = [DateTime]::UtcNow.AddSeconds(10)
+while (-not (Test-Path -LiteralPath $lockTreePidFile) -and [DateTime]::UtcNow -lt $lockDeadline) { Start-Sleep -Milliseconds 100 }
+Require (Test-Path -LiteralPath $lockTreePidFile) 'Installer lock-tree child did not start.'
+[int]$lockChildPid = [IO.File]::ReadAllText($lockTreePidFile).Trim()
+Require ([bool](Get-Process -Id $lockRoot.Id -ErrorAction SilentlyContinue)) 'Installer lock-tree root exited before upgrade.'
+Require ([bool](Get-Process -Id $lockChildPid -ErrorAction SilentlyContinue)) 'Installer lock-tree external child exited before upgrade.'
+Write-Output 'STEP=installer-smoke-upgrade-external-lock-tree'
+try {
+    $upgrade = Invoke-IsolatedInstallerTest $SetupExe @('--install-test', ('"' + $SmokeRoot + '"')) 'upgrade'
+    Require-InstallerTest $upgrade 0 'Smoke upgrade'
+    Require (-not (Test-Path -LiteralPath $marker)) 'Upgrade did not atomically replace the old install.'
+    Require (-not [bool](Get-Process -Id $lockRoot.Id -ErrorAction SilentlyContinue)) 'Upgrade left the installed-root lock process running.'
+    Require (-not [bool](Get-Process -Id $lockChildPid -ErrorAction SilentlyContinue)) 'Upgrade left the external cwd-lock child running.'
+    Write-Output 'INSTALLER_EXTERNAL_LOCK_TREE=PASS'
+} finally {
+    Stop-Process -Id $lockRoot.Id -Force -ErrorAction SilentlyContinue
+    Stop-Process -Id $lockChildPid -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $lockTreePidFile -Force -ErrorAction SilentlyContinue
+}
 $smokeParent = Split-Path $SmokeRoot -Parent
 $backupDirs = @(Get-ChildItem -LiteralPath $smokeParent -Directory -Filter 'DesktopMCP.backup-*' -ErrorAction SilentlyContinue)
 $tempDirs = @(Get-ChildItem -LiteralPath $smokeParent -Directory -Filter 'DesktopMCP.install-*' -ErrorAction SilentlyContinue)
