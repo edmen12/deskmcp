@@ -57,10 +57,17 @@ interface AgentDesktopHudDocument {
   readonly entries: readonly AgentDesktopHudState[];
 }
 
+export interface AgentDesktopPoolEntry {
+  readonly desktopId: string;
+  readonly desktopNumber?: number;
+  readonly status: 'free' | 'occupied' | 'unavailable';
+}
+
 export interface AgentDesktopStatus {
   readonly configured: boolean;
   readonly bindings: readonly AgentDesktopBinding[];
   readonly binding?: AgentDesktopBinding;
+  readonly desktops: readonly AgentDesktopPoolEntry[];
   readonly controls: readonly AgentDesktopControlState[];
   readonly control: AgentDesktopControlState;
   readonly available_desktops: number;
@@ -314,7 +321,9 @@ export class AgentDesktopManager {
     const preferred = preferredLeaseId
       ? controls.find(control => control.leaseId?.toLowerCase() === preferredLeaseId.toLowerCase())
       : undefined;
-    const selected = preferred ?? controls[0] ?? inactiveControl(document.generation);
+    const selected = preferredLeaseId
+      ? preferred ?? inactiveControl(document.generation)
+      : controls[0] ?? inactiveControl(document.generation);
     const now = Date.now();
     const liveHud = hudEntries.filter(entry => {
       const age = now - Date.parse(entry.heartbeatAtUtc);
@@ -328,27 +337,47 @@ export class AgentDesktopManager {
     const usedDesktopIds = new Set(controls.map(control => control.desktopId?.toLowerCase()).filter((value): value is string => Boolean(value)));
     const supportsLiveDesktopResolution = typeof (this.native as unknown as { desktopById?: unknown }).desktopById === 'function';
     const availableBindings = supportsLiveDesktopResolution ? await this.liveBindingsForAllocation(bindings) : [...bindings];
+    const availableById = new Map(availableBindings.map(binding => [binding.desktopId.toLowerCase(), binding] as const));
+    const desktops: AgentDesktopPoolEntry[] = bindings
+      .map(binding => {
+        const id = binding.desktopId.toLowerCase();
+        const live = availableById.get(id);
+        return {
+          desktopId: binding.desktopId,
+          ...(live?.desktopNumber !== undefined
+            ? { desktopNumber: live.desktopNumber }
+            : binding.desktopNumber !== undefined
+              ? { desktopNumber: binding.desktopNumber }
+              : {}),
+          status: !live ? 'unavailable' as const : usedDesktopIds.has(id) ? 'occupied' as const : 'free' as const
+        };
+      })
+      .sort((a, b) => (a.desktopNumber ?? Number.MAX_SAFE_INTEGER) - (b.desktopNumber ?? Number.MAX_SAFE_INTEGER));
     return {
       configured: bindings.length > 0,
       bindings,
       ...(bindings[0] ? { binding: bindings[0] } : {}),
+      desktops,
       controls,
       control: selected,
-      available_desktops: availableBindings.filter(binding => !usedDesktopIds.has(binding.desktopId.toLowerCase())).length,
+      available_desktops: desktops.filter(desktop => desktop.status === 'free').length,
       hud_ready: selectedReady,
       hud_visible: selectedVisible
     };
   }
 
-  status(): Promise<AgentDesktopStatus> {
-    return this.statusForLease();
+  status(preferredLeaseId?: string): Promise<AgentDesktopStatus> {
+    return this.statusForLease(preferredLeaseId);
   }
 
-  async startControl(taskLabel?: string, taskId?: string): Promise<AgentDesktopStatus> {
+  async startControl(taskLabel?: string, taskId?: string, desktopNumber?: number): Promise<AgentDesktopStatus> {
     const label = taskLabel?.trim();
     const normalizedTaskId = taskId?.trim().toLowerCase();
     if (label && label.length > 200) throw new Error('Agent Desktop task label is too long.');
     if (normalizedTaskId && !TASK_ID_PATTERN.test(normalizedTaskId)) throw new Error('Invalid Agent Desktop task id.');
+    if (desktopNumber !== undefined && (!Number.isInteger(desktopNumber) || desktopNumber <= 1)) {
+      throw new Error('Agent Desktop desktop_number must be Desktop 2 or later.');
+    }
     await this.native.info();
 
     const control = await this.serialize(() => this.withCrossProcessLock(async () => {
@@ -359,7 +388,16 @@ export class AgentDesktopManager {
         throw new Error('No usable Agent Desktops remain. Bound Windows virtual desktops were removed, became Desktop 1, or must be rebound in DeskMCP Settings.');
       }
       const used = new Set(document.controls.map(row => row.desktopId!.toLowerCase()));
-      const binding = liveBindings.find(row => !used.has(row.desktopId.toLowerCase()));
+      const requested = desktopNumber === undefined
+        ? undefined
+        : liveBindings.find(row => row.desktopNumber === desktopNumber);
+      if (desktopNumber !== undefined && !requested) {
+        throw new Error(`Agent Desktop ${desktopNumber} is not currently available in the bound Agent Desktop pool.`);
+      }
+      if (requested && used.has(requested.desktopId.toLowerCase())) {
+        throw new Error(`Agent Desktop ${desktopNumber} is busy. Choose another free Agent Desktop.`);
+      }
+      const binding = requested ?? liveBindings.find(row => !used.has(row.desktopId.toLowerCase()));
       if (!binding) throw new Error('All usable Agent Desktops are busy. Bind another virtual desktop or wait for an existing Agent Control lease to exit.');
       const nextGeneration = document.generation + 1;
       const next: AgentDesktopControlState = {
@@ -413,7 +451,7 @@ export class AgentDesktopManager {
         controls: document.controls.filter(row => row !== live)
       } satisfies AgentDesktopControlDocument);
     }));
-    return this.status();
+    return this.status(leaseId);
   }
 
   async stopControlForTask(taskId: string): Promise<{ stopped: boolean; leaseId?: string; status: AgentDesktopStatus }> {
