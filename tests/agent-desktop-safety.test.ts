@@ -236,30 +236,49 @@ test('Agent Desktop pool allocates distinct bound desktops before reporting busy
       throw new Error('Timed out waiting for Agent Desktop pool control state.');
     };
 
-    const firstPromise = manager.startControl('Agent A');
+    const initial = await manager.status();
+    assert.deepEqual(initial.desktops.map(desktop => [desktop.desktopNumber, desktop.status]), [
+      [2, 'free'],
+      [3, 'free']
+    ]);
+
+    const firstPromise = manager.startControl('Agent A', undefined, 3);
     await armUntil(1);
     const first = await firstPromise;
-    assert.equal(first.control.desktopId, desktopA);
-    assert.equal(first.control.desktopNumber, 2);
+    assert.equal(first.control.desktopId, desktopB);
+    assert.equal(first.control.desktopNumber, 3);
 
-    const secondPromise = manager.startControl('Agent B');
+    const secondPromise = manager.startControl('Agent B', undefined, 2);
     await armUntil(2);
     const second = await secondPromise;
-    assert.equal(second.control.desktopId, desktopB);
-    assert.equal(second.control.desktopNumber, 3);
+    assert.equal(second.control.desktopId, desktopA);
+    assert.equal(second.control.desktopNumber, 2);
     assert.notEqual(second.control.leaseId, first.control.leaseId);
 
-    const status = await manager.status();
+    const status = await manager.status(second.control.leaseId);
     assert.equal(status.bindings.length, 2);
     assert.equal(status.controls.length, 2);
+    assert.equal(status.control.leaseId, second.control.leaseId);
+    assert.equal(status.control.desktopNumber, 2);
     assert.equal(status.available_desktops, 0);
-    await assert.rejects(manager.startControl('Agent C'), /all usable agent desktops are busy/i);
+    assert.deepEqual(status.desktops.map(desktop => [desktop.desktopNumber, desktop.status]), [
+      [2, 'occupied'],
+      [3, 'occupied']
+    ]);
+    await assert.rejects(manager.startControl('Agent C', undefined, 3), /Agent Desktop 3 is busy/i);
+    await assert.rejects(manager.startControl('Agent C', undefined, 4), /not currently available/i);
 
-    await manager.stopControl(first.control.leaseId!);
-    const afterStop = await manager.status();
+    const stopped = await manager.stopControl(first.control.leaseId!);
+    assert.equal(stopped.control.active, false);
+    assert.equal(stopped.control.leaseId, undefined);
+    const afterStop = await manager.status(second.control.leaseId);
     assert.equal(afterStop.controls.length, 1);
     assert.equal(afterStop.available_desktops, 1);
-    assert.equal(afterStop.controls[0]?.leaseId, second.control.leaseId);
+    assert.equal(afterStop.control.leaseId, second.control.leaseId);
+    assert.deepEqual(afterStop.desktops.map(desktop => [desktop.desktopNumber, desktop.status]), [
+      [2, 'occupied'],
+      [3, 'free']
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -542,7 +542,7 @@ test('idle direct browser sessions are automatically reaped and ephemeral profil
 });
 
 
-test('closing an Agent Desktop lease only closes browser sessions owned by that lease', async t => {
+test('expired Agent Desktop placement detaches without closing the browser session', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
   const executable = path.join(root, 'configured-browser.exe');
@@ -552,28 +552,41 @@ test('closing an Agent Desktop lease only closes browser sessions owned by that 
   const browserRoot = path.join(root, 'browser');
   const controller = new FakeProcessController(browserRoot);
   const cdp = new FakeCdpDriver();
+  const leaseA = '11111111-1111-4111-8111-111111111111';
+  const leaseB = '22222222-2222-4222-8222-222222222222';
+  const activeLeases = new Set([leaseA, leaseB]);
   const agentDesktop = {
-    async assertLease() { return {}; },
-    async placeProcessWindows() { }
+    async assertLease(id: string) {
+      if (!activeLeases.has(id)) throw new Error('lease revoked');
+      return {};
+    },
+    async isLeaseActive(id: string) { return activeLeases.has(id); }
   } as unknown as AgentDesktopManager;
   const browser = new BrowserRuntime(browserRoot, controller, artifacts, cdp, executable, agentDesktop);
   await browser.init();
 
-  const leaseA = '11111111-1111-4111-8111-111111111111';
-  const leaseB = '22222222-2222-4222-8222-222222222222';
   const sessionA = await browser.start({ profile_id: 'lease-a', agent_desktop_lease_id: leaseA });
   const sessionB = await browser.start({ profile_id: 'lease-b', agent_desktop_lease_id: leaseB });
   assert.deepEqual(controller.leaseIds, [leaseA, leaseB]);
   assert.equal((await browser.list()).length, 2);
 
-  const cleanup = await browser.closeAgentDesktopLease(leaseA);
-  assert.equal(cleanup.lease_id, leaseA);
-  assert.equal(cleanup.closed_sessions, 1);
+  activeLeases.delete(leaseA);
+  const deadline = Date.now() + 3000;
+  let sessions = await browser.list();
+  while (sessions.find(session => session.session_id === sessionA.session_id)?.agent_desktop !== false && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    sessions = await browser.list();
+  }
+
+  assert.equal(sessions.length, 2);
+  assert.equal(sessions.find(session => session.session_id === sessionA.session_id)?.agent_desktop, false);
+  assert.equal(sessions.find(session => session.session_id === sessionB.session_id)?.agent_desktop, true);
+  assert.deepEqual(controller.terminated, []);
+
+  const closedA = await browser.close(sessionA.session_id);
+  assert.equal(closedA.closed, true);
   assert.deepEqual(controller.terminated, ['process-1']);
-  const remaining = await browser.list();
-  assert.equal(remaining.length, 1);
-  assert.equal(remaining[0]?.session_id, sessionB.session_id);
-  assert.notEqual(remaining[0]?.session_id, sessionA.session_id);
+  assert.equal((await browser.list()).length, 1);
 
   await browser.closeAll();
 });
@@ -613,7 +626,7 @@ test('Agent Desktop browser waits until a real window is placed before start suc
   await browser.closeAll();
 });
 
-test('Agent Desktop browser stays open until its control lease exits', async t => {
+test('Agent Desktop placed browser can close independently while its placement lease is active', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
   const executable = path.join(root, 'configured-browser.exe');
@@ -630,30 +643,19 @@ test('Agent Desktop browser stays open until its control lease exits', async t =
       if (!activeLeases.has(id)) throw new Error('lease revoked');
       return {};
     },
-    async placeProcessWindows() { },
     async isLeaseActive(id: string) { return activeLeases.has(id); }
   } as unknown as AgentDesktopManager;
   const browser = new BrowserRuntime(browserRoot, controller, artifacts, cdp, executable, agentDesktop);
   await browser.init();
 
   const session = await browser.start({ profile_id: 'lease-lifetime', agent_desktop_lease_id: leaseId });
-  await assert.rejects(
-    browser.close(session.session_id),
-    /stay open until their Agent Control lease exits/i
-  );
-  assert.equal((await browser.list()).length, 1);
-  assert.deepEqual(controller.terminated, []);
+  assert.equal((await browser.list())[0]?.agent_desktop, true);
   const placementsAfterStart = controller.placements.length;
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.ok(controller.placements.length > placementsAfterStart);
-  assert.equal((await browser.list()).length, 1);
-  assert.deepEqual(controller.terminated, []);
 
-  activeLeases.delete(leaseId);
-  const deadline = Date.now() + 3000;
-  while ((await browser.list()).length > 0 && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
+  const closed = await browser.close(session.session_id);
+  assert.equal(closed.closed, true);
   assert.equal((await browser.list()).length, 0);
   assert.deepEqual(controller.terminated, ['process-1']);
   await browser.closeAll();

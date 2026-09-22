@@ -133,7 +133,7 @@ interface BrowserSessionRecord {
   readonly persistentProfile: boolean;
   readonly headless: boolean;
   readonly port: number;
-  readonly agentDesktopLeaseId?: string;
+  agentDesktopLeaseId?: string;
   readonly createdAt: string;
   lastActivityAt: number;
 }
@@ -541,21 +541,37 @@ export class BrowserRuntime {
     if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
+  private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {
+    delete record.agentDesktopLeaseId;
+    record.lastActivityAt = Date.now();
+  }
+
+  private async refreshAgentDesktopPlacement(record: BrowserSessionRecord, timeoutMs = 250): Promise<void> {
+    const leaseId = record.agentDesktopLeaseId;
+    if (!leaseId) return;
+    if (!this.agentDesktop || !await this.agentDesktop.isLeaseActive(leaseId)) {
+      this.detachAgentDesktopPlacement(record);
+      return;
+    }
+    try {
+      await this.processController.place(record.processSessionId, leaseId, timeoutMs);
+    } catch (error) {
+      if (!await this.agentDesktop.isLeaseActive(leaseId)) {
+        this.detachAgentDesktopPlacement(record);
+        return;
+      }
+      throw error;
+    }
+  }
+
   private async reapSessions(): Promise<void> {
     await this.serializeMutation(async () => {
-      if (this.agentDesktop) {
-        const leased = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
-        for (const record of leased) {
-          const leaseId = record.agentDesktopLeaseId!;
-          if (!await this.agentDesktop.isLeaseActive(leaseId)) {
-            await this.disposeRecord(record);
-            continue;
-          }
-          try {
-            await this.processController.place(record.processSessionId, leaseId, 100);
-          } catch {
-            await this.disposeRecord(record);
-          }
+      const placed = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
+      for (const record of placed) {
+        try {
+          await this.refreshAgentDesktopPlacement(record, 100);
+        } catch {
+          await this.disposeRecord(record);
         }
       }
 
@@ -584,11 +600,6 @@ export class BrowserRuntime {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
     throw new Error('Agent Desktop browser window did not appear on the requested desktop before timeout.');
-  }
-
-  private async refreshAgentDesktopPlacement(record: BrowserSessionRecord, timeoutMs = 250): Promise<void> {
-    if (!record.agentDesktopLeaseId) return;
-    await this.processController.place(record.processSessionId, record.agentDesktopLeaseId, timeoutMs);
   }
 
   private async configuredExecutable(): Promise<string> {
@@ -774,14 +785,10 @@ export class BrowserRuntime {
     return this.serializeMutation(async () => {
       await this.reconcile();
       const record = this.session(sessionId);
-      if (record.agentDesktopLeaseId) {
-        if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-      }
       const pageId = await this.cdp.createPage(record.port, url, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
       await this.refreshAgentDesktopPlacement(record);
-      if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
       return {
         session_id: record.sessionId,
         page_id: pageId,
@@ -800,13 +807,10 @@ export class BrowserRuntime {
     return this.serializeMutation(async () => {
       await this.reconcile();
       const record = this.session(sessionId);
-      if (record.agentDesktopLeaseId) {
-        if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-      }
+      await this.refreshAgentDesktopPlacement(record);
       const selectedId = await this.cdp.selectPage(record.port, pageId, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
-      if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
       return {
         session_id: record.sessionId,
         page_id: selectedId,
@@ -826,13 +830,10 @@ export class BrowserRuntime {
     return this.serializeMutation(async () => {
       await this.reconcile();
       const record = this.session(sessionId);
-      if (record.agentDesktopLeaseId) {
-        if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-      }
+      await this.refreshAgentDesktopPlacement(record);
       await this.cdp.closePage(record.port, pageId, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
-      if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
       return {
         session_id: record.sessionId,
         page_id: pageId,
@@ -857,13 +858,10 @@ export class BrowserRuntime {
     return this.serializeMutation(async () => {
       await this.reconcile();
       const record = this.session(sessionId);
-      if (record.agentDesktopLeaseId) {
-        if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-      }
+      await this.refreshAgentDesktopPlacement(record);
       await this.cdp.handleDialog(record.port, pageId, accept, promptText, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
-      if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
       return {
         session_id: record.sessionId,
         page_id: pageId,
@@ -876,12 +874,9 @@ export class BrowserRuntime {
   async find(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
     await this.reconcile();
     const record = this.session(sessionId);
-    if (record.agentDesktopLeaseId) {
-      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-    }
+    await this.refreshAgentDesktopPlacement(record);
     const found = await this.cdp.find(record.port, pageId, options);
-    if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
     const browserObservationId = this.issueObservation(record.sessionId, found.page_id, found.state_token);
     const { state_token: _stateToken, ...publicFind } = found;
     return {
@@ -894,12 +889,9 @@ export class BrowserRuntime {
   async snapshot(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
     await this.reconcile();
     const record = this.session(sessionId);
-    if (record.agentDesktopLeaseId) {
-      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-    }
+    await this.refreshAgentDesktopPlacement(record);
     const snapshot = await this.cdp.snapshot(record.port, pageId, options);
-    if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
     let screenshot: ArtifactInfo | undefined;
     if (options.screenshot !== false && snapshot.png) {
       screenshot = await this.artifacts.publishBytes(
@@ -935,10 +927,7 @@ export class BrowserRuntime {
       throw new Error('Browser download requires exactly one of selector or ref.');
     }
     const observation = this.consumeObservation(record.sessionId, pageId, browserObservationId);
-    if (record.agentDesktopLeaseId) {
-      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-    }
+    await this.refreshAgentDesktopPlacement(record);
     const currentStateToken = await this.cdp.stateToken(record.port, observation.pageId, Math.min(options.timeout_ms ?? 5000, 10_000));
     if (currentStateToken !== observation.stateToken) {
       throw new Error('STALE browser observation: the page changed after the snapshot. Take a fresh browser snapshot before downloading.');
@@ -978,7 +967,7 @@ export class BrowserRuntime {
     } finally {
       await rm(tempPath, { force: true }).catch(() => undefined);
     }
-    if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
     const fresh = await this.snapshot(record.sessionId, effectivePageId, options);
     return { ...fresh, download: artifact };
   }
@@ -997,17 +986,14 @@ export class BrowserRuntime {
       throw new Error('A browser observation may authorize at most one state-mutating action. Split the sequence and take a fresh browser snapshot before the next mutation.');
     }
     const observation = this.consumeObservation(record.sessionId, pageId, browserObservationId);
-    if (record.agentDesktopLeaseId) {
-      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
-    }
+    await this.refreshAgentDesktopPlacement(record);
     const currentStateToken = await this.cdp.stateToken(record.port, observation.pageId, Math.min(options.timeout_ms ?? 5000, 10000));
     if (currentStateToken !== observation.stateToken) {
       throw new Error('STALE browser observation: the page changed after the snapshot. Take a fresh browser snapshot before acting.');
     }
     const effectivePageId = await this.cdp.act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
     await this.refreshAgentDesktopPlacement(record);
-    if (record.agentDesktopLeaseId) await this.agentDesktop!.assertLease(record.agentDesktopLeaseId);
+
     return this.snapshot(record.sessionId, effectivePageId, options);
   }
 
@@ -1017,21 +1003,8 @@ export class BrowserRuntime {
       const normalized = validateSessionId(sessionId);
       const record = this.sessions.get(normalized);
       if (!record) return { session_id: normalized, closed: false };
-      if (record.agentDesktopLeaseId) {
-        throw new Error('Agent Desktop browser sessions stay open until their Agent Control lease exits. Exit Agent Control instead of closing this browser session directly.');
-      }
       await this.disposeRecord(record);
       return { session_id: normalized, closed: true };
-    });
-  }
-
-  async closeAgentDesktopLease(leaseId: string): Promise<{ lease_id: string; closed_sessions: number }> {
-    const normalizedLeaseId = leaseId.trim();
-    if (!SESSION_ID_PATTERN.test(normalizedLeaseId)) throw new Error('Invalid Agent Desktop lease id.');
-    return this.serializeMutation(async () => {
-      const records = [...this.sessions.values()].filter(record => record.agentDesktopLeaseId === normalizedLeaseId);
-      for (const record of records) await this.disposeRecord(record);
-      return { lease_id: normalizedLeaseId, closed_sessions: records.length };
     });
   }
 

@@ -48,10 +48,10 @@ export function createDesktopMcpServer(
     registerDesktopBackendBridgeTools(server, bridge, policy, audit, observations);
     registerProcessTools(server, bridge, policy, audit, processSessions, agentDesktop);
     registerComputerUseTools(server, policy, audit, computerUse, agentDesktop);
-    if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop, browser);
+    if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop);
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
     if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
-    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore, browser);
+    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore);
     if (browser) registerBrowserTools(server, policy, audit, browser);
     if (skillStore) registerSkillTools(server, policy, audit, skillStore);
   } else {
