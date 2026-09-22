@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
-import type { ComputerWindow, UiAction } from './computer-use-backend.js';
+import type { ComputerWindow, UiAction, UiElementSummary } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
 
 function failure(prefix: string, error: unknown) {
@@ -116,6 +116,18 @@ function isAgentDesktopSafetyWindow(window: ComputerWindow): boolean {
   return window.title?.startsWith('DeskMCP Agent Desktop') === true;
 }
 
+export function agentDesktopSemanticTreeWarning(
+  window: ComputerWindow,
+  elements: readonly UiElementSummary[]
+): string | undefined {
+  if (!window.className?.startsWith('WindowsForms10.')) return undefined;
+  const hasWinFormsDescendant = elements.some(element =>
+    element.type !== 'Window' && element.className?.startsWith('WindowsForms10.') === true
+  );
+  if (hasWinFormsDescendant) return undefined;
+  return 'semantic_tree_limited: Windows Forms child controls are not exposed by Windows UI Automation while this window is isolated on a non-current Agent Desktop. Do not treat the returned elements as a complete tree; semantic actions may be unavailable.';
+}
+
 function parseAction(input: {
   action: string;
   selector?: string | undefined;
@@ -202,12 +214,19 @@ async function snapshotContent(
       : Promise.resolve(undefined)
   ]);
 
+  const semanticTreeWarning = options.agentDesktopLeaseId && inspection
+    ? agentDesktopSemanticTreeWarning(window, inspection.elements)
+    : undefined;
   const metadata = {
     computer_observation_id: observationId,
     captured_at: new Date().toISOString(),
     window: publicWindow(window, windowId),
     ...(screenshot ? { screenshot: { width: screenshot.width, height: screenshot.height } } : {}),
-    ...(inspection ? { elements: inspection.elements } : {})
+    ...(inspection ? { elements: inspection.elements } : {}),
+    ...(semanticTreeWarning ? {
+      semantic_tree_status: 'limited',
+      semantic_tree_warning: semanticTreeWarning
+    } : {})
   };
   const content: Array<
     | { type: 'text'; text: string }

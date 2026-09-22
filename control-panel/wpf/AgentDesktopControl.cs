@@ -660,7 +660,8 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             if (bindings.Count == 1)
             {
                 AgentDesktopBindingDocument binding = bindings[0];
-                string label = binding.DesktopNumber.HasValue ? "Desktop " + (binding.DesktopNumber.Value + 1) : "Bound · " + binding.DesktopId.Substring(0, 8);
+                int? liveNumber = ResolveDesktopNumber(binding.DesktopId);
+                string label = liveNumber.HasValue ? "Desktop " + liveNumber.Value : "Bound · " + binding.DesktopId.Substring(0, 8);
                 return active > 0 ? label + " · controlling" : label + " · ready";
             }
             return bindings.Count + " Agent Desktops · " + active + " controlling";
@@ -682,7 +683,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         try
         {
             int? number = desktopClient.DesktopNumberById(parsed);
-            return number.HasValue && number.Value > 0 ? number : null;
+            return number.HasValue && number.Value >= 0 ? number.Value + 1 : null;
         }
         catch { return null; }
     }
@@ -691,7 +692,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
     {
         get
         {
-            try { return desktopClient.CurrentDesktopNumber(); }
+            try { return desktopClient.CurrentDesktopNumber() + 1; }
             catch { return -1; }
         }
     }
@@ -720,8 +721,21 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
             {
                 List<AgentDesktopBindingDocument> bindings = ReadBindingsFile(configPath);
-                bindings.RemoveAll(existing =>
-                    String.Equals(existing.DesktopId, binding.DesktopId, StringComparison.OrdinalIgnoreCase));
+                for (int index = bindings.Count - 1; index >= 0; index--)
+                {
+                    AgentDesktopBindingDocument existing = bindings[index];
+                    bool sameId = String.Equals(existing.DesktopId, binding.DesktopId, StringComparison.OrdinalIgnoreCase);
+                    bool sameDesktopNumber = false;
+                    Guid existingId;
+                    if (Guid.TryParse(existing.DesktopId, out existingId) && existingId != Guid.Empty)
+                    {
+                        int? liveNumber = desktopClient.DesktopNumberById(existingId);
+                        sameDesktopNumber = liveNumber.HasValue
+                            ? liveNumber.Value + 1 == binding.DesktopNumber
+                            : existing.DesktopNumber == binding.DesktopNumber;
+                    }
+                    if (sameId || sameDesktopNumber) bindings.RemoveAt(index);
+                }
                 bindings.Add(binding);
                 bindings.Sort(delegate(AgentDesktopBindingDocument left, AgentDesktopBindingDocument right)
                 {
@@ -749,7 +763,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             String.Equals(control.DesktopId, removed.DesktopId, StringComparison.OrdinalIgnoreCase));
         if (inUse)
         {
-            string label = removed.DesktopNumber.HasValue ? "Desktop " + (removed.DesktopNumber.Value + 1) : "This Agent Desktop";
+            string label = removed.DesktopNumber.HasValue ? "Desktop " + removed.DesktopNumber.Value : "This Agent Desktop";
             throw new InvalidOperationException(label + " is currently under Agent Control. Exit Agent Control before unbinding it.");
         }
 
@@ -973,8 +987,9 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                     TryRevokeAfterSafetyFailure(control.LeaseId, "Agent Desktop control contains an invalid desktop id.");
                     return;
                 }
-                int? liveDesktopNumber = desktopClient.DesktopNumberById(desktopId);
-                if (!liveDesktopNumber.HasValue || liveDesktopNumber.Value <= 0)
+                int? nativeDesktopNumber = desktopClient.DesktopNumberById(desktopId);
+                int? liveDesktopNumber = nativeDesktopNumber.HasValue ? nativeDesktopNumber.Value + 1 : null;
+                if (!liveDesktopNumber.HasValue || liveDesktopNumber.Value <= 1)
                 {
                     TryRevokeAfterSafetyFailure(control.LeaseId, "The controlled Windows virtual desktop no longer exists or became Desktop 1.");
                     return;
@@ -1299,7 +1314,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         if (!requireDesktop) return true;
         Guid desktop;
         return Guid.TryParse(control.DesktopId, out desktop) && desktop != Guid.Empty &&
-            control.DesktopNumber.HasValue && control.DesktopNumber.Value > 0;
+            control.DesktopNumber.HasValue && control.DesktopNumber.Value > 1;
     }
 
     private static string ResolveHostPath(string baseDir, string projectRoot)

@@ -66,6 +66,23 @@ function tokenIssuer(tokens: StoredOAuthTokens | undefined): string | undefined 
   return typeof issuer === 'string' ? issuer : undefined;
 }
 
+function resourceIdentity(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/u, '');
+    return `${url.protocol}//${url.host}${url.pathname}${url.search}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameResource(left: string, right: string): boolean {
+  const leftIdentity = resourceIdentity(left);
+  const rightIdentity = resourceIdentity(right);
+  return leftIdentity !== undefined && leftIdentity === rightIdentity;
+}
+
 export class DeskMcpOAuthProvider implements OAuthClientProvider {
   private stateValue: PersistedOAuthState = emptyState();
   private loaded = false;
@@ -78,12 +95,83 @@ export class DeskMcpOAuthProvider implements OAuthClientProvider {
     readonly redirectUrl: string,
     private readonly requestedScope?: string,
     private readonly onRedirect?: (url: URL) => void | Promise<void>,
-    private readonly staticClient?: StaticOAuthClientCredentials
+    private readonly staticClient?: StaticOAuthClientCredentials,
+    private readonly expectedResourceUrl?: string
   ) {}
 
   async init(): Promise<void> {
     if (this.loaded) return;
-    this.stateValue = parseState(await this.store.get(this.storageKey));
+    const current = parseState(await this.store.get(this.storageKey));
+    if (!current.tokens) {
+      let legacy: PersistedOAuthState | undefined;
+      let removeLegacy: (() => Promise<void>) | undefined;
+
+      if (this.store.getLegacy) {
+        const legacyRaw = await this.store.getLegacy(this.storageKey);
+        if (legacyRaw) {
+          const candidate = parseState(legacyRaw);
+          const resourceMatches = !this.expectedResourceUrl
+            || !candidate.resource_url
+            || sameResource(candidate.resource_url, this.expectedResourceUrl);
+          if (candidate.tokens && resourceMatches) {
+            legacy = candidate;
+            if (this.store.deleteLegacy) {
+              removeLegacy = () => this.store.deleteLegacy!(this.storageKey);
+            }
+          }
+        }
+      }
+
+      if (!legacy && this.expectedResourceUrl && this.store.listLegacyCandidates) {
+        const matches: Array<{ id: string; state: PersistedOAuthState }> = [];
+        for (const candidate of await this.store.listLegacyCandidates()) {
+          try {
+            const state = parseState(candidate.value);
+            if (!state.tokens) continue;
+            const resourceMatches = Boolean(
+              state.resource_url && sameResource(state.resource_url, this.expectedResourceUrl)
+            );
+            const authorizationServerMatches = Boolean(
+              current.authorization_server_url
+              && state.authorization_server_url
+              && sameResource(state.authorization_server_url, current.authorization_server_url)
+            );
+            if (resourceMatches || authorizationServerMatches) {
+              matches.push({ id: candidate.id, state });
+            }
+          } catch {
+            // Legacy candidate discovery is best-effort; malformed unrelated entries are ignored.
+          }
+        }
+        if (matches.length > 1) {
+          throw new Error('Multiple legacy OAuth secrets match this Dynamic MCP resource; refusing ambiguous credential migration.');
+        }
+        const match = matches[0];
+        if (match) {
+          legacy = match.state;
+          if (this.store.deleteLegacyCandidate) {
+            removeLegacy = () => this.store.deleteLegacyCandidate!(match.id);
+          }
+        }
+      }
+
+      if (legacy?.tokens) {
+        this.stateValue = {
+          ...legacy,
+          ...(current.discovery ? { discovery: current.discovery } : {}),
+          ...(current.authorization_server_url
+            ? { authorization_server_url: current.authorization_server_url }
+            : {}),
+          ...(current.resource_url ? { resource_url: current.resource_url } : {}),
+          ...(current.code_verifier ? { code_verifier: current.code_verifier } : {})
+        };
+        await this.store.set(this.storageKey, JSON.stringify(this.stateValue));
+        await removeLegacy?.().catch(() => undefined);
+        this.loaded = true;
+        return;
+      }
+    }
+    this.stateValue = current;
     this.loaded = true;
   }
 

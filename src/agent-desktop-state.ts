@@ -269,6 +269,7 @@ export class AgentDesktopManager {
 
   private async liveBindingsForAllocation(bindings: readonly AgentDesktopBinding[]): Promise<AgentDesktopBinding[]> {
     const live: AgentDesktopBinding[] = [];
+    const desktopIdsByNumber = new Map<number, string>();
     for (const binding of bindings) {
       const info = await this.native.desktopById(binding.desktopId);
       if (info.desktopId.toLowerCase() !== binding.desktopId.toLowerCase()) {
@@ -276,7 +277,14 @@ export class AgentDesktopManager {
       }
       if (!info.present) continue;
       if (!Number.isInteger(info.desktopNumber) || Number(info.desktopNumber) <= 1) continue;
-      live.push({ ...binding, desktopNumber: Number(info.desktopNumber) });
+      const resolvedNumber = Number(info.desktopNumber);
+      const normalizedId = binding.desktopId.toLowerCase();
+      const existingId = desktopIdsByNumber.get(resolvedNumber);
+      if (existingId && existingId !== normalizedId) {
+        throw new Error(`Multiple bound Agent Desktop ids resolve to Desktop ${resolvedNumber}. Re-bind that desktop from the DeskMCP Control Panel before granting Agent Control.`);
+      }
+      desktopIdsByNumber.set(resolvedNumber, normalizedId);
+      live.push({ ...binding, desktopNumber: resolvedNumber });
     }
     return live.sort((a, b) => (a.desktopNumber ?? Number.MAX_SAFE_INTEGER) - (b.desktopNumber ?? Number.MAX_SAFE_INTEGER));
   }
@@ -344,11 +352,7 @@ export class AgentDesktopManager {
         const live = availableById.get(id);
         return {
           desktopId: binding.desktopId,
-          ...(live?.desktopNumber !== undefined
-            ? { desktopNumber: live.desktopNumber }
-            : binding.desktopNumber !== undefined
-              ? { desktopNumber: binding.desktopNumber }
-              : {}),
+          ...(live?.desktopNumber !== undefined ? { desktopNumber: live.desktopNumber } : {}),
           status: !live ? 'unavailable' as const : usedDesktopIds.has(id) ? 'occupied' as const : 'free' as const
         };
       })
@@ -542,6 +546,9 @@ export class AgentDesktopManager {
       timeoutMs: options.timeoutMs ?? 15000,
       showNoActivate: true
     });
+    if (moved.windows.length < 1) {
+      throw new Error('Agent Desktop process-tree placement found no stable top-level window in the owned process tree.');
+    }
     if (moved.windows.some(window => window.desktopId.toLowerCase() !== binding.desktopId.toLowerCase())) {
       throw new Error('Agent Desktop process-tree placement verification failed.');
     }
