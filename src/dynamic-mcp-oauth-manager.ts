@@ -5,6 +5,7 @@ import {
 } from '@modelcontextprotocol/client';
 import { DeskMcpOAuthProvider, type StaticOAuthClientCredentials } from './dynamic-mcp-oauth.js';
 import { PlatformSecretStore } from './platform-secret-store.js';
+import { runtimeEnvironmentValue } from './runtime-env.js';
 import type { SecretStore } from './secure-secret-store.js';
 
 const FLOW_TTL_MS = 10 * 60_000;
@@ -92,7 +93,7 @@ export class DynamicMcpOAuthManager {
     if (!configured) return undefined;
     const secret = configured.client_secret_env === undefined
       ? undefined
-      : process.env[configured.client_secret_env];
+      : runtimeEnvironmentValue(configured.client_secret_env);
     if (requireSecret && configured.token_endpoint_auth_method !== 'none' && !secret) {
       throw new Error(
         `OAuth client secret environment variable is not configured: ${configured.client_secret_env ?? '(missing configuration)'}.`
@@ -117,7 +118,8 @@ export class DynamicMcpOAuthManager {
       this.callbackUrl(target.name),
       target.scope,
       onRedirect,
-      this.staticClient(target, requireStaticSecret)
+      this.staticClient(target, requireStaticSecret),
+      target.url
     );
     await provider.init();
     return provider;
@@ -138,7 +140,7 @@ export class DynamicMcpOAuthManager {
           client_id: target.static_client.client_id,
           token_endpoint_auth_method: target.static_client.token_endpoint_auth_method,
           client_secret_configured: target.static_client.client_secret_env
-            ? Boolean(process.env[target.static_client.client_secret_env])
+            ? Boolean(runtimeEnvironmentValue(target.static_client.client_secret_env))
             : true
         }
       } : {}),

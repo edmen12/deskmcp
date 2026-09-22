@@ -23,6 +23,8 @@ Prefer semantic actions when the target supports them:
 
 Snapshots default to the interactive UI Automation tree without a screenshot. Request `include_screenshot=true` only when visual context is needed. This reduces image bandwidth, model tokens, focus changes, and coordinate mistakes.
 
+Windows Forms controls can lose their child UI Automation providers when the app window is isolated on a non-current Windows virtual desktop. DeskMCP detects the known degraded shape and returns `semantic_tree_status: "limited"` plus `semantic_tree_warning`; callers must not treat that element list as complete. DeskMCP does not move the app back to Desktop 1 or steal the user's foreground merely to recover a richer tree.
+
 ## Observation safety
 
 `desktop_ui_snapshot` returns a short-lived opaque `computer_observation_id`.

@@ -226,10 +226,13 @@ internal static class Program
             {
                 "info" => Info(vda),
                 "current-desktop" => CurrentDesktop(vda),
-                "desktop-info" => DesktopInfo(ParsePositiveInt(Required(options, "desktop-number"), "desktop-number", allowZero: true), vda),
+                "desktop-info" => DesktopInfo(ToNativeDesktopNumber(ParsePositiveInt(Required(options, "desktop-number"), "desktop-number")), vda),
                 "desktop-by-id" => DesktopById(ParseDesktopId(Required(options, "desktop-id")), vda),
                 "create-desktop" => CreateDesktop(vda),
-                "remove-desktop" => RemoveDesktop(ParsePositiveInt(Required(options, "desktop-number"), "desktop-number", allowZero: true), ParsePositiveInt(Required(options, "fallback-number"), "fallback-number", allowZero: true), vda),
+                "remove-desktop" => RemoveDesktop(
+                    ToNativeDesktopNumber(ParsePositiveInt(Required(options, "desktop-number"), "desktop-number")),
+                    ToNativeDesktopNumber(ParsePositiveInt(Required(options, "fallback-number"), "fallback-number")),
+                    vda),
                 "window-info" => WindowInfo(ParseHwnd(Required(options, "hwnd")), vda),
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
@@ -247,13 +250,24 @@ internal static class Program
         }
     }
 
+    private static int ToUserDesktopNumber(int nativeDesktopNumber) => checked(nativeDesktopNumber + 1);
+
+    private static int? ToUserDesktopNumber(int? nativeDesktopNumber) =>
+        nativeDesktopNumber.HasValue ? ToUserDesktopNumber(nativeDesktopNumber.Value) : null;
+
+    private static int ToNativeDesktopNumber(int userDesktopNumber)
+    {
+        if (userDesktopNumber <= 0) throw new ArgumentOutOfRangeException(nameof(userDesktopNumber));
+        return userDesktopNumber - 1;
+    }
+
     private static object Info(VirtualDesktopAccessor vda)
     {
         return new
         {
             officialApi = true,
             virtualDesktopAccessor = vda.Available,
-            currentDesktopNumber = vda.CurrentDesktopNumber(),
+            currentDesktopNumber = ToUserDesktopNumber(vda.CurrentDesktopNumber()),
             desktopCount = vda.DesktopCount()
         };
     }
@@ -272,7 +286,7 @@ internal static class Program
         return new
         {
             desktopId = desktopId.Value.ToString("D"),
-            desktopNumber = desktopNumber.Value,
+            desktopNumber = ToUserDesktopNumber(desktopNumber.Value),
             desktopCount = desktopCount.Value
         };
     }
@@ -290,9 +304,9 @@ internal static class Program
         return new
         {
             desktopId = desktopId.Value.ToString("D"),
-            desktopNumber,
+            desktopNumber = ToUserDesktopNumber(desktopNumber),
             desktopCount = desktopCount.Value,
-            currentDesktopNumber = vda.CurrentDesktopNumber()
+            currentDesktopNumber = ToUserDesktopNumber(vda.CurrentDesktopNumber())
         };
     }
 
@@ -306,9 +320,9 @@ internal static class Program
         {
             desktopId = desktopId.ToString("D"),
             present = desktopNumber.HasValue,
-            desktopNumber,
+            desktopNumber = ToUserDesktopNumber(desktopNumber),
             desktopCount,
-            currentDesktopNumber = vda.CurrentDesktopNumber()
+            currentDesktopNumber = ToUserDesktopNumber(vda.CurrentDesktopNumber())
         };
     }
 
@@ -329,10 +343,10 @@ internal static class Program
         return new
         {
             desktopId = desktopId.Value.ToString("D"),
-            desktopNumber = desktopNumber.Value,
+            desktopNumber = ToUserDesktopNumber(desktopNumber.Value),
             desktopCount,
-            currentDesktopBefore = beforeCurrent,
-            currentDesktopAfter = afterCurrent,
+            currentDesktopBefore = ToUserDesktopNumber(beforeCurrent),
+            currentDesktopAfter = ToUserDesktopNumber(afterCurrent),
             desktopCountBefore = beforeCount
         };
     }
@@ -348,7 +362,14 @@ internal static class Program
             throw new InvalidOperationException("Refusing to remove the currently active virtual desktop.");
         if (!vda.RemoveDesktop(desktopNumber, fallbackNumber))
             throw new InvalidOperationException("Windows did not remove the requested virtual desktop.");
-        return new { removed = true, desktopNumber, fallbackNumber, desktopCount = vda.DesktopCount(), currentDesktopNumber = vda.CurrentDesktopNumber() };
+        return new
+        {
+            removed = true,
+            desktopNumber = ToUserDesktopNumber(desktopNumber),
+            fallbackNumber = ToUserDesktopNumber(fallbackNumber),
+            desktopCount = vda.DesktopCount(),
+            currentDesktopNumber = ToUserDesktopNumber(vda.CurrentDesktopNumber())
+        };
     }
 
     private static object WindowInfo(IntPtr hwnd, VirtualDesktopAccessor vda)
@@ -363,7 +384,7 @@ internal static class Program
             {
                 hwnd = HwndText(hwnd),
                 desktopId = desktopId.ToString("D"),
-                desktopNumber = vda.WindowDesktopNumber(hwnd),
+                desktopNumber = ToUserDesktopNumber(vda.WindowDesktopNumber(hwnd)),
                 onCurrentDesktop = current
             };
         }
@@ -425,7 +446,7 @@ internal static class Program
             {
                 hwnd = HwndText(hwnd),
                 desktopId = GetDesktopId(hwnd).ToString("D"),
-                desktopNumber = vda.WindowDesktopNumber(hwnd)
+                desktopNumber = ToUserDesktopNumber(vda.WindowDesktopNumber(hwnd))
             });
         }
         return new { processId, moved = moved.Count, windows };
@@ -475,10 +496,12 @@ internal static class Program
                 {
                     hwnd = HwndText(hwnd),
                     desktopId = actual.ToString("D"),
-                    desktopNumber = vda.WindowDesktopNumber(hwnd)
+                    desktopNumber = ToUserDesktopNumber(vda.WindowDesktopNumber(hwnd))
                 });
             }
         }
+        if (windows.Count == 0)
+            throw new TimeoutException("No stable top-level window remained in the requested process tree before timeout.");
         return new { processId, moved = moved.Count, windows };
     }
 
@@ -491,7 +514,7 @@ internal static class Program
             ok = true,
             officialApi = true,
             virtualDesktopAccessor = vda.Available,
-            currentDesktopNumber = vda.CurrentDesktopNumber(),
+            currentDesktopNumber = ToUserDesktopNumber(vda.CurrentDesktopNumber()),
             desktopCount = vda.DesktopCount()
         };
     }

@@ -11,6 +11,43 @@ import { DeskMcpOAuthProvider } from '../src/dynamic-mcp-oauth.js';
 import { PlatformSecretStore } from '../src/platform-secret-store.js';
 import { MemorySecretStore } from '../src/secure-secret-store.js';
 
+class LegacyMemorySecretStore extends MemorySecretStore {
+  private readonly legacyValues = new Map<string, string>();
+  private readonly legacyCandidates = new Map<string, string>();
+
+  async getLegacy(key: string): Promise<string | undefined> {
+    return this.legacyValues.get(key);
+  }
+
+  async deleteLegacy(key: string): Promise<void> {
+    this.legacyValues.delete(key);
+  }
+
+  async listLegacyCandidates(): Promise<readonly { id: string; value: string }[]> {
+    return [...this.legacyCandidates].map(([id, value]) => ({ id, value }));
+  }
+
+  async deleteLegacyCandidate(id: string): Promise<void> {
+    this.legacyCandidates.delete(id);
+  }
+
+  setLegacy(key: string, value: string): void {
+    this.legacyValues.set(key, value);
+  }
+
+  addLegacyCandidate(id: string, value: string): void {
+    this.legacyCandidates.set(id, value);
+  }
+
+  hasLegacy(key: string): boolean {
+    return this.legacyValues.has(key);
+  }
+
+  hasLegacyCandidate(id: string): boolean {
+    return this.legacyCandidates.has(id);
+  }
+}
+
 test('DeskMCP OAuth provider persists protocol state without exposing secrets in public status', async () => {
   const store = new MemorySecretStore();
   const provider = new DeskMcpOAuthProvider(
@@ -77,6 +114,181 @@ test('DeskMCP OAuth provider persists protocol state without exposing secrets in
 
   await reloaded.invalidateCredentials?.('all');
   assert.equal((await reloaded.publicStatus()).authenticated, false);
+});
+
+test('DeskMCP OAuth provider migrates legacy hashed secret state only when the current state has no tokens', async () => {
+  const key = 'dynamic-mcp:legacy';
+  const store = new LegacyMemorySecretStore();
+  await store.set(key, JSON.stringify({
+    version: 1,
+    clients: {},
+    authorization_server_url: 'https://auth.current.test',
+    resource_url: 'https://resource.current.test'
+  }));
+  store.setLegacy(key, JSON.stringify({
+    version: 1,
+    clients: {
+      'https://auth.legacy.test': { client_id: 'legacy-client' }
+    },
+    tokens: {
+      access_token: 'legacy-access-secret',
+      token_type: 'Bearer',
+      refresh_token: 'legacy-refresh-secret',
+      issuer: 'https://auth.legacy.test'
+    },
+    authorization_server_url: 'https://auth.legacy.test',
+    resource_url: 'https://resource.legacy.test'
+  }));
+
+  const provider = new DeskMcpOAuthProvider(
+    key,
+    store,
+    'http://127.0.0.1:8765/oauth/callback/legacy'
+  );
+  await provider.init();
+
+  assert.equal((await provider.tokens())?.access_token, 'legacy-access-secret');
+  assert.equal((await provider.tokens())?.refresh_token, 'legacy-refresh-secret');
+  assert.equal(
+    (await provider.clientInformation({ issuer: 'https://auth.legacy.test' }))?.client_id,
+    'legacy-client'
+  );
+  assert.equal(store.hasLegacy(key), false);
+
+  const migrated = JSON.parse((await store.get(key))!) as {
+    tokens?: { access_token?: string; refresh_token?: string };
+    authorization_server_url?: string;
+    resource_url?: string;
+  };
+  assert.equal(migrated.tokens?.access_token, 'legacy-access-secret');
+  assert.equal(migrated.tokens?.refresh_token, 'legacy-refresh-secret');
+  assert.equal(migrated.authorization_server_url, 'https://auth.current.test');
+  assert.equal(migrated.resource_url, 'https://resource.current.test');
+
+  store.setLegacy(key, JSON.stringify({
+    version: 1,
+    clients: {},
+    tokens: {
+      access_token: 'must-not-win',
+      token_type: 'Bearer',
+      refresh_token: 'must-not-win'
+    }
+  }));
+  const currentWins = new DeskMcpOAuthProvider(
+    key,
+    store,
+    'http://127.0.0.1:8765/oauth/callback/legacy'
+  );
+  await currentWins.init();
+  assert.equal((await currentWins.tokens())?.access_token, 'legacy-access-secret');
+  assert.equal(store.hasLegacy(key), true);
+});
+
+test('DeskMCP OAuth provider discovers an unidentified legacy secret by matching the protected resource URL', async () => {
+  const key = 'dynamic-mcp:resource-match';
+  const store = new LegacyMemorySecretStore();
+  await store.set(key, JSON.stringify({
+    version: 1,
+    clients: {},
+    resource_url: 'https://mcp.example.test/'
+  }));
+  store.addLegacyCandidate('legacy-a.dpapi', JSON.stringify({
+    version: 1,
+    clients: { 'https://auth.example.test': { client_id: 'resource-client' } },
+    tokens: {
+      access_token: 'resource-access',
+      token_type: 'Bearer',
+      refresh_token: 'resource-refresh',
+      issuer: 'https://auth.example.test'
+    },
+    resource_url: 'https://mcp.example.test',
+    authorization_server_url: 'https://auth.example.test'
+  }));
+  store.addLegacyCandidate('legacy-other.dpapi', JSON.stringify({
+    version: 1,
+    clients: {},
+    tokens: {
+      access_token: 'other-access',
+      token_type: 'Bearer',
+      refresh_token: 'other-refresh'
+    },
+    resource_url: 'https://other.example.test/'
+  }));
+
+  const provider = new DeskMcpOAuthProvider(
+    key,
+    store,
+    'http://127.0.0.1:8765/oauth/callback/resource-match',
+    undefined,
+    undefined,
+    undefined,
+    'https://mcp.example.test/'
+  );
+  await provider.init();
+
+  assert.equal((await provider.tokens())?.access_token, 'resource-access');
+  assert.equal((await provider.tokens())?.refresh_token, 'resource-refresh');
+  assert.equal(store.hasLegacyCandidate('legacy-a.dpapi'), false);
+  assert.equal(store.hasLegacyCandidate('legacy-other.dpapi'), true);
+
+  const changedResource = new LegacyMemorySecretStore();
+  await changedResource.set('dynamic-mcp:changed-resource', JSON.stringify({
+    version: 1,
+    clients: {},
+    resource_url: 'https://mcp.example.test/mcp',
+    authorization_server_url: 'https://auth.example.test'
+  }));
+  changedResource.addLegacyCandidate('legacy-changed.dpapi', JSON.stringify({
+    version: 1,
+    clients: {},
+    tokens: {
+      access_token: 'changed-access',
+      token_type: 'Bearer',
+      refresh_token: 'changed-refresh',
+      issuer: 'https://auth.example.test'
+    },
+    resource_url: 'https://mcp.example.test/',
+    authorization_server_url: 'https://auth.example.test/'
+  }));
+  const changedResourceProvider = new DeskMcpOAuthProvider(
+    'dynamic-mcp:changed-resource',
+    changedResource,
+    'http://127.0.0.1:8765/oauth/callback/changed-resource',
+    undefined,
+    undefined,
+    undefined,
+    'https://mcp.example.test/mcp'
+  );
+  await changedResourceProvider.init();
+  assert.equal((await changedResourceProvider.tokens())?.refresh_token, 'changed-refresh');
+  assert.equal(changedResource.hasLegacyCandidate('legacy-changed.dpapi'), false);
+
+  const ambiguous = new LegacyMemorySecretStore();
+  ambiguous.addLegacyCandidate('first.dpapi', JSON.stringify({
+    version: 1,
+    clients: {},
+    tokens: { access_token: 'first', token_type: 'Bearer' },
+    resource_url: 'https://mcp.example.test/'
+  }));
+  ambiguous.addLegacyCandidate('second.dpapi', JSON.stringify({
+    version: 1,
+    clients: {},
+    tokens: { access_token: 'second', token_type: 'Bearer' },
+    resource_url: 'https://mcp.example.test'
+  }));
+  const ambiguousProvider = new DeskMcpOAuthProvider(
+    'dynamic-mcp:ambiguous',
+    ambiguous,
+    'http://127.0.0.1:8765/oauth/callback/ambiguous',
+    undefined,
+    undefined,
+    undefined,
+    'https://mcp.example.test/'
+  );
+  await assert.rejects(
+    ambiguousProvider.init(),
+    /multiple legacy OAuth secrets match/i
+  );
 });
 
 test('DeskMCP OAuth provider uses a pre-registered client without persisting its secret', async () => {

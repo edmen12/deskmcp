@@ -305,7 +305,38 @@ test('Agent Desktop skips a bound Windows desktop that no longer exists', async 
     const status = await manager.status();
     assert.equal(status.configured, true);
     assert.equal(status.available_desktops, 0);
+    assert.equal(status.desktops[0]?.desktopNumber, undefined);
+    assert.equal(status.desktops[0]?.status, 'unavailable');
     await assert.rejects(manager.startControl('missing desktop'), /no usable agent desktops remain/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('Agent Desktop fails closed when two bound ids resolve to the same live desktop number', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-desktop-duplicate-live-number-'));
+  try {
+    const desktopA = randomUUID();
+    const desktopB = randomUUID();
+    const native = {
+      async info() { return { officialApi: true, virtualDesktopAccessor: true }; },
+      async desktopById(requestedId: string) {
+        return { desktopId: requestedId, present: true, desktopNumber: 3, desktopCount: 3, currentDesktopNumber: 1 };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [
+        { schemaVersion: 1, desktopId: desktopA, desktopNumber: 2, boundAtUtc: new Date().toISOString() },
+        { schemaVersion: 1, desktopId: desktopB, desktopNumber: 3, boundAtUtc: new Date().toISOString() }
+      ]
+    });
+
+    await assert.rejects(manager.status(), /multiple bound Agent Desktop ids resolve to Desktop 3/i);
+    await assert.rejects(manager.startControl('duplicate desktop', undefined, 3), /multiple bound Agent Desktop ids resolve to Desktop 3/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -394,6 +425,59 @@ test('Agent Desktop process-tree placement keeps owned descendant GUI windows on
 
     await manager.placeProcessTreeWindows(4321, leaseId);
     assert.deepEqual(observed, { processId: 4321, desktopId, timeoutMs: 15000 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Agent Desktop process-tree placement fails closed when no stable owned GUI remains', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-process-tree-empty-'));
+  try {
+    const leaseId = randomUUID();
+    const desktopId = randomUUID();
+    const now = new Date().toISOString();
+    const native = {
+      async moveProcessTreeWindows(processId: number) {
+        return { processId, moved: 0, windows: [] };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [{ schemaVersion: 1, desktopId, desktopNumber: 2, boundAtUtc: now }]
+    });
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 2,
+      generation: 10,
+      controls: [{
+        schemaVersion: 1,
+        generation: 10,
+        active: true,
+        leaseId,
+        desktopId,
+        desktopNumber: 2,
+        taskLabel: 'GUI placement empty',
+        startedAtUtc: now
+      }]
+    });
+    await writeJson(path.join(root, 'hud-state.json'), {
+      schemaVersion: 2,
+      entries: [{
+        schemaVersion: 1,
+        generation: 10,
+        leaseId,
+        armed: true,
+        visible: false,
+        processId: 1234,
+        heartbeatAtUtc: new Date().toISOString()
+      }]
+    });
+
+    await assert.rejects(
+      manager.placeProcessTreeWindows(4321, leaseId),
+      /no stable top-level window/i
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -3043,7 +3043,7 @@ internal sealed partial class ControlPanelRuntime
             if (bind != null)
             {
                 bind.Content = "Bind Current";
-                bind.IsEnabled = true;
+                bind.IsEnabled = currentDesktop > 1;
             }
 
             if (bindingsPanel != null)
@@ -3054,8 +3054,8 @@ internal sealed partial class ControlPanelRuntime
                     int? liveNumber = liveDesktopNumbers[binding.DesktopId];
                     bool available = liveNumber.HasValue;
                     bool current = available && liveNumber.Value == currentDesktop;
-                    int? displayNumber = liveNumber ?? binding.DesktopNumber;
-                    string label = displayNumber.HasValue ? "Desktop " + (displayNumber.Value + 1) : "Desktop " + binding.DesktopId.Substring(0, 8);
+                    int? displayNumber = liveNumber;
+                    string label = displayNumber.HasValue ? "Desktop " + displayNumber.Value : "Desktop " + binding.DesktopId.Substring(0, 8);
                     string state = !available
                         ? "Unavailable · Windows desktop missing"
                         : (current ? "Current · " : String.Empty) + (controlled ? "Controlling" : "Ready");
@@ -3130,8 +3130,9 @@ internal sealed partial class ControlPanelRuntime
         if (agentDesktopControl == null) return;
         try
         {
+            int? liveNumber = agentDesktopControl.ResolveDesktopNumber(desktopId);
             AgentDesktopBindingDocument removed = await agentDesktopControl.UnbindDesktopAsync(desktopId);
-            string label = removed.DesktopNumber.HasValue ? "Desktop " + (removed.DesktopNumber.Value + 1) : "Agent Desktop";
+            string label = liveNumber.HasValue ? "Desktop " + liveNumber.Value : "Agent Desktop";
             ShowToast(label + " removed from the Agent pool.", false);
         }
         catch (Exception error)
@@ -3158,7 +3159,7 @@ internal sealed partial class ControlPanelRuntime
         {
             AgentDesktopBindingDocument binding = await agentDesktopControl.BindCurrentDesktopAsync();
             UpdateAgentDesktopUi();
-            string label = binding.DesktopNumber.HasValue ? "Desktop " + (binding.DesktopNumber.Value + 1) : "the current desktop";
+            string label = binding.DesktopNumber.HasValue ? "Desktop " + binding.DesktopNumber.Value : "the current desktop";
             ShowToast("Agent Desktop bound to " + label + ". Returned to Desktop 1.", false);
         }
         catch (Exception error)
@@ -3277,7 +3278,7 @@ internal sealed partial class ControlPanelRuntime
         {
             bool available = agentDesktopControl != null;
             manageAgentDesktops.Enabled = available;
-            bindAgentDesktop.Enabled = available && agentDesktopControl.CurrentDesktopNumber > 0;
+            bindAgentDesktop.Enabled = available && agentDesktopControl.CurrentDesktopNumber > 1;
             exitAgentControl.Enabled = available && agentDesktopControl.IsCurrentDesktopControlled;
         };
         quitPanel.Click += delegate { QuitPanel(false); };

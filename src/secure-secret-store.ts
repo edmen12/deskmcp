@@ -3,6 +3,10 @@ export interface SecretStore {
   get(key: string): Promise<string | undefined>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
+  getLegacy?(key: string): Promise<string | undefined>;
+  deleteLegacy?(key: string): Promise<void>;
+  listLegacyCandidates?(): Promise<readonly { id: string; value: string }[]>;
+  deleteLegacyCandidate?(id: string): Promise<void>;
 }
 
 export class MemorySecretStore implements SecretStore {

@@ -153,6 +153,15 @@ test('dynamic MCP refresh, cached search, inspect, and live call work through on
       assert.equal(refreshed.length, 1);
       assert.equal(refreshed[0]?.ok, true);
       assert.ok((refreshed[0]?.tool_count ?? 0) >= 3);
+      const healthy = (await hub.listServers() as Array<{
+        name: string;
+        last_health_status?: string;
+        last_health_at?: string;
+        last_health_error?: string;
+      }>).find(server => server.name === 'local-test');
+      assert.equal(healthy?.last_health_status, 'ok');
+      assert.ok(healthy?.last_health_at);
+      assert.equal(healthy?.last_health_error, undefined);
 
       const search = await hub.searchTools('ping', 'local-test', 10);
       assert.equal(search.some(tool => tool.qualified_name === 'local-test:desktop_ping'), true);
@@ -180,6 +189,30 @@ test('dynamic MCP refresh, cached search, inspect, and live call work through on
   } finally {
     await upstream.close();
   }
+});
+
+test('dynamic MCP refresh persists a failed live health check instead of presenting stale cache as healthy', async () => {
+  const upstream = await startHttpServer('127.0.0.1', 0);
+  const url = `${upstream.url}/mcp`;
+  await upstream.close();
+
+  await withHub(async ({ hub }) => {
+    await hub.addServer({ name: 'offline', url, timeout_ms: 1000 });
+    const refreshed = await hub.refresh('offline');
+    assert.equal(refreshed.length, 1);
+    assert.equal(refreshed[0]?.ok, false);
+    assert.ok(refreshed[0]?.error);
+
+    const offline = (await hub.listServers() as Array<{
+      name: string;
+      last_health_status?: string;
+      last_health_at?: string;
+      last_health_error?: string;
+    }>).find(server => server.name === 'offline');
+    assert.equal(offline?.last_health_status, 'error');
+    assert.ok(offline?.last_health_at);
+    assert.ok(offline?.last_health_error);
+  });
 });
 
 test('disabled dynamic MCP server cannot be called', async () => {

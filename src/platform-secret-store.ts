@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { renameFileWithRetry } from './fs-reliability.js';
 import type { SecretStore } from './secure-secret-store.js';
@@ -10,11 +10,46 @@ const HELPER_TIMEOUT_MS = 15_000;
 const KEYCHAIN_SERVICE = 'com.deskmcp.oauth';
 const ENTROPY = 'DeskMCP OAuth Secret Store v1';
 
-function idFor(key: string): string {
+function normalizedKey(key: string): string {
   const normalized = key.trim();
   if (!normalized) throw new Error('Secret store key is required.');
   if (Buffer.byteLength(normalized, 'utf8') > 256) throw new Error('Secret store key is too long.');
-  return Buffer.from(normalized, 'utf8').toString('base64url');
+  return normalized;
+}
+
+function idFor(key: string): string {
+  return Buffer.from(normalizedKey(key), 'utf8').toString('base64url');
+}
+
+async function legacyIdFor(key: string): Promise<string> {
+  const normalized = normalizedKey(key);
+  if (process.platform === 'win32') {
+    const script = [
+      '$raw=[Console]::In.ReadToEnd();',
+      '$bytes=[Text.Encoding]::UTF8.GetBytes($raw);',
+      '$sha=[Security.Cryptography.SHA256]::Create();',
+      '$hash=$null;',
+      'try {$hash=$sha.ComputeHash($bytes);[Console]::Out.Write(($hash|ForEach-Object{$_.ToString("x2")}) -join "")} finally {',
+      'if($hash){[Array]::Clear($hash,0,$hash.Length)};',
+      'if($bytes){[Array]::Clear($bytes,0,$bytes.Length)};',
+      '$sha.Dispose();',
+      '}'
+    ].join(' ');
+    const result = await runHelper(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      normalized
+    );
+    if (!/^[0-9a-f]{64}$/u.test(result.stdout.trim())) throw new Error('Legacy OAuth secret id helper returned invalid output.');
+    return result.stdout.trim();
+  }
+  if (process.platform === 'darwin') {
+    const result = await runHelper('/usr/bin/shasum', ['-a', '256'], normalized);
+    const digest = result.stdout.trim().split(/\s+/u)[0] ?? '';
+    if (!/^[0-9a-f]{64}$/u.test(digest)) throw new Error('Legacy OAuth secret id helper returned invalid output.');
+    return digest;
+  }
+  throw new Error(`Secure OAuth storage is unsupported on ${process.platform}.`);
 }
 
 async function runHelper(
@@ -119,14 +154,60 @@ export class PlatformSecretStore implements SecretStore {
     throw new Error(`Secure OAuth storage is unsupported on ${process.platform}.`);
   }
 
+  async getLegacy(key: string): Promise<string | undefined> {
+    const legacyId = await legacyIdFor(key);
+    if (process.platform === 'win32') return this.readWindowsSecret(path.join(this.root, `${legacyId}.dpapi`));
+    if (process.platform === 'darwin') return this.getMacById(legacyId);
+    throw new Error(`Secure OAuth storage is unsupported on ${process.platform}.`);
+  }
+
+  async deleteLegacy(key: string): Promise<void> {
+    const legacyId = await legacyIdFor(key);
+    if (process.platform === 'win32') return rm(path.join(this.root, `${legacyId}.dpapi`), { force: true });
+    if (process.platform === 'darwin') return this.deleteMacById(legacyId);
+    throw new Error(`Secure OAuth storage is unsupported on ${process.platform}.`);
+  }
+
+  async listLegacyCandidates(): Promise<readonly { id: string; value: string }[]> {
+    if (process.platform === 'darwin') return [];
+    if (process.platform !== 'win32') {
+      throw new Error(`Secure OAuth storage is unsupported on ${process.platform}.`);
+    }
+    let entries;
+    try {
+      entries = await readdir(this.root, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const candidates: Array<{ id: string; value: string }> = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^[0-9a-f]{64}\.dpapi$/u.test(entry.name)) continue;
+      const value = await this.readWindowsSecret(path.join(this.root, entry.name)).catch(() => undefined);
+      if (value !== undefined) candidates.push({ id: entry.name, value });
+    }
+    return candidates;
+  }
+
+  async deleteLegacyCandidate(id: string): Promise<void> {
+    if (!/^[0-9a-f]{64}\.dpapi$/u.test(id)) throw new Error('Invalid legacy OAuth secret id.');
+    if (process.platform === 'win32') return rm(path.join(this.root, id), { force: true });
+    if (process.platform === 'darwin') return;
+    throw new Error(`Secure OAuth storage is unsupported on ${process.platform}.`);
+  }
+
   private secretPath(key: string): string {
     return path.join(this.root, `${idFor(key)}.dpapi`);
   }
 
   private async getWindows(key: string): Promise<string | undefined> {
+    return this.readWindowsSecret(this.secretPath(key));
+  }
+
+  private async readWindowsSecret(secretPath: string): Promise<string | undefined> {
     let encrypted: string;
     try {
-      encrypted = await readFile(this.secretPath(key), 'utf8');
+      encrypted = await readFile(secretPath, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -173,9 +254,13 @@ export class PlatformSecretStore implements SecretStore {
   }
 
   private async getMac(key: string): Promise<string | undefined> {
+    return this.getMacById(idFor(key));
+  }
+
+  private async getMacById(accountId: string): Promise<string | undefined> {
     const result = await runHelper(
       '/usr/bin/security',
-      ['find-generic-password', '-a', idFor(key), '-s', KEYCHAIN_SERVICE, '-w'],
+      ['find-generic-password', '-a', accountId, '-s', KEYCHAIN_SERVICE, '-w'],
       '',
       [0, 44]
     );
@@ -191,9 +276,13 @@ export class PlatformSecretStore implements SecretStore {
   }
 
   private async deleteMac(key: string): Promise<void> {
+    return this.deleteMacById(idFor(key));
+  }
+
+  private async deleteMacById(accountId: string): Promise<void> {
     await runHelper(
       '/usr/bin/security',
-      ['delete-generic-password', '-a', idFor(key), '-s', KEYCHAIN_SERVICE],
+      ['delete-generic-password', '-a', accountId, '-s', KEYCHAIN_SERVICE],
       '',
       [0, 44]
     );

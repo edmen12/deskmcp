@@ -5,6 +5,7 @@ import path from 'node:path';
 import { acquirePidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 import { DynamicMcpOAuthManager } from './dynamic-mcp-oauth-manager.js';
 import { renameFileWithRetry } from './fs-reliability.js';
+import { runtimeEnvironmentValue } from './runtime-env.js';
 import type { SecretStore } from './secure-secret-store.js';
 
 const REGISTRY_SCHEMA_VERSION = 1;
@@ -71,6 +72,9 @@ export interface DynamicMcpServerConfig {
   readonly timeout_ms: number;
   readonly tools: readonly DynamicMcpToolDefinition[];
   readonly refreshed_at?: string;
+  readonly last_health_at?: string;
+  readonly last_health_status?: 'ok' | 'error';
+  readonly last_health_error?: string;
   readonly server_info?: {
     readonly name: string;
     readonly version: string;
@@ -248,6 +252,9 @@ function publicConfig(server: DynamicMcpServerConfig) {
     timeout_ms: server.timeout_ms,
     tool_count: server.tools.length,
     ...(server.refreshed_at ? { refreshed_at: server.refreshed_at } : {}),
+    ...(server.last_health_at ? { last_health_at: server.last_health_at } : {}),
+    ...(server.last_health_status ? { last_health_status: server.last_health_status } : {}),
+    ...(server.last_health_error ? { last_health_error: server.last_health_error } : {}),
     ...(server.server_info ? { server_info: { ...server.server_info } } : {})
   };
 }
@@ -390,6 +397,19 @@ function parseRegistry(value: unknown): RegistryFile {
     const refreshedAt = entry.refreshed_at === undefined
       ? undefined
       : boundedUtf8(entry.refreshed_at, `Dynamic MCP refreshed_at for ${name}`, 128, true);
+    const lastHealthAt = entry.last_health_at === undefined
+      ? undefined
+      : boundedUtf8(entry.last_health_at, `Dynamic MCP last_health_at for ${name}`, 128, true);
+    const lastHealthStatus = entry.last_health_status;
+    if (lastHealthStatus !== undefined && lastHealthStatus !== 'ok' && lastHealthStatus !== 'error') {
+      throw new Error(`Dynamic MCP last_health_status for ${name} is invalid.`);
+    }
+    const lastHealthError = entry.last_health_error === undefined
+      ? undefined
+      : boundedUtf8(entry.last_health_error, `Dynamic MCP last_health_error for ${name}`, 8192, true);
+    if (lastHealthError !== undefined && lastHealthStatus !== 'error') {
+      throw new Error(`Dynamic MCP last_health_error for ${name} requires error health status.`);
+    }
     return {
       name,
       ...(description ? { description } : {}),
@@ -401,6 +421,9 @@ function parseRegistry(value: unknown): RegistryFile {
       timeout_ms: timeout,
       tools,
       ...(refreshedAt ? { refreshed_at: refreshedAt } : {}),
+      ...(lastHealthAt ? { last_health_at: lastHealthAt } : {}),
+      ...(lastHealthStatus ? { last_health_status: lastHealthStatus } : {}),
+      ...(lastHealthError ? { last_health_error: lastHealthError } : {}),
       ...(serverInfo ? { server_info: serverInfo } : {})
     } satisfies DynamicMcpServerConfig;
   });
@@ -540,6 +563,34 @@ export class DynamicMcpHub {
       await rm(temp, { force: true }).catch(() => undefined);
       throw error;
     }
+  }
+
+  private async recordHealth(
+    expected: DynamicMcpServerConfig,
+    status: 'ok' | 'error',
+    error?: string
+  ): Promise<void> {
+    const timestamp = new Date().toISOString();
+    const errorText = status === 'error'
+      ? boundedUtf8(error ?? 'Unknown Dynamic MCP error.', `Dynamic MCP health error for ${expected.name}`, 8192, true)!
+      : undefined;
+    await this.serializeMutation(async () => {
+      const registry = await this.load();
+      const index = registry.servers.findIndex(server => server.name === expected.name);
+      if (index < 0) return;
+      const current = registry.servers[index]!;
+      if (!sameRefreshTarget(expected, current)) return;
+      const { last_health_error: _lastHealthError, ...withoutHealthError } = current;
+      const updated: DynamicMcpServerConfig = {
+        ...withoutHealthError,
+        last_health_at: timestamp,
+        last_health_status: status,
+        ...(errorText ? { last_health_error: errorText } : {})
+      };
+      const servers = [...registry.servers];
+      servers[index] = updated;
+      await this.save({ ...registry, servers });
+    });
   }
 
   async listServers(): Promise<unknown[]> {
@@ -689,7 +740,7 @@ export class DynamicMcpHub {
     const headers: Record<string, string> = {};
     for (const [header, envName] of Object.entries(server.header_env)) {
       if (server.oauth && header.toLowerCase() === 'authorization') continue;
-      const value = process.env[envName];
+      const value = runtimeEnvironmentValue(envName);
       if (!value) throw new Error(`Required environment variable is not configured: ${envName}.`);
       headers[header] = value;
     }
@@ -748,8 +799,10 @@ export class DynamicMcpHub {
     for (let index = 0; index < targets.length; index++) {
       const server = targets[index]!;
       if (batchDeadline !== undefined && Date.now() >= batchDeadline) {
+        const message = `Batch refresh exceeded ${MAX_REFRESH_ALL_MS} ms total deadline.`;
         for (const remaining of targets.slice(index)) {
-          results.push({ name: remaining.name, ok: false, error: `Batch refresh exceeded ${MAX_REFRESH_ALL_MS} ms total deadline.` });
+          await this.recordHealth(remaining, 'error', message).catch(() => undefined);
+          results.push({ name: remaining.name, ok: false, error: message });
         }
         break;
       }
@@ -779,6 +832,7 @@ export class DynamicMcpHub {
           ...(discovered.serverInfo ? { server_info: discovered.serverInfo } : {})
         };
         updates.set(server.name, discoveryUpdate);
+        await this.recordHealth(server, 'ok').catch(() => undefined);
         results.push({
           name: server.name,
           ok: true,
@@ -786,10 +840,12 @@ export class DynamicMcpHub {
           ...(discoveryUpdate.server_info ? { server_info: discoveryUpdate.server_info } : {})
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.recordHealth(server, 'error', message).catch(() => undefined);
         results.push({
           name: server.name,
           ok: false,
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
       }
     }
@@ -883,23 +939,31 @@ export class DynamicMcpHub {
   async callTool(qualifiedName: string, args: Record<string, unknown>): Promise<unknown> {
     const parts = qualifiedParts(qualifiedName);
     const server = await this.requireServer(parts.server);
-    return this.withClient(server, async client => {
-      const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
-      if (listed.tools.length > MAX_TOOLS_PER_SERVER) {
-        throw new Error(`Dynamic MCP server ${server.name} exposed more than ${MAX_TOOLS_PER_SERVER} tools.`);
-      }
-      const tool = listed.tools.find(item => item.name === parts.tool);
-      if (!tool) throw new Error(`Dynamic MCP tool no longer exists: ${qualifiedName}.`);
-      toolToDefinition(server.name, tool);
-      const result = await client.callTool(
-        { name: tool.name, arguments: args },
-        { toolDefinition: tool }
-      );
-      assertJsonSize(result, `Dynamic MCP tool result for ${qualifiedName}`, MAX_TOOL_RESULT_BYTES);
-      return {
-        name: `${server.name}:${tool.name}`,
-        result
-      };
-    });
+    try {
+      const value = await this.withClient(server, async client => {
+        const listed = await client.listTools(undefined, { cacheMode: 'refresh' });
+        if (listed.tools.length > MAX_TOOLS_PER_SERVER) {
+          throw new Error(`Dynamic MCP server ${server.name} exposed more than ${MAX_TOOLS_PER_SERVER} tools.`);
+        }
+        const tool = listed.tools.find(item => item.name === parts.tool);
+        if (!tool) throw new Error(`Dynamic MCP tool no longer exists: ${qualifiedName}.`);
+        toolToDefinition(server.name, tool);
+        const result = await client.callTool(
+          { name: tool.name, arguments: args },
+          { toolDefinition: tool }
+        );
+        assertJsonSize(result, `Dynamic MCP tool result for ${qualifiedName}`, MAX_TOOL_RESULT_BYTES);
+        return {
+          name: `${server.name}:${tool.name}`,
+          result
+        };
+      });
+      await this.recordHealth(server, 'ok').catch(() => undefined);
+      return value;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.recordHealth(server, 'error', message).catch(() => undefined);
+      throw error;
+    }
   }
 }

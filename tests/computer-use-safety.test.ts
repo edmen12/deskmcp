@@ -13,7 +13,7 @@ import {
 } from '../src/computer-use-backend.js';
 import { ComputerObservationRegistry } from '../src/computer-use-observation.js';
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
-import { prepareAgentDesktopAction } from '../src/computer-use-tools.js';
+import { agentDesktopSemanticTreeWarning, prepareAgentDesktopAction } from '../src/computer-use-tools.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { TEST_AREA } from '../src/paths.js';
 
@@ -276,6 +276,26 @@ test('tree-form WinApp inspect output is flattened into the stable MCP schema', 
   assert.equal(projected[1]?.value, 'hello');
   assert.equal('processId' in (projected[1] ?? {}), false);
   assert.equal('hwnd' in (projected[0] ?? {}), false);
+});
+
+test('Agent Desktop warns when Windows Forms semantic UIA collapses to window chrome only', () => {
+  const winforms = windowFixture({ className: 'WindowsForms10.Window.8.app.0.1234' });
+  const warning = agentDesktopSemanticTreeWarning(winforms, [
+    { type: 'Window', className: 'WindowsForms10.Window.8.app.0.1234' },
+    { type: 'TitleBar', automationId: 'TitleBar' },
+    { type: 'Button', automationId: 'Close', name: 'Close' }
+  ]);
+  assert.match(warning ?? '', /semantic_tree_limited/i);
+
+  assert.equal(agentDesktopSemanticTreeWarning(winforms, [
+    { type: 'Window', className: 'WindowsForms10.Window.8.app.0.1234' },
+    { type: 'Edit', className: 'WindowsForms10.EDIT.app.0.1234', automationId: 'InputBox' }
+  ]), undefined);
+
+  assert.equal(agentDesktopSemanticTreeWarning(
+    windowFixture({ className: 'HwndWrapper[DefaultDomain;;1234]' }),
+    [{ type: 'Window', className: 'Window' }]
+  ), undefined);
 });
 
 
