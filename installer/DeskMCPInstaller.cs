@@ -6,6 +6,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.IO.Compression;
+using System.Management;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -38,6 +39,7 @@ internal static class InstallerEngine
     private const string HashResource = "DesktopMCP.Payload.sha256";
     private const string IntegrityManifest = "install-integrity.sha256";
     private const long DiskSafetyMarginBytes = 64L * 1024L * 1024L;
+    private const int MoveRetrySeconds = 90;
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -104,7 +106,7 @@ internal static class InstallerEngine
             if (Directory.Exists(finalDir))
             {
                 StopInstalledProcesses(finalDir);
-                MoveDirectoryWithRetry(finalDir, backupDir, "back up the existing DeskMCP installation");
+                MoveDirectoryWithRetry(finalDir, backupDir, "back up the existing DeskMCP installation", delegate { StopInstalledProcesses(finalDir); });
                 backedUp = true;
             }
             if (options.SimulateFailureAfterBackup)
@@ -415,11 +417,51 @@ internal static class InstallerEngine
             finally { try { p.Dispose(); } catch { } }
         }
 
+        foreach (int wrapperPid in CaptureLegacyProcessHostWrapperRoots(root, selfPid))
+            roots.Add(wrapperPid);
+
         Dictionary<int, List<int>> children = SnapshotProcessChildren();
         HashSet<int> visited = new HashSet<int>();
         List<int> ordered = new List<int>();
         foreach (int rootPid in roots) AddProcessTreePostOrder(rootPid, children, visited, ordered);
         return ordered;
+    }
+
+    public static bool CapturesOwnedProcessForTest(string root, int pid)
+    {
+        return CaptureProcessTreeUnderRoot(root).Contains(pid);
+    }
+
+    private static HashSet<int> CaptureLegacyProcessHostWrapperRoots(string root, int selfPid)
+    {
+        HashSet<int> roots = new HashSet<int>();
+        string processHostPath = Path.GetFullPath(Path.Combine(root, "DeskMCP.ProcessHost.exe"));
+        try
+        {
+            using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='cmd.exe' AND CommandLine IS NOT NULL"))
+            using (ManagementObjectCollection processes = searcher.Get())
+            {
+                foreach (ManagementObject process in processes)
+                {
+                    using (process)
+                    {
+                        try
+                        {
+                            int pid = Convert.ToInt32((uint)process["ProcessId"]);
+                            if (pid == selfPid) continue;
+                            string commandLine = Convert.ToString(process["CommandLine"]);
+                            if (String.IsNullOrWhiteSpace(commandLine)) continue;
+                            if (commandLine.IndexOf(processHostPath, StringComparison.OrdinalIgnoreCase) >= 0)
+                                roots.Add(pid);
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+        catch { }
+        return roots;
     }
 
     private static Dictionary<int, List<int>> SnapshotProcessChildren()
@@ -465,18 +507,72 @@ internal static class InstallerEngine
     private static void StopCapturedProcessTree(List<int> ordered)
     {
         int selfPid = Process.GetCurrentProcess().Id;
+        List<string> failures = new List<string>();
         foreach (int pid in ordered)
         {
             if (pid == selfPid) continue;
             Process p = null;
+            string processName = "unknown";
             try
             {
                 p = Process.GetProcessById(pid);
+                try { processName = p.ProcessName; } catch { }
                 p.Kill();
-                p.WaitForExit(5000);
+                if (!p.WaitForExit(5000))
+                    failures.Add(pid + " (" + processName + "): did not exit within 5 seconds");
             }
-            catch { }
+            catch (ArgumentException)
+            {
+                // The process exited between the snapshot and the termination pass.
+            }
+            catch (Win32Exception error)
+            {
+                if (!ProcessIsGone(pid, p))
+                    failures.Add(pid + " (" + processName + "): " + error.GetType().Name + ": " + error.Message);
+            }
+            catch (InvalidOperationException error)
+            {
+                if (!ProcessIsGone(pid, p))
+                    failures.Add(pid + " (" + processName + "): " + error.Message);
+            }
+            catch (Exception error)
+            {
+                failures.Add(pid + " (" + processName + "): " + error.GetType().Name + ": " + error.Message);
+            }
             finally { if (p != null) try { p.Dispose(); } catch { } }
+        }
+        if (failures.Count > 0)
+        {
+            string detail = String.Join("; ", failures.GetRange(0, Math.Min(8, failures.Count)).ToArray());
+            if (failures.Count > 8) detail += "; ... +" + (failures.Count - 8) + " more";
+            throw new IOException("Could not terminate the DeskMCP-owned process tree before upgrade. " + detail);
+        }
+    }
+
+    private static bool ProcessIsGone(int pid, Process observed)
+    {
+        try
+        {
+            if (observed == null || observed.HasExited) return true;
+        }
+        catch { }
+        Process current = null;
+        try
+        {
+            current = Process.GetProcessById(pid);
+            return current.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (current != null) try { current.Dispose(); } catch { }
         }
     }
 
@@ -553,15 +649,16 @@ internal static class InstallerEngine
         return kb > Int32.MaxValue ? Int32.MaxValue : (int)kb;
     }
 
-    private static void MoveDirectoryWithRetry(string source, string destination, string action)
+    private static void MoveDirectoryWithRetry(string source, string destination, string action, Action retryMaintenance = null)
     {
         Exception last = null;
         int delayMs = 100;
-        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(MoveRetrySeconds);
         while (true)
         {
             try
             {
+                if (retryMaintenance != null) retryMaintenance();
                 Directory.Move(source, destination);
                 return;
             }
@@ -575,7 +672,7 @@ internal static class InstallerEngine
             }
         }
         string lastMessage = last == null ? "unknown error" : last.Message;
-        throw new IOException("Could not " + action + " within 30 seconds while waiting for transient Windows file locks to clear. Last error: " + lastMessage, last);
+        throw new IOException("Could not " + action + " within " + MoveRetrySeconds + " seconds while waiting for transient Windows file locks to clear. Last error: " + lastMessage, last);
     }
 
     private static bool IsReparseDirectory(string path)
@@ -958,6 +1055,13 @@ internal static class InstallerProgram
                     DateTime deadline = DateTime.UtcNow.AddSeconds(90);
                     while (!File.Exists(releasePath) && DateTime.UtcNow < deadline) Thread.Sleep(50);
                     return File.Exists(releasePath) ? 0 : 13;
+                }
+                if (args.Length == 3 && args[0] == "--owned-wrapper-test")
+                {
+                    int expectedPid;
+                    if (!Int32.TryParse(args[2], out expectedPid) || expectedPid <= 0) return 16;
+                    try { return InstallerEngine.CapturesOwnedProcessForTest(Path.GetFullPath(args[1]), expectedPid) ? 0 : 16; }
+                    catch (Exception ex) { WriteTestFailure("OWNED_WRAPPER_TEST_ERROR", ex); return 16; }
                 }
                 if (args.Length >= 2 && args[0] == "--recover-test")
                 {
