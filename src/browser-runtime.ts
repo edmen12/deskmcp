@@ -66,6 +66,7 @@ export interface BrowserProcessPlacementResult {
 export interface BrowserProcessController {
   start(command: string, agentDesktopLeaseId?: string): Promise<string>;
   active(processSessionId: string): Promise<boolean>;
+  diagnostics?(processSessionId: string): Promise<string | undefined>;
   place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs?: number, reconcile?: boolean): Promise<BrowserProcessPlacementResult>;
   terminate(processSessionId: string): Promise<void>;
 }
@@ -220,7 +221,14 @@ function validateSessionId(value: string): string {
   return selected;
 }
 
-async function pollDevToolsActivePort(profileDir: string, timeoutMs: number): Promise<number> {
+async function pollDevToolsActivePort(
+  profileDir: string,
+  timeoutMs: number,
+  processState?: {
+    active(): Promise<boolean>;
+    diagnostics?(): Promise<string | undefined>;
+  }
+): Promise<number> {
   const activePortFile = path.join(profileDir, 'DevToolsActivePort');
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -234,6 +242,21 @@ async function pollDevToolsActivePort(profileDir: string, timeoutMs: number): Pr
     } catch (error) {
       lastError = error;
     }
+
+    if (processState) {
+      let active = true;
+      try { active = await processState.active(); }
+      catch { active = true; }
+      if (!active) {
+        let diagnostics: string | undefined;
+        try { diagnostics = await processState.diagnostics?.(); }
+        catch { diagnostics = undefined; }
+        const summarized = diagnostics?.replace(/\s+/gu, ' ').trim().slice(-1600);
+        const detail = summarized ? ` Process output: ${summarized}` : '';
+        throw new Error(`Browser process exited before publishing a CDP port.${detail}`);
+      }
+    }
+
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : '';
@@ -302,6 +325,14 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
   async active(processSessionId: string): Promise<boolean> {
     await this.reconcile();
     return this.sessions.isActive(processSessionId);
+  }
+
+  async diagnostics(processSessionId: string): Promise<string | undefined> {
+    if (!this.sessions.has(processSessionId)) return undefined;
+    const pid = this.sessions.resolve(processSessionId);
+    const result = await this.bridge.readProcessOutput(pid, 100, 0, 4000);
+    const text = result.text.trim();
+    return text || undefined;
   }
 
   async place(
@@ -669,7 +700,15 @@ export class BrowserRuntime {
           await this.waitForInitialAgentDesktopWindow(processSessionId, agentDesktopLeaseId, readinessDeadline);
         }
         const portTimeout = Math.max(1, readinessDeadline - Date.now());
-        const port = await pollDevToolsActivePort(profileDir, portTimeout);
+        const processState = this.processController.diagnostics
+          ? {
+              active: () => this.processController.active(processSessionId!),
+              diagnostics: () => this.processController.diagnostics!(processSessionId!)
+            }
+          : {
+              active: () => this.processController.active(processSessionId!)
+            };
+        const port = await pollDevToolsActivePort(profileDir, portTimeout, processState);
         if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
         const readinessTimeout = Math.max(1, readinessDeadline - Date.now());
         const pages = await waitForCdpPages(this.cdp, port, readinessTimeout);

@@ -17,7 +17,8 @@ import type {
 import {
   BrowserRuntime,
   OwnedBrowserProcessController,
-  type BrowserProcessController
+  type BrowserProcessController,
+  type BrowserProcessPlacementResult
 } from '../src/browser-runtime.js';
 import type { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { ProcessSessionRegistry } from '../src/process-session-registry.js';
@@ -66,6 +67,30 @@ class FakeProcessController implements BrowserProcessController {
     this.terminated.push(processSessionId);
     if (this.failTerminate) throw new Error('INJECTED_BROWSER_TERMINATION_FAILURE');
     this.activeIds.delete(processSessionId);
+  }
+}
+
+class EarlyExitProcessController implements BrowserProcessController {
+  readonly terminated: string[] = [];
+
+  async start(): Promise<string> {
+    return 'early-exit-process';
+  }
+
+  async active(): Promise<boolean> {
+    return false;
+  }
+
+  async diagnostics(): Promise<string | undefined> {
+    return 'Start-Process : The application has failed to start because its side-by-side configuration is incorrect.';
+  }
+
+  async place(): Promise<BrowserProcessPlacementResult> {
+    throw new Error('placement should not run for an early-exit browser process');
+  }
+
+  async terminate(processSessionId: string): Promise<void> {
+    this.terminated.push(processSessionId);
   }
 }
 
@@ -206,6 +231,37 @@ async function configuredRuntime(
   await browser.init();
   return { browser, controller, cdp, artifacts };
 }
+
+test('browser start surfaces early owned-process diagnostics before CDP timeout', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const controller = new EarlyExitProcessController();
+  const browser = new BrowserRuntime(
+    path.join(root, 'browser'),
+    controller,
+    artifacts,
+    new FakeCdpDriver(),
+    executable
+  );
+  await browser.init();
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    browser.start({ profile_id: 'early-exit-diagnostics', timeout_ms: 5000 }),
+    error => {
+      assert.match(String(error), /exited before publishing a CDP port/i);
+      assert.match(String(error), /side-by-side configuration is incorrect/i);
+      return true;
+    }
+  );
+  assert.ok(Date.now() - startedAt < 2000, 'Early browser exit should fail before the CDP timeout.');
+  assert.deepEqual(controller.terminated, ['early-exit-process']);
+  await browser.closeAll();
+});
 
 test('browser start waits for CDP readiness after DevToolsActivePort is published', async t => {
   const root = await tempRoot();
