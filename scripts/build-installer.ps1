@@ -274,7 +274,7 @@ try {
 Require $mutexHolderClean 'Setup mutex holder did not finish cleanly.'
 Write-Output 'INSTALLER_SINGLE_INSTANCE=OK'
 Write-Output 'STEP=installer-smoke-owned-wrapper-discovery'
-$ownedWrapperProbeRoot = Join-Path $RuntimeRoot ('installer-owned-wrapper-probe\\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
+$ownedWrapperProbeRoot = Join-Path (Join-Path $RuntimeRoot 'installer-owned-wrapper-probe') ($Target + '-' + [guid]::NewGuid().ToString('N'))
 $ownedWrapperMarker = Join-Path $ownedWrapperProbeRoot 'DeskMCP.ProcessHost.exe'
 $ownedWrapper = $null
 try {
