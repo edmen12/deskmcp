@@ -666,6 +666,37 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
 });
 
 
+test('Windows owned process wrapper leaves the backend install cwd before ProcessHost starts', async t => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows-only ProcessHost wrapper contract');
+    return;
+  }
+
+  const fakeProcessHost = path.join(TEST_AREA, 'fake-process-host.exe');
+  await writeFile(fakeProcessHost, 'stub', 'utf8');
+  const bridge = new DesktopBackendBridge(undefined, fakeProcessHost);
+  let captured: { name: string; args: Record<string, unknown> } | undefined;
+  const mutable = bridge as unknown as {
+    callTextTool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
+  };
+  mutable.callTextTool = async (name, args) => {
+    captured = { name, args };
+    return { text: 'stub', isError: false };
+  };
+
+  try {
+    const result = await bridge.startProcess('echo SAFE_CWD', 1000, 'cmd.exe');
+    assert.equal(result.isError, false);
+    assert.equal(captured?.name, 'start_process');
+    assert.equal(captured?.args.shell, 'cmd.exe');
+    const ownedCommand = String(captured?.args.command ?? '');
+    assert.match(ownedCommand, /^cd \/d "%USERPROFILE%" && "/u);
+    assert.match(ownedCommand, /fake-process-host\.exe" --shell cmd\.exe/u);
+  } finally {
+    await rm(fakeProcessHost, { force: true });
+  }
+});
+
 test('observation capabilities isolate concurrent MCP clients and prevent lost updates', async () => {
   const file = path.join(TEST_AREA, 'multi-client-observation.txt');
   const localAuditPath = path.join(TEST_AREA, 'multi-client-observation-audit.jsonl');

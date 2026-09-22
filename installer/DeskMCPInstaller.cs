@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
@@ -37,6 +38,32 @@ internal static class InstallerEngine
     private const string HashResource = "DesktopMCP.Payload.sha256";
     private const string IntegrityManifest = "install-integrity.sha256";
     private const long DiskSafetyMarginBytes = 64L * 1024L * 1024L;
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Process32FirstW(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Process32NextW(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
     public static string DefaultInstallDir()
     {
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "DesktopMCP");
@@ -298,6 +325,11 @@ internal static class InstallerEngine
     }
     private static void StopInstalledProcesses(string installDir)
     {
+        // Capture the whole DeskMCP-owned process tree before graceful shutdown.
+        // Desktop Commander wraps ProcessHost launches in system cmd.exe processes
+        // outside the install root; those wrappers can inherit a current-directory
+        // handle inside gateway\node_modules and otherwise block atomic rename.
+        List<int> ownedTree = CaptureProcessTreeUnderRoot(installDir);
         StopExactProcesses("DeskMCP", Path.Combine(installDir, "DeskMCP.exe"));
         StopExactProcesses("DesktopMcpControlPanel", Path.Combine(installDir, "DesktopMcpControlPanel.exe"));
         string nodePath = Path.Combine(installDir, "node", "node.exe");
@@ -329,6 +361,7 @@ internal static class InstallerEngine
         }
         StopExactProcesses("node", nodePath);
         StopProcessesUnderRoot("tunnel-client", installDir);
+        StopCapturedProcessTree(ownedTree);
         StopAllProcessesUnderRoot(installDir);
     }
 
@@ -365,28 +398,95 @@ internal static class InstallerEngine
         }
     }
 
-    private static void StopAllProcessesUnderRoot(string root)
+    private static List<int> CaptureProcessTreeUnderRoot(string root)
     {
         string prefix = Path.GetFullPath(root).TrimEnd('\\') + "\\";
         int selfPid = Process.GetCurrentProcess().Id;
+        HashSet<int> roots = new HashSet<int>();
+        foreach (Process p in Process.GetProcesses())
+        {
+            try
+            {
+                if (p.Id == selfPid) continue;
+                string actual = Path.GetFullPath(p.MainModule.FileName);
+                if (actual.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) roots.Add(p.Id);
+            }
+            catch { }
+            finally { try { p.Dispose(); } catch { } }
+        }
+
+        Dictionary<int, List<int>> children = SnapshotProcessChildren();
+        HashSet<int> visited = new HashSet<int>();
+        List<int> ordered = new List<int>();
+        foreach (int rootPid in roots) AddProcessTreePostOrder(rootPid, children, visited, ordered);
+        return ordered;
+    }
+
+    private static Dictionary<int, List<int>> SnapshotProcessChildren()
+    {
+        Dictionary<int, List<int>> children = new Dictionary<int, List<int>>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == new IntPtr(-1))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the DeskMCP process tree.");
+        try
+        {
+            PROCESSENTRY32 entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+            if (!Process32FirstW(snapshot, ref entry))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate the DeskMCP process tree.");
+            do
+            {
+                int pid = unchecked((int)entry.th32ProcessID);
+                int parentPid = unchecked((int)entry.th32ParentProcessID);
+                if (!children.ContainsKey(parentPid)) children[parentPid] = new List<int>();
+                children[parentPid].Add(pid);
+                entry.dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>();
+            } while (Process32NextW(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+        return children;
+    }
+
+    private static void AddProcessTreePostOrder(
+        int pid,
+        Dictionary<int, List<int>> children,
+        HashSet<int> visited,
+        List<int> ordered)
+    {
+        if (!visited.Add(pid)) return;
+        List<int> descendants;
+        if (children.TryGetValue(pid, out descendants))
+            foreach (int childPid in descendants) AddProcessTreePostOrder(childPid, children, visited, ordered);
+        ordered.Add(pid);
+    }
+
+    private static void StopCapturedProcessTree(List<int> ordered)
+    {
+        int selfPid = Process.GetCurrentProcess().Id;
+        foreach (int pid in ordered)
+        {
+            if (pid == selfPid) continue;
+            Process p = null;
+            try
+            {
+                p = Process.GetProcessById(pid);
+                p.Kill();
+                p.WaitForExit(5000);
+            }
+            catch { }
+            finally { if (p != null) try { p.Dispose(); } catch { } }
+        }
+    }
+
+    private static void StopAllProcessesUnderRoot(string root)
+    {
         for (int pass = 0; pass < 3; pass++)
         {
-            bool found = false;
-            foreach (Process p in Process.GetProcesses())
-            {
-                try
-                {
-                    if (p.Id == selfPid) continue;
-                    string actual = Path.GetFullPath(p.MainModule.FileName);
-                    if (!actual.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-                    found = true;
-                    p.Kill();
-                    p.WaitForExit(5000);
-                }
-                catch { }
-                finally { try { p.Dispose(); } catch { } }
-            }
-            if (!found) return;
+            List<int> ownedTree = CaptureProcessTreeUnderRoot(root);
+            if (ownedTree.Count == 0) return;
+            StopCapturedProcessTree(ownedTree);
             Thread.Sleep(100);
         }
     }

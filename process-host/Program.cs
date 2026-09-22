@@ -92,7 +92,7 @@ internal static class Program
                 true,
                 creationFlags,
                 IntPtr.Zero,
-                null,
+                ResolveSafeWorkingDirectory(),
                 ref startup,
                 out PROCESS_INFORMATION processInfo))
             {
@@ -275,7 +275,7 @@ internal static class Program
             UseShellExecute = true,
             Verb = "runas",
             WindowStyle = ProcessWindowStyle.Hidden,
-            WorkingDirectory = AppContext.BaseDirectory
+            WorkingDirectory = ResolveSafeWorkingDirectory()
         };
         try
         {
@@ -305,6 +305,17 @@ internal static class Program
     {
         try { File.WriteAllText(path, "Elevated DeskMCP process host failed: " + error.Message, Encoding.UTF8); }
         catch { }
+    }
+
+    private static string ResolveSafeWorkingDirectory()
+    {
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!String.IsNullOrWhiteSpace(profile) && Directory.Exists(profile)) return profile;
+        string temp = Path.GetTempPath();
+        if (!String.IsNullOrWhiteSpace(temp) && Directory.Exists(temp)) return temp;
+        string system = Environment.SystemDirectory;
+        if (!String.IsNullOrWhiteSpace(system) && Directory.Exists(system)) return system;
+        throw new InvalidOperationException("Could not resolve a safe working directory outside the DeskMCP installation.");
     }
 
     private static string ResolveShellPath(string shell)
