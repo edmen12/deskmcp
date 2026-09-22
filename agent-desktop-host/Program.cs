@@ -464,12 +464,14 @@ internal static class Program
 
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         HashSet<IntPtr> moved = new();
+        Dictionary<IntPtr, int> observedOwners = new();
         do
         {
             foreach (int treeProcessId in EnumerateProcessTree(processId))
             {
                 foreach (IntPtr hwnd in EnumerateTopLevelWindows(treeProcessId))
                 {
+                    observedOwners[hwnd] = treeProcessId;
                     try
                     {
                         Guid currentDesktopId = GetDesktopId(hwnd);
@@ -483,22 +485,33 @@ internal static class Program
             Thread.Sleep(75);
         } while (DateTime.UtcNow < deadline);
 
-        List<object> windows = new();
+        // Launchers such as Chrome and modern Notepad can create the real GUI in a
+        // descendant and then exit/reparent that descendant before this timeout
+        // completes. Preserve HWNDs observed while they were still owned by the
+        // process tree, then verify the live window itself instead of requiring its
+        // process to remain a descendant of the original launcher.
         foreach (int treeProcessId in EnumerateProcessTree(processId))
         {
             foreach (IntPtr hwnd in EnumerateTopLevelWindows(treeProcessId))
+                observedOwners[hwnd] = treeProcessId;
+        }
+
+        List<object> windows = new();
+        foreach (KeyValuePair<IntPtr, int> observed in observedOwners)
+        {
+            IntPtr hwnd = observed.Key;
+            if (!IsWindow(hwnd)) continue;
+            GetWindowThreadProcessId(hwnd, out uint owner);
+            if (owner != unchecked((uint)observed.Value)) continue; // HWND was reused after the observed window closed.
+            Guid actual = GetDesktopId(hwnd);
+            if (actual != desktopId)
+                throw new InvalidOperationException("An Agent Desktop process-tree window remained on a different virtual desktop after placement.");
+            windows.Add(new
             {
-                if (!IsWindow(hwnd)) continue;
-                Guid actual = GetDesktopId(hwnd);
-                if (actual != desktopId)
-                    throw new InvalidOperationException("An Agent Desktop process-tree window remained on a different virtual desktop after placement.");
-                windows.Add(new
-                {
-                    hwnd = HwndText(hwnd),
-                    desktopId = actual.ToString("D"),
-                    desktopNumber = ToUserDesktopNumber(vda.WindowDesktopNumber(hwnd))
-                });
-            }
+                hwnd = HwndText(hwnd),
+                desktopId = actual.ToString("D"),
+                desktopNumber = ToUserDesktopNumber(vda.WindowDesktopNumber(hwnd))
+            });
         }
         if (windows.Count == 0)
             throw new TimeoutException("No stable top-level window remained in the requested process tree before timeout.");

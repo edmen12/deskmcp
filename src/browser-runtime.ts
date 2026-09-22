@@ -626,8 +626,15 @@ export class BrowserRuntime {
       await this.agentDesktop!.assertLease(leaseId);
       const remaining = deadline - Date.now();
       const timeoutMs = Math.max(100, Math.min(250, remaining));
-      const placed = await this.processController.place(processSessionId, leaseId, timeoutMs, false);
-      if (placed.windows > 0) return;
+      try {
+        const placed = await this.processController.place(processSessionId, leaseId, timeoutMs, false);
+        if (placed.windows > 0) return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/No stable top-level window remained in the requested process tree before timeout\.?/iu.test(message)) {
+          throw error;
+        }
+      }
       await new Promise(resolve => setTimeout(resolve, 25));
     }
     throw new Error('Agent Desktop browser window did not appear on the requested desktop before timeout.');

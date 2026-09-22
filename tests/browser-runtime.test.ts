@@ -34,6 +34,7 @@ class FakeProcessController implements BrowserProcessController {
   readonly activeIds = new Set<string>();
   readonly placements: Array<{ processSessionId: string; leaseId: string; timeoutMs: number; reconcile: boolean }> = [];
   placementWindows: number[] = [];
+  placementErrors: Array<Error | undefined> = [];
   failTerminate = false;
   private next = 1;
 
@@ -59,6 +60,8 @@ class FakeProcessController implements BrowserProcessController {
 
   async place(processSessionId: string, leaseId: string, timeoutMs = 250, reconcile = true) {
     this.placements.push({ processSessionId, leaseId, timeoutMs, reconcile });
+    const placementError = this.placementErrors.length > 0 ? this.placementErrors.shift() : undefined;
+    if (placementError) throw placementError;
     const windows = this.placementWindows.length > 0 ? this.placementWindows.shift()! : 1;
     return { moved: windows, windows };
   }
@@ -657,7 +660,11 @@ test('Agent Desktop browser waits until a real window is placed before start suc
   await artifacts.init();
   const browserRoot = path.join(root, 'browser');
   const controller = new FakeProcessController(browserRoot);
-  controller.placementWindows.push(0, 0, 1);
+  controller.placementErrors.push(
+    new Error('Agent Desktop native operation failed: No stable top-level window remained in the requested process tree before timeout.'),
+    new Error('Agent Desktop native operation failed: No stable top-level window remained in the requested process tree before timeout.')
+  );
+  controller.placementWindows.push(1);
   const cdp = new FakeCdpDriver();
   const leaseId = '55555555-5555-4555-8555-555555555555';
   const agentDesktop = {
