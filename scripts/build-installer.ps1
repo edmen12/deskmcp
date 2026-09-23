@@ -166,20 +166,43 @@ Require ([int]$targetContract.computerUseContract -ge 1) 'Release stage predates
 Require ([int]$targetContract.agentDesktopContract -ge 2) 'Release stage predates the Agent Desktop pool contract; rebuild it before packaging.'
 Require ([int]$targetContract.agentDesktopPoolContract -ge 1) 'Release stage predates the multi-desktop Agent pool contract; rebuild it before packaging.'
 Require ([int]$targetContract.browserLeaseLifetimeContract -ge 1) 'Release stage predates the Agent Browser lease-lifetime contract; rebuild it before packaging.'
-Require ([int]$targetContract.panelSingleFileContract -ge 1) 'Release stage predates the single-file Panel contract; rebuild it before packaging.'
-Require ([int]$targetContract.processHostSingleFileContract -ge 1) 'Release stage predates the single-file ProcessHost contract; rebuild it before packaging.'
+Require ([int]$targetContract.sharedDotnetRuntimeContract -ge 1) 'Release stage predates the shared .NET runtime contract; rebuild it before packaging.'
 Require ([int]$targetContract.trayIconEmbeddedContract -ge 1) 'Release stage predates the embedded Tray icon contract; rebuild it before packaging.'
-foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
-    Require (-not (Test-Path -LiteralPath (Join-Path $StageRoot $forbiddenPanelPayload))) ('Release stage Panel is not single-file: ' + $forbiddenPanelPayload)
-}
-foreach ($forbiddenProcessHostPayload in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
-    Require (-not (Test-Path -LiteralPath (Join-Path $StageRoot $forbiddenProcessHostPayload))) ('Release stage ProcessHost is not single-file: ' + $forbiddenProcessHostPayload)
+foreach ($requiredDotnetPayload in @(
+    'DeskMCP.dll',
+    'DeskMCP.deps.json',
+    'DeskMCP.runtimeconfig.json',
+    'DeskMCP.ProcessHost.dll',
+    'DeskMCP.ProcessHost.deps.json',
+    'DeskMCP.ProcessHost.runtimeconfig.json',
+    'DeskMCP.AgentDesktopHost.dll',
+    'DeskMCP.AgentDesktopHost.deps.json',
+    'DeskMCP.AgentDesktopHost.runtimeconfig.json',
+    'coreclr.dll',
+    'hostfxr.dll',
+    'hostpolicy.dll',
+    'System.Private.CoreLib.dll'
+)) {
+    Require (Test-Path -LiteralPath (Join-Path $StageRoot $requiredDotnetPayload)) ('Release stage shared .NET payload is missing: ' + $requiredDotnetPayload)
 }
 $tunnelRelative = Join-Path ('tunnel-client\' + [string]$targetContract.tunnelVersion) 'bin\tunnel-client.exe'
 $integrityRelatives = @(
     'DeskMCP.exe',
+    'DeskMCP.dll',
+    'DeskMCP.deps.json',
+    'DeskMCP.runtimeconfig.json',
     'DeskMCP.ProcessHost.exe',
+    'DeskMCP.ProcessHost.dll',
+    'DeskMCP.ProcessHost.deps.json',
+    'DeskMCP.ProcessHost.runtimeconfig.json',
     'DeskMCP.AgentDesktopHost.exe',
+    'DeskMCP.AgentDesktopHost.dll',
+    'DeskMCP.AgentDesktopHost.deps.json',
+    'DeskMCP.AgentDesktopHost.runtimeconfig.json',
+    'coreclr.dll',
+    'hostfxr.dll',
+    'hostpolicy.dll',
+    'System.Private.CoreLib.dll',
     'virtual-desktop-accessor\VirtualDesktopAccessor.dll',
     'virtual-desktop-accessor\LICENSE.txt',
     'virtual-desktop-accessor\SOURCE_COMMIT.txt',
@@ -315,13 +338,25 @@ if (Test-Path -LiteralPath $SmokeRoot) {
 Write-Output 'STEP=installer-smoke-install'
 $install = Invoke-IsolatedInstallerTest $SetupExe @('--install-test', ('"' + $SmokeRoot + '"')) 'clean-install'
 Require-InstallerTest $install 0 'Smoke install'
-Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.exe')) 'Installed Panel is missing.'
-foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
-    Require (-not (Test-Path -LiteralPath (Join-Path $SmokeRoot $forbiddenPanelPayload))) ('Installed Panel is not single-file: ' + $forbiddenPanelPayload)
-}
-Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.ProcessHost.exe')) 'Installed ProcessHost is missing.'
-foreach ($forbiddenProcessHostPayload in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
-    Require (-not (Test-Path -LiteralPath (Join-Path $SmokeRoot $forbiddenProcessHostPayload))) ('Installed ProcessHost is not single-file: ' + $forbiddenProcessHostPayload)
+foreach ($requiredDotnetPayload in @(
+    'DeskMCP.exe',
+    'DeskMCP.dll',
+    'DeskMCP.deps.json',
+    'DeskMCP.runtimeconfig.json',
+    'DeskMCP.ProcessHost.exe',
+    'DeskMCP.ProcessHost.dll',
+    'DeskMCP.ProcessHost.deps.json',
+    'DeskMCP.ProcessHost.runtimeconfig.json',
+    'DeskMCP.AgentDesktopHost.exe',
+    'DeskMCP.AgentDesktopHost.dll',
+    'DeskMCP.AgentDesktopHost.deps.json',
+    'DeskMCP.AgentDesktopHost.runtimeconfig.json',
+    'coreclr.dll',
+    'hostfxr.dll',
+    'hostpolicy.dll',
+    'System.Private.CoreLib.dll'
+)) {
+    Require (Test-Path -LiteralPath (Join-Path $SmokeRoot $requiredDotnetPayload)) ('Installed shared .NET payload is missing: ' + $requiredDotnetPayload)
 }
 Require (Test-Path -LiteralPath (Join-Path $SmokeRoot 'DeskMCPUninstaller.exe')) 'Installed Uninstaller is missing.'
 Require ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $SmokeRoot 'DeskMCPUninstaller.exe')).Hash -eq (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $SmokeRoot 'DeskMCP.exe')).Hash) 'Installed Uninstaller host must be byte-identical to DeskMCP.exe.'

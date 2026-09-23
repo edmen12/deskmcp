@@ -22,7 +22,6 @@ import {
   type BrowserSnapshotData,
   type BrowserSnapshotOptions
 } from './browser-cdp.js';
-import { PlaywrightBrowserDriver } from './browser-playwright.js';
 import { acquirePidDirectoryLock, inspectPidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
 import {
@@ -34,6 +33,17 @@ import {
 const PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const EPHEMERAL_PROFILE_PATTERN = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const BROWSER_PROFILE_DELETE_MAX_RETRIES = 20;
+const BROWSER_PROFILE_DELETE_RETRY_DELAY_MS = 50;
+
+async function removeBrowserProfileDirectory(profileDir: string): Promise<void> {
+  await rm(profileDir, {
+    recursive: true,
+    force: true,
+    maxRetries: BROWSER_PROFILE_DELETE_MAX_RETRIES,
+    retryDelay: BROWSER_PROFILE_DELETE_RETRY_DELAY_MS
+  });
+}
 const DEFAULT_START_TIMEOUT_MS = 15000;
 const MAX_START_TIMEOUT_MS = 60000;
 const SCREENSHOT_RETENTION_SECONDS = 60 * 60;
@@ -374,7 +384,8 @@ export class BrowserRuntime {
   private readonly sessions = new Map<string, BrowserSessionRecord>();
   private readonly profilesInUse = new Map<string, string>();
   private readonly observations = new Map<string, BrowserObservationRecord>();
-  private readonly cdp: BrowserCdpDriver;
+  private cdp: BrowserCdpDriver | undefined;
+  private cdpPromise: Promise<BrowserCdpDriver> | undefined;
   private readonly browserEngine: BrowserRuntimeInfo['engine'];
   private mutationChain: Promise<void> = Promise.resolve();
   private sessionReaper: NodeJS.Timeout | undefined;
@@ -395,12 +406,10 @@ export class BrowserRuntime {
     }
     const configuredEngine = (process.env.DESKTOP_MCP_BROWSER_ENGINE ?? 'playwright').trim().toLowerCase();
     if (configuredEngine === 'playwright') {
-      this.cdp = new PlaywrightBrowserDriver();
       this.browserEngine = 'playwright';
       return;
     }
     if (configuredEngine === 'legacy-cdp') {
-      this.cdp = new ChromeCdpDriver();
       this.browserEngine = 'legacy-cdp';
       return;
     }
@@ -414,11 +423,33 @@ export class BrowserRuntime {
     if (!Number.isInteger(this.directSessionIdleTimeoutMs) || this.directSessionIdleTimeoutMs < 1000) {
       throw new Error('Browser direct-session idle timeout must be at least 1000ms.');
     }
-    if (!this.sessionReaper) {
-      this.sessionReaper = setInterval(() => {
-        void this.reapSessions().catch(() => undefined);
-      }, SESSION_REAPER_INTERVAL_MS);
-      this.sessionReaper.unref();
+  }
+
+  private ensureSessionReaper(): void {
+    if (this.sessionReaper) return;
+    this.sessionReaper = setInterval(() => {
+      void this.reapSessions().catch(() => undefined);
+    }, SESSION_REAPER_INTERVAL_MS);
+    this.sessionReaper.unref();
+  }
+
+  private async driver(): Promise<BrowserCdpDriver> {
+    if (this.cdp) return this.cdp;
+    if (this.cdpPromise) return this.cdpPromise;
+
+    this.cdpPromise = (async () => {
+      const driver = this.browserEngine === 'playwright'
+        ? new (await import('./browser-playwright.js')).PlaywrightBrowserDriver()
+        : new ChromeCdpDriver();
+      this.cdp = driver;
+      return driver;
+    })();
+
+    try {
+      return await this.cdpPromise;
+    } catch (error) {
+      this.cdpPromise = undefined;
+      throw error;
     }
   }
 
@@ -569,7 +600,7 @@ export class BrowserRuntime {
     this.sessions.delete(record.sessionId);
     this.profilesInUse.delete(record.profileId);
     this.invalidateSessionObservations(record.sessionId);
-    if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
+    if (!record.persistentProfile) await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
   }
 
   private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {
@@ -663,7 +694,7 @@ export class BrowserRuntime {
       try {
         await record.profileLock.release();
       } finally {
-        if (!record.persistentProfile) await rm(record.profileDir, { recursive: true, force: true }).catch(() => undefined);
+        if (!record.persistentProfile) await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
       }
     }
   }
@@ -718,13 +749,14 @@ export class BrowserRuntime {
         const port = await pollDevToolsActivePort(profileDir, portTimeout, processState);
         if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
         const readinessTimeout = Math.max(1, readinessDeadline - Date.now());
-        const pages = await waitForCdpPages(this.cdp, port, readinessTimeout);
+        const cdp = await this.driver();
+        const pages = await waitForCdpPages(cdp, port, readinessTimeout);
         const first = pages[0]!;
         if (initialUrl) {
           if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
-          await this.cdp.act(port, first.page_id, [{ type: 'goto', url: initialUrl, wait_until: 'domcontentloaded', timeout_ms: timeout }], timeout);
+          await cdp.act(port, first.page_id, [{ type: 'goto', url: initialUrl, wait_until: 'domcontentloaded', timeout_ms: timeout }], timeout);
         }
-        const currentPages = await this.cdp.listPages(port, Math.min(timeout, 10000));
+        const currentPages = await cdp.listPages(port, Math.min(timeout, 10000));
         const selected = currentPages.find(page => page.page_id === first.page_id) ?? currentPages[0]!;
         const record: BrowserSessionRecord = {
           sessionId,
@@ -740,6 +772,7 @@ export class BrowserRuntime {
           lastActivityAt: Date.now()
         };
         this.sessions.set(sessionId, record);
+        this.ensureSessionReaper();
         return {
           session_id: sessionId,
           profile_id: profile.id,
@@ -759,10 +792,10 @@ export class BrowserRuntime {
         try {
           await profileLock.release();
         } catch (lockError) {
-          if (!profile.persistent) await rm(profileDir, { recursive: true, force: true }).catch(() => undefined);
+          if (!profile.persistent) await removeBrowserProfileDirectory(profileDir).catch(() => undefined);
           throw new AggregateError([error, lockError], 'Browser start failed and profile lock release also failed.');
         }
-        if (!profile.persistent) await rm(profileDir, { recursive: true, force: true }).catch(() => undefined);
+        if (!profile.persistent) await removeBrowserProfileDirectory(profileDir).catch(() => undefined);
         throw error;
       }
     });
@@ -773,7 +806,7 @@ export class BrowserRuntime {
     const out: BrowserSessionSummary[] = [];
     for (const record of this.sessions.values()) {
       let pages: readonly BrowserPageSummary[] | undefined;
-      try { pages = await this.cdp.listPages(record.port, 3000); } catch { }
+      try { pages = await (await this.driver()).listPages(record.port, 3000); } catch { }
       out.push({
         session_id: record.sessionId,
         profile_id: record.profileId,
@@ -815,7 +848,7 @@ export class BrowserRuntime {
         const info = await lstat(profileDir).catch(() => undefined);
         if (!info) return { profile_id: profile.id, deleted: false };
         if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Browser profile path is not a trusted directory: ${profile.id}.`);
-        await rm(profileDir, { recursive: true, force: true });
+        await removeBrowserProfileDirectory(profileDir);
         return { profile_id: profile.id, deleted: true };
       } finally {
         await maintenanceLock.release();
@@ -831,14 +864,14 @@ export class BrowserRuntime {
     return this.serializeMutation(async () => {
       await this.reconcile();
       const record = this.session(sessionId);
-      const pageId = await this.cdp.createPage(record.port, url, timeoutMs);
+      const pageId = await (await this.driver()).createPage(record.port, url, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
       await this.refreshAgentDesktopPlacement(record);
 
       return {
         session_id: record.sessionId,
         page_id: pageId,
-        pages: await this.cdp.listPages(record.port, timeoutMs)
+        pages: await (await this.driver()).listPages(record.port, timeoutMs)
       };
     });
   }
@@ -854,14 +887,14 @@ export class BrowserRuntime {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
-      const selectedId = await this.cdp.selectPage(record.port, pageId, timeoutMs);
+      const selectedId = await (await this.driver()).selectPage(record.port, pageId, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
 
       return {
         session_id: record.sessionId,
         page_id: selectedId,
         selected: true,
-        pages: await this.cdp.listPages(record.port, timeoutMs),
+        pages: await (await this.driver()).listPages(record.port, timeoutMs),
         observation_required_before_next_action: true
       };
     });
@@ -877,14 +910,14 @@ export class BrowserRuntime {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
-      await this.cdp.closePage(record.port, pageId, timeoutMs);
+      await (await this.driver()).closePage(record.port, pageId, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
 
       return {
         session_id: record.sessionId,
         page_id: pageId,
         closed: true,
-        pages: await this.cdp.listPages(record.port, timeoutMs)
+        pages: await (await this.driver()).listPages(record.port, timeoutMs)
       };
     });
   }
@@ -905,7 +938,7 @@ export class BrowserRuntime {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
-      await this.cdp.handleDialog(record.port, pageId, accept, promptText, timeoutMs);
+      await (await this.driver()).handleDialog(record.port, pageId, accept, promptText, timeoutMs);
       this.invalidateSessionObservations(record.sessionId);
 
       return {
@@ -921,7 +954,7 @@ export class BrowserRuntime {
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
-    const found = await this.cdp.find(record.port, pageId, options);
+    const found = await (await this.driver()).find(record.port, pageId, options);
 
     const browserObservationId = this.issueObservation(record.sessionId, found.page_id, found.state_token);
     const { state_token: _stateToken, ...publicFind } = found;
@@ -936,7 +969,7 @@ export class BrowserRuntime {
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
-    const snapshot = await this.cdp.snapshot(record.port, pageId, options);
+    const snapshot = await (await this.driver()).snapshot(record.port, pageId, options);
 
     let screenshot: ArtifactInfo | undefined;
     if (options.screenshot !== false && snapshot.png) {
@@ -974,7 +1007,7 @@ export class BrowserRuntime {
     }
     const observation = this.consumeObservation(record.sessionId, pageId, browserObservationId);
     await this.refreshAgentDesktopPlacement(record);
-    const currentStateToken = await this.cdp.stateToken(record.port, observation.pageId, Math.min(options.timeout_ms ?? 5000, 10_000));
+    const currentStateToken = await (await this.driver()).stateToken(record.port, observation.pageId, Math.min(options.timeout_ms ?? 5000, 10_000));
     if (currentStateToken !== observation.stateToken) {
       throw new Error('STALE browser observation: the page changed after the snapshot. Take a fresh browser snapshot before downloading.');
     }
@@ -985,7 +1018,7 @@ export class BrowserRuntime {
     let artifact: ArtifactInfo;
     let effectivePageId = observation.pageId;
     try {
-      const downloaded = await this.cdp.download(
+      const downloaded = await (await this.driver()).download(
         record.port,
         observation.pageId,
         selectedSelector,
@@ -1033,11 +1066,11 @@ export class BrowserRuntime {
     }
     const observation = this.consumeObservation(record.sessionId, pageId, browserObservationId);
     await this.refreshAgentDesktopPlacement(record);
-    const currentStateToken = await this.cdp.stateToken(record.port, observation.pageId, Math.min(options.timeout_ms ?? 5000, 10000));
+    const currentStateToken = await (await this.driver()).stateToken(record.port, observation.pageId, Math.min(options.timeout_ms ?? 5000, 10000));
     if (currentStateToken !== observation.stateToken) {
       throw new Error('STALE browser observation: the page changed after the snapshot. Take a fresh browser snapshot before acting.');
     }
-    const effectivePageId = await this.cdp.act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
+    const effectivePageId = await (await this.driver()).act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
     await this.refreshAgentDesktopPlacement(record);
 
     return this.snapshot(record.sessionId, effectivePageId, options);

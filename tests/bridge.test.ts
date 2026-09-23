@@ -725,29 +725,21 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
 });
 
 
-test('Windows owned process wrapper leaves the backend install cwd before ProcessHost starts', async t => {
+test('Windows native ProcessHost launch keeps legacy backend disconnected and propagates launch context', async t => {
   if (process.platform !== 'win32') {
-    t.skip('Windows-only ProcessHost wrapper contract');
+    t.skip('Windows-only native ProcessHost contract');
     return;
   }
 
-  const fakeProcessHost = path.join(TEST_AREA, 'fake-process-host.exe');
-  await writeFile(fakeProcessHost, 'stub', 'utf8');
-  const bridge = new DesktopBackendBridge(undefined, fakeProcessHost);
-  let captured: { name: string; args: Record<string, unknown> } | undefined;
-  const mutable = bridge as unknown as {
-    callTextTool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
-  };
-  mutable.callTextTool = async (name, args) => {
-    captured = { name, args };
-    return { text: 'stub', isError: false };
-  };
+  const tempDirectory = path.join(TEST_AREA, 'native-process-context-temp');
+  await rm(tempDirectory, { recursive: true, force: true });
+  const bridge = new DesktopBackendBridge();
 
   try {
-    const tempDirectory = path.join(TEST_AREA, 'short-temp-wrapper');
+    assert.equal(bridge.info().backendConnected, false);
     const result = await bridge.startProcess(
-      'echo SAFE_CWD',
-      1000,
+      'node -e "console.log(\'NATIVE_CWD=\'+process.cwd()); console.log(\'NATIVE_TEMP=\'+process.env.TEMP)"',
+      5000,
       'cmd.exe',
       'hidden',
       'standard',
@@ -756,17 +748,23 @@ test('Windows owned process wrapper leaves the backend install cwd before Proces
       tempDirectory
     );
     assert.equal(result.isError, false);
-    assert.equal(captured?.name, 'start_process');
-    assert.equal(captured?.args.shell, 'cmd.exe');
-    const ownedCommand = String(captured?.args.command ?? '');
-    assert.match(ownedCommand, /^cd \/d "%USERPROFILE%" && "/u);
-    assert.match(ownedCommand, /fake-process-host\.exe" --shell cmd\.exe/u);
-    assert.match(ownedCommand, /--working-directory64\s+/u);
-    assert.match(ownedCommand, /--temp-directory64\s+/u);
-    assert.match(ownedCommand, new RegExp(Buffer.from(TEST_AREA, 'utf8').toString('base64')));
-    assert.match(ownedCommand, new RegExp(Buffer.from(tempDirectory, 'utf8').toString('base64')));
+    assert.equal(bridge.info().backendConnected, false);
+
+    const pidMatch = result.text.match(/Process started with PID\s+(\d+)/i);
+    assert.ok(pidMatch);
+    const pid = Number.parseInt(pidMatch[1] ?? '0', 10);
+    assert.ok(pid > 0);
+
+    const read = await bridge.readProcessOutput(pid, 1000, 0, 100);
+    assert.equal(read.isError, false);
+    const text = read.text.toLowerCase();
+    assert.ok(text.includes(('NATIVE_CWD=' + TEST_AREA).toLowerCase()));
+    assert.ok(text.includes(('NATIVE_TEMP=' + tempDirectory).toLowerCase()));
+    assert.match(read.text, /Process completed with exit code 0/);
+    assert.equal(bridge.info().backendConnected, false);
   } finally {
-    await rm(fakeProcessHost, { force: true });
+    await bridge.close();
+    await rm(tempDirectory, { recursive: true, force: true });
   }
 });
 
@@ -842,6 +840,58 @@ test('observation capabilities isolate concurrent MCP clients and prevent lost u
   }
 });
 
+test('native filesystem bridge avoids starting the legacy backend for ordinary text operations', async () => {
+  const root = path.join(TEST_AREA, 'native-file-backend-e2e');
+  const source = path.join(root, 'source.txt');
+  const targetDir = path.join(root, 'nested');
+  const target = path.join(targetDir, 'target.txt');
+  const moved = path.join(targetDir, 'moved.txt');
+  const missingBackend = path.join(root, 'missing-desktop-commander.js');
+  await rm(root, { recursive: true, force: true });
+  await writeFile(source, 'alpha\nbeta\n', { encoding: 'utf8', flag: 'w' }).catch(async error => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const bootstrap = new DesktopBackendBridge(missingBackend);
+    await bootstrap.createDirectory(root);
+    await writeFile(source, 'alpha\nbeta\n', 'utf8');
+  });
+
+  const bridge = new DesktopBackendBridge(missingBackend);
+  try {
+    assert.equal(bridge.info().backendConnected, false);
+    if (process.platform === 'win32') {
+      await bridge.preflight();
+      assert.equal(bridge.info().ready, true);
+      assert.equal(bridge.info().backendConnected, false);
+    }
+
+    const read = await bridge.readFile(source, 0, 1);
+    assert.equal(read.isError, false);
+    assert.match(read.text, /alpha/);
+
+    const info = await bridge.getFileInfo(source);
+    assert.equal(info.isError, false);
+    assert.match(info.text, /"isFile": true/);
+
+    await bridge.createDirectory(targetDir);
+    await bridge.writeFile(target, 'one', 'rewrite');
+    await bridge.editTextFile(target, 'one', 'two', 1);
+    assert.equal(await readFile(target, 'utf8'), 'two');
+
+    const listing = await bridge.listDirectory(root, 2);
+    assert.equal(listing.isError, false);
+    assert.match(listing.text, /target\.txt/);
+
+    await bridge.moveFile(target, moved);
+    assert.equal(await readFile(moved, 'utf8'), 'two');
+    await assert.rejects(readFile(target, 'utf8'), /ENOENT/);
+
+    assert.equal(bridge.info().backendConnected, false);
+  } finally {
+    await bridge.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('DeskMCP backend bridge reconnects after its child process exits', async () => {
   const bridge = new DesktopBackendBridge();
   await bridge.start();
@@ -858,14 +908,15 @@ test('DeskMCP backend bridge reconnects after its child process exits', async ()
     process.kill(originalPid, 'SIGKILL');
 
     const deadline = Date.now() + 5000;
-    while (bridge.info().ready && Date.now() < deadline) {
+    while (bridge.info().backendConnected && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    assert.equal(bridge.info().ready, false, 'bridge stayed ready after child exit');
+    assert.equal(bridge.info().ready, true, 'native DeskMCP runtime should remain ready after backend child exit');
+    assert.equal(bridge.info().backendConnected, false, 'backend child connection stayed active after child exit');
 
-    const result = await bridge.getFileInfo(READ_TEST_FILE);
-    assert.equal(result.isError, false);
+    await bridge.start();
     assert.equal(bridge.info().ready, true);
+    assert.equal(bridge.info().backendConnected, true);
     const replacementPid = getTransportPid();
     assert.ok(replacementPid && replacementPid > 0);
     assert.notEqual(replacementPid, originalPid, 'bridge did not create a replacement child');

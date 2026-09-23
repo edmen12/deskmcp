@@ -172,10 +172,13 @@ try {
     Require ($health.computerUse.available -eq $true) 'Installed computer-use backend is unavailable.'
     Require ($health.computerUse.backendVersion -eq $TargetConfig.WinAppVersion) ('Installed computer-use backend version mismatch: ' + $health.computerUse.backendVersion)
     Require ($health.computerUse.globalSerialization -eq $true -and $health.computerUse.freshObservationRequired -eq $true) 'Installed computer-use safety contract is incomplete.'
+    Require ($health.desktopRuntime.ready -eq $true) 'Installed DeskMCP runtime is not ready.'
+    Require ($health.desktopRuntime.backendConnected -eq $false) 'Installed Windows runtime eagerly started the legacy Desktop Commander backend.'
     Write-Output 'INSTALLER_COMPUTER_USE_RUNTIME=OK'
+    Write-Output 'INSTALLER_LEGACY_BACKEND_IDLE=OK'
     $nodePath=[IO.Path]::GetFullPath((Join-Path $SmokeRoot 'node\node.exe'))
     $nodes=@(Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { try{ $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $nodePath }catch{$false} })
-    Require ($nodes.Count -eq 2) "Installed node count=$($nodes.Count)"
+    Require ($nodes.Count -eq 1) "Installed node count=$($nodes.Count)"
     $runtimeTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($SmokeRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
     Require ($runtimeTunnelCount -eq 0) "Installer release runtime started a tunnel-client despite tunnel isolation: count=$runtimeTunnelCount"
     Write-Output 'INSTALLER_RELEASE_TUNNEL_PROCESS_COUNT=0'

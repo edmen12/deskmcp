@@ -33,6 +33,7 @@ function publicDesktopRuntimeInfo(bridge?: DesktopBackendBridge) {
   const info = bridge.info();
   return {
     ready: info.ready,
+    backendConnected: info.backendConnected,
     ...(info.serverName ? { serverName: info.serverName } : {}),
     ...(info.serverVersion ? { serverVersion: info.serverVersion } : {}),
     toolCount: info.toolCount,

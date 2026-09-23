@@ -6,6 +6,16 @@ import {
   getDefaultEnvironment,
   StdioClientTransport
 } from '@modelcontextprotocol/client/stdio';
+import {
+  createNativeDirectory,
+  editNativeTextFile,
+  getNativeFileInfo,
+  listNativeDirectory,
+  moveNativeFile,
+  readNativeTextFile,
+  writeNativeFile
+} from './native-file-backend.js';
+import { NativeWindowsProcessBackend } from './native-process-backend.js';
 import { PROJECT_ROOT } from './paths.js';
 
 export interface DesktopBackendStartupTiming {
@@ -18,6 +28,7 @@ export interface DesktopBackendStartupTiming {
 
 export interface DesktopBackendInfo {
   readonly ready: boolean;
+  readonly backendConnected: boolean;
   readonly entry: string;
   readonly serverName?: string;
   readonly serverVersion?: string;
@@ -47,26 +58,6 @@ const defaultProcessHostEntry = path.basename(PROJECT_ROOT).toLowerCase() === 'g
     );
 export const DEFAULT_PROCESS_HOST_ENTRY = defaultProcessHostEntry;
 
-function buildProcessHostCommand(
-  processHostEntry: string,
-  shell: 'powershell.exe' | 'cmd.exe',
-  command: string,
-  windowMode: 'hidden' | 'visible' = 'hidden',
-  elevation: 'standard' | 'admin' = 'standard',
-  lifetime: 'root' | 'job' = 'root',
-  workingDirectory?: string,
-  tempDirectory?: string
-): string {
-  const command64 = Buffer.from(command, 'utf8').toString('base64');
-  const workingDirectoryArg = workingDirectory
-    ? ` --working-directory64 ${Buffer.from(workingDirectory, 'utf8').toString('base64')}`
-    : '';
-  const tempDirectoryArg = tempDirectory
-    ? ` --temp-directory64 ${Buffer.from(tempDirectory, 'utf8').toString('base64')}`
-    : '';
-  return `cd /d "%USERPROFILE%" && "${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}${workingDirectoryArg}${tempDirectoryArg}`;
-}
-
 function elapsedMs(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 100) / 100;
 }
@@ -75,17 +66,23 @@ export class DesktopBackendBridge {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
   private startPromise: Promise<void> | null = null;
+  private available = false;
   private toolCount = 0;
   private serverName: string | undefined;
   private serverVersion: string | undefined;
   private startupTiming: DesktopBackendStartupTiming | undefined;
+  private readonly nativeProcesses: NativeWindowsProcessBackend | undefined;
 
   constructor(
     readonly entry = process.env.DESKMCP_BACKEND_ENTRY
       ?? DEFAULT_DESKMCP_BACKEND_ENTRY,
     readonly processHostEntry = process.env.DESKTOP_MCP_PROCESS_HOST
       ?? DEFAULT_PROCESS_HOST_ENTRY
-  ) {}
+  ) {
+    this.nativeProcesses = process.platform === 'win32'
+      ? new NativeWindowsProcessBackend(this.processHostEntry)
+      : undefined;
+  }
 
   private invalidateConnection(
     client: Client,
@@ -100,7 +97,14 @@ export class DesktopBackendBridge {
     this.startupTiming = undefined;
   }
 
+  async preflight(): Promise<void> {
+    if (process.platform === 'win32') await access(this.processHostEntry);
+    else await access(this.entry);
+    this.available = true;
+  }
+
   async start(): Promise<void> {
+    if (!this.available) await this.preflight();
     if (this.client) return;
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.startInternal();
@@ -145,7 +149,9 @@ export class DesktopBackendBridge {
       const listed = await client.listTools();
       const listToolsMs = elapsedMs(phaseStartedAt);
       phaseStartedAt = performance.now();
-      const required = ['read_file', 'list_directory', 'get_file_info', 'write_file', 'edit_block', 'create_directory', 'move_file', 'start_search', 'get_more_search_results', 'stop_search', 'start_process', 'read_process_output', 'interact_with_process', 'list_sessions', 'force_terminate'];
+      const required = process.platform === 'win32'
+        ? ['read_file']
+        : ['read_file', 'start_process', 'read_process_output', 'interact_with_process', 'list_sessions', 'force_terminate'];
       for (const name of required) {
         if (!listed.tools.some(tool => tool.name === name)) {
           throw new Error(`DeskMCP backend required tool unavailable: ${name}`);
@@ -174,7 +180,8 @@ export class DesktopBackendBridge {
   }
   info(): DesktopBackendInfo {
     return {
-      ready: this.client !== null && this.transport !== null,
+      ready: this.available,
+      backendConnected: this.client !== null && this.transport !== null,
       entry: this.entry,
       ...(this.serverName ? { serverName: this.serverName } : {}),
       ...(this.serverVersion ? { serverVersion: this.serverVersion } : {}),
@@ -210,6 +217,8 @@ export class DesktopBackendBridge {
   }
 
   async readFile(filePath: string, offset = 0, length = 1000): Promise<DesktopBackendToolResult> {
+    const native = await readNativeTextFile(filePath, offset, length);
+    if (native) return native;
     return this.callTextTool('read_file', {
       path: filePath,
       isUrl: false,
@@ -217,15 +226,13 @@ export class DesktopBackendBridge {
       length
     });
   }
+
   async listDirectory(directoryPath: string, depth = 2): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('list_directory', {
-      path: directoryPath,
-      depth
-    });
+    return listNativeDirectory(directoryPath, depth);
   }
 
   async getFileInfo(filePath: string): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('get_file_info', { path: filePath });
+    return getNativeFileInfo(filePath);
   }
 
   async writeFile(
@@ -233,11 +240,7 @@ export class DesktopBackendBridge {
     content: string,
     mode: 'rewrite' | 'append'
   ): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('write_file', {
-      path: filePath,
-      content,
-      mode
-    });
+    return writeNativeFile(filePath, content, mode);
   }
 
   async editTextFile(
@@ -246,42 +249,19 @@ export class DesktopBackendBridge {
     newString: string,
     expectedReplacements = 1
   ): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('edit_block', {
-      file_path: filePath,
-      old_string: oldString,
-      new_string: newString,
-      expected_replacements: expectedReplacements
-    });
+    return editNativeTextFile(filePath, oldString, newString, expectedReplacements);
   }
+
   async createDirectory(directoryPath: string): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('create_directory', { path: directoryPath });
+    return createNativeDirectory(directoryPath);
   }
 
   async moveFile(
     sourcePath: string,
     destinationPath: string
   ): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('move_file', {
-      source: sourcePath,
-      destination: destinationPath
-    });
+    return moveNativeFile(sourcePath, destinationPath);
   }
-  async startSearch(args: Record<string, unknown>): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('start_search', args);
-  }
-
-  async getSearchResults(
-    sessionId: string,
-    offset: number,
-    length: number
-  ): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('get_more_search_results', { sessionId, offset, length });
-  }
-
-  async stopSearch(sessionId: string): Promise<DesktopBackendToolResult> {
-    return this.callTextTool('stop_search', { sessionId });
-  }
-
   async startProcess(
     command: string,
     timeoutMs: number,
@@ -303,21 +283,16 @@ export class DesktopBackendBridge {
     }
 
     await access(this.processHostEntry);
-    const ownedCommand = buildProcessHostCommand(
-      this.processHostEntry,
-      shell ?? 'cmd.exe',
+    return this.nativeProcesses!.start(
       command,
+      timeoutMs,
+      shell ?? 'cmd.exe',
       windowMode,
       elevation,
       lifetime,
       workingDirectory,
       tempDirectory
     );
-    return this.callTextTool('start_process', {
-      command: ownedCommand,
-      timeout_ms: timeoutMs,
-      shell: 'cmd.exe'
-    });
   }
 
   async readProcessOutput(
@@ -326,6 +301,9 @@ export class DesktopBackendBridge {
     offset: number,
     length: number
   ): Promise<DesktopBackendToolResult> {
+    if (this.nativeProcesses) {
+      return this.nativeProcesses.read(pid, timeoutMs, offset, length);
+    }
     return this.callTextTool('read_process_output', {
       pid,
       timeout_ms: timeoutMs,
@@ -340,6 +318,9 @@ export class DesktopBackendBridge {
     timeoutMs: number,
     waitForPrompt: boolean
   ): Promise<DesktopBackendToolResult> {
+    if (this.nativeProcesses) {
+      return this.nativeProcesses.interact(pid, input, timeoutMs, waitForPrompt);
+    }
     return this.callTextTool('interact_with_process', {
       pid,
       input,
@@ -349,10 +330,12 @@ export class DesktopBackendBridge {
   }
 
   async listProcessSessions(): Promise<DesktopBackendToolResult> {
+    if (this.nativeProcesses) return this.nativeProcesses.list();
     return this.callTextTool('list_sessions', {});
   }
 
   async forceTerminateProcess(pid: number): Promise<DesktopBackendToolResult> {
+    if (this.nativeProcesses) return this.nativeProcesses.terminate(pid);
     return this.callTextTool('force_terminate', { pid });
   }
 
@@ -364,6 +347,7 @@ export class DesktopBackendBridge {
     this.serverName = undefined;
     this.serverVersion = undefined;
     this.startupTiming = undefined;
+    await this.nativeProcesses?.close();
     if (client) await client.close();
   }
 }

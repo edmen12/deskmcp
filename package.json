@@ -15,8 +15,14 @@
   "main": "dist/src/index.js",
   "scripts": {
     "test": "node scripts/prepare-tests.mjs && npm run build && node --test --test-concurrency=4 dist/tests/*.test.js",
-    "build": "node scripts/check-version-consistency.mjs && node scripts/check-user-facing-contracts.mjs && node scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "test:full": "npm test",
+    "test:fast": "npm run build && node scripts/run-test-group.mjs fast",
+    "test:integration": "node scripts/prepare-tests.mjs && npm run build && node scripts/run-test-group.mjs integration",
+    "test:browser": "npm run build && node --test dist/tests/browser-runtime.test.js dist/tests/browser-playwright.test.js dist/tests/browser-tools.test.js",
+    "test:process": "node scripts/prepare-tests.mjs && npm run build && node --test dist/tests/native-process-backend.test.js dist/tests/bridge.test.js",
+    "build": "node scripts/check-version-consistency.mjs && node scripts/check-open-task-markers.mjs && node scripts/check-user-facing-contracts.mjs && node scripts/clean-dist.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "runtime:cleanup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/cleanup-runtime.ps1",
     "start": "node dist/src/index.js",
     "stop": "node dist/src/stop.js"
   },
@@ -38,6 +44,7 @@
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
+    "@vscode/ripgrep": "^1.18.0",
     "@wonderwhy-er/desktop-commander": "0.2.47",
     "playwright-core": "1.63.0",
     "unzipper": "0.10.14",

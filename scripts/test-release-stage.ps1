@@ -56,13 +56,24 @@ $PreviousStartupLinkPath = $env:DESKTOP_MCP_STARTUP_LINK_PATH
 $PreviousTunnelProfilePath = $env:DESKTOP_MCP_TUNNEL_PROFILE_PATH
 $PreviousDisableTunnel = $env:DESKTOP_MCP_DISABLE_TUNNEL
 $SmokeInstanceNamespace = 'release-smoke-' + $Target + '-' + [Guid]::NewGuid().ToString('N')
-if (-not (Test-Path -LiteralPath $PanelExe)) { throw 'Release-stage Panel is missing.' }
-foreach ($forbiddenPanelPayload in @($PanelManagedDll,$PanelDepsJson,$PanelRuntimeConfig)) {
-    if (Test-Path -LiteralPath $forbiddenPanelPayload) { throw ('Release-stage Panel is not single-file: ' + $forbiddenPanelPayload) }
-}
-if (-not (Test-Path -LiteralPath $ProcessHostExe)) { throw 'Release-stage ProcessHost is missing.' }
-foreach ($forbiddenProcessHostPayload in @($ProcessHostManagedDll,$ProcessHostDepsJson,$ProcessHostRuntimeConfig)) {
-    if (Test-Path -LiteralPath $forbiddenProcessHostPayload) { throw ('Release-stage ProcessHost is not single-file: ' + $forbiddenProcessHostPayload) }
+foreach ($requiredDotnetPayload in @(
+    $PanelExe,
+    $PanelManagedDll,
+    $PanelDepsJson,
+    $PanelRuntimeConfig,
+    $ProcessHostExe,
+    $ProcessHostManagedDll,
+    $ProcessHostDepsJson,
+    $ProcessHostRuntimeConfig,
+    (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.dll'),
+    (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.deps.json'),
+    (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.runtimeconfig.json'),
+    (Join-Path $StageRoot 'coreclr.dll'),
+    (Join-Path $StageRoot 'hostfxr.dll'),
+    (Join-Path $StageRoot 'hostpolicy.dll'),
+    (Join-Path $StageRoot 'System.Private.CoreLib.dll')
+)) {
+    if (-not (Test-Path -LiteralPath $requiredDotnetPayload)) { throw ('Release-stage shared .NET payload is missing: ' + $requiredDotnetPayload) }
 }
 if (-not (Test-Path -LiteralPath $NodeExe)) { throw 'Release-stage Node is missing.' }
 foreach ($requiredAgentDesktopFile in @($AgentDesktopHost,$VdaDll,$VdaLicense,$VdaCommit,$VdaSums)) {
@@ -84,8 +95,7 @@ if ([int]$StageContract.computerUseContract -lt 1) { throw 'Release-stage predat
 if ([int]$StageContract.agentDesktopContract -lt 2) { throw 'Release-stage predates the Agent Desktop pool contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.agentDesktopPoolContract -lt 1) { throw 'Release-stage predates the multi-desktop Agent pool contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.browserLeaseLifetimeContract -lt 1) { throw 'Release-stage predates the Agent Browser lease-lifetime contract; rebuild the stage before smoke testing.' }
-if ([int]$StageContract.panelSingleFileContract -lt 1) { throw 'Release-stage predates the single-file Panel contract; rebuild the stage before smoke testing.' }
-if ([int]$StageContract.processHostSingleFileContract -lt 1) { throw 'Release-stage predates the single-file ProcessHost contract; rebuild the stage before smoke testing.' }
+if ([int]$StageContract.sharedDotnetRuntimeContract -lt 1) { throw 'Release-stage predates the shared .NET runtime contract; rebuild the stage before smoke testing.' }
 if ([int]$StageContract.trayIconEmbeddedContract -lt 1) { throw 'Release-stage predates the embedded Tray icon contract; rebuild the stage before smoke testing.' }
 $trayIconSelfTest = Start-Process -FilePath $PanelExe -ArgumentList '--tray-icon-self-test' -Wait -PassThru
 if ($trayIconSelfTest.ExitCode -ne 0) { throw ('Embedded Tray icon self-test failed: exit=' + $trayIconSelfTest.ExitCode) }
@@ -230,6 +240,7 @@ try {
     }
     if ($health.policy.profile -ne 'read-only') { throw "Unexpected profile: $($health.policy.profile)" }
     if ($health.version -ne $Version) { throw "Unexpected Gateway version: $($health.version); expected $Version" }
+    if ($health.desktopRuntime.backendConnected -ne $false) { throw 'Release-stage Windows runtime eagerly started the legacy Desktop Commander backend.' }
     if ($health.computerUse.available -ne $true) { throw 'Release-stage computer-use backend is not available in Gateway health.' }
     if ($health.computerUse.backendVersion -ne $TargetConfig.WinAppVersion) { throw ('Unexpected computer-use backend version: ' + $health.computerUse.backendVersion) }
     if ($health.computerUse.globalSerialization -ne $true -or $health.computerUse.freshObservationRequired -ne $true) { throw 'Computer-use safety contract is incomplete in Gateway health.' }
@@ -243,10 +254,10 @@ try {
     })
     if ($gatewayProcess.Count -ne 1) { throw "Expected one Gateway child for the smoke Panel, found $($gatewayProcess.Count)." }
     $desktopRuntimeProcess = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
-        try { [int]$_.ParentProcessId -eq [int]$gatewayProcess[0].ProcessId -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode -and $_.CommandLine -match 'dist[\\/]index\.js' } catch { $false }
+        try { [int]$_.ParentProcessId -eq [int]$gatewayProcess[0].ProcessId -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $targetNode } catch { $false }
     })
-    if ($desktopRuntimeProcess.Count -ne 1) { throw "Expected one DeskMCP backend child for the smoke Gateway, found $($desktopRuntimeProcess.Count)." }
-    $OwnedStageNodePids = @([int]$gatewayProcess[0].ProcessId, [int]$desktopRuntimeProcess[0].ProcessId)
+    if ($desktopRuntimeProcess.Count -ne 0) { throw "Expected zero legacy DeskMCP backend children for the idle smoke Gateway, found $($desktopRuntimeProcess.Count)." }
+    $OwnedStageNodePids = @([int]$gatewayProcess[0].ProcessId)
     $stageTunnelCount = @(Get-Process -Name tunnel-client -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($StageRoot).TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) } catch { $false } }).Count
     if ($stageTunnelCount -ne 0) { throw "Release-stage smoke started a tunnel-client despite tunnel isolation: count=$stageTunnelCount" }
     Write-Output 'SMOKE_TUNNEL_PROCESS_COUNT=0'

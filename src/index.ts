@@ -64,6 +64,7 @@ let control: RunningControlServer | null = null;
 let shuttingDown = false;
 
 async function cleanupOwnedProcesses(): Promise<void> {
+  if (processSessions.size() === 0) return;
   try {
     const listed = await bridge.listProcessSessions();
     if (!listed.isError) {
@@ -164,7 +165,7 @@ try {
     agentDesktop
   );
   control = await startControlServer(port, () => shutdown('LOCAL_CONTROL'));
-  await bridge.start();
+  await bridge.preflight();
 } catch (error) {
   await control?.close().catch(() => undefined);
   await running?.close().catch(() => undefined);
@@ -178,7 +179,7 @@ console.error(`[deskmcp] policy: ${JSON.stringify(policy.info())}`);
 console.error('[deskmcp] audit: enabled');
 console.error('[deskmcp] local control: enabled');
 console.error(
-  `[deskmcp] DeskMCP backend connected: ${JSON.stringify(bridge.info())}`
+  `[deskmcp] DeskMCP backend ready: ${JSON.stringify(bridge.info())}`
 );
 
 process.once('SIGINT', () => void shutdown('SIGINT'));

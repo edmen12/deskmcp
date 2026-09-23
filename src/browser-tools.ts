@@ -43,102 +43,180 @@ const snapshotOptionsSchema = {
 
 const elementSelectorSchema = z.string().min(1).max(4096).optional();
 const elementRefSchema = z.string().regex(/^(?:f[1-9][0-9]{0,6})*e[1-9][0-9]{0,6}$/u).optional();
-const exactlyOneElementTarget = (value: { selector?: string | undefined; ref?: string | undefined }) =>
-  Boolean(value.selector) !== Boolean(value.ref);
-const atMostOneElementTarget = (value: { selector?: string | undefined; ref?: string | undefined }) =>
-  !(value.selector && value.ref);
-
-const browserActionSchema = z.union([
-  z.object({
-    type: z.literal('goto'),
-    url: z.string().url().max(8192),
-    wait_until: z.enum(['domcontentloaded', 'load']).optional().default('domcontentloaded'),
-    timeout_ms: timeoutSchema
-  }),
-  z.object({ type: z.literal('click'), selector: elementSelectorSchema, ref: elementRefSchema })
-    .refine(exactlyOneElementTarget, { message: 'Browser click requires exactly one of selector or ref.' }),
-  z.object({ type: z.literal('hover'), selector: elementSelectorSchema, ref: elementRefSchema })
-    .refine(exactlyOneElementTarget, { message: 'Browser hover requires exactly one of selector or ref.' }),
-  z.object({
-    type: z.literal('drag'),
-    source_selector: elementSelectorSchema,
-    source_ref: elementRefSchema,
-    target_selector: elementSelectorSchema,
-    target_ref: elementRefSchema
-  })
-    .refine(value => Boolean(value.source_selector) !== Boolean(value.source_ref), { message: 'Browser drag source requires exactly one of source_selector or source_ref.' })
-    .refine(value => Boolean(value.target_selector) !== Boolean(value.target_ref), { message: 'Browser drag target requires exactly one of target_selector or target_ref.' }),
-  z.object({ type: z.literal('fill'), selector: elementSelectorSchema, ref: elementRefSchema, value: z.string().max(65536) })
-    .refine(exactlyOneElementTarget, { message: 'Browser fill requires exactly one of selector or ref.' }),
-  z.object({
-    type: z.literal('type_text'),
-    selector: elementSelectorSchema,
-    ref: elementRefSchema,
-    text: z.string().max(65536),
-    delay_ms: z.number().int().min(0).max(250).optional().default(0)
-  }).refine(exactlyOneElementTarget, { message: 'Browser type_text requires exactly one of selector or ref.' }),
-  z.object({
-    type: z.literal('set_checked'),
-    selector: elementSelectorSchema,
-    ref: elementRefSchema,
-    checked: z.boolean()
-  }).refine(exactlyOneElementTarget, { message: 'Browser set_checked requires exactly one of selector or ref.' }),
-  z.object({ type: z.literal('press'), selector: elementSelectorSchema, ref: elementRefSchema, key: z.string().min(1).max(64) })
-    .refine(atMostOneElementTarget, { message: 'Browser press accepts at most one of selector or ref.' }),
-  z.object({ type: z.literal('wait'), duration_ms: z.number().int().min(0).max(30000) }),
-  z.object({
-    type: z.literal('wait_selector'),
-    selector: elementSelectorSchema,
-    ref: elementRefSchema,
-    state: z.enum(['visible', 'hidden', 'attached', 'detached']).optional().default('visible'),
-    timeout_ms: timeoutSchema
-  }).refine(exactlyOneElementTarget, { message: 'Browser wait_selector requires exactly one of selector or ref.' }),
-  z.object({ type: z.literal('wait_url'), url: z.string().url().max(8192), timeout_ms: timeoutSchema }),
-  z.object({
-    type: z.literal('wait_text'),
-    text: z.string().min(1).max(4096),
-    exact: z.boolean().optional().default(false),
-    state: z.enum(['visible', 'hidden']).optional().default('visible'),
-    timeout_ms: timeoutSchema
-  }),
-  z.object({ type: z.literal('select'), selector: elementSelectorSchema, ref: elementRefSchema, value: z.string().max(4096) })
-    .refine(exactlyOneElementTarget, { message: 'Browser select requires exactly one of selector or ref.' }),
-  z.object({
-    type: z.literal('set_files'),
-    selector: elementSelectorSchema,
-    ref: elementRefSchema,
-    files: z.array(z.string().min(1).max(4096)).min(1).max(10)
-  }).refine(exactlyOneElementTarget, { message: 'Browser set_files requires exactly one of selector or ref.' }),
-  z.object({
-    type: z.literal('download'),
-    selector: elementSelectorSchema,
-    ref: elementRefSchema
-  }).refine(exactlyOneElementTarget, { message: 'Browser download requires exactly one of selector or ref.' }),
-  z.object({
-    type: z.literal('scroll'),
-    delta_x: z.number().int().min(-100000).max(100000).optional().default(0),
-    delta_y: z.number().int().min(-100000).max(100000).optional().default(0)
-  }),
-  z.object({
-    type: z.literal('navigation'),
-    direction: z.enum(['back', 'forward', 'reload']),
-    timeout_ms: timeoutSchema
-  })
+const browserActionTypeSchema = z.enum([
+  'goto','click','hover','drag','fill','type_text','set_checked','press','wait',
+  'wait_selector','wait_url','wait_text','select','set_files','download','scroll','navigation'
 ]);
 
+function requireActionField(
+  context: z.RefinementCtx,
+  value: unknown,
+  path: string,
+  message: string
+): void {
+  if (value === undefined || value === null || value === '') {
+    context.addIssue({ code: 'custom', path: [path], message });
+  }
+}
+
+function requireExactlyOneTarget(
+  context: z.RefinementCtx,
+  selector: string | undefined,
+  ref: string | undefined,
+  message: string
+): void {
+  if (Boolean(selector) === Boolean(ref)) {
+    context.addIssue({ code: 'custom', path: ['selector'], message });
+  }
+}
+
+const browserActionSchema = z.object({
+  type: browserActionTypeSchema,
+  selector: elementSelectorSchema,
+  ref: elementRefSchema,
+  source_selector: elementSelectorSchema,
+  source_ref: elementRefSchema,
+  target_selector: elementSelectorSchema,
+  target_ref: elementRefSchema,
+  url: z.string().url().max(8192).optional(),
+  wait_until: z.enum(['domcontentloaded', 'load']).optional(),
+  timeout_ms: z.number().int().min(1000).max(60000).optional(),
+  value: z.string().max(65536).optional(),
+  text: z.string().max(65536).optional(),
+  delay_ms: z.number().int().min(0).max(250).optional(),
+  checked: z.boolean().optional(),
+  key: z.string().min(1).max(64).optional(),
+  duration_ms: z.number().int().min(0).max(30000).optional(),
+  state: z.enum(['visible', 'hidden', 'attached', 'detached']).optional(),
+  exact: z.boolean().optional(),
+  files: z.array(z.string().min(1).max(4096)).min(1).max(10).optional(),
+  delta_x: z.number().int().min(-100000).max(100000).optional(),
+  delta_y: z.number().int().min(-100000).max(100000).optional(),
+  direction: z.enum(['back', 'forward', 'reload']).optional()
+}).superRefine((action, context) => {
+  const oneTarget = (message: string) => requireExactlyOneTarget(context, action.selector, action.ref, message);
+  switch (action.type) {
+    case 'goto':
+      requireActionField(context, action.url, 'url', 'Browser goto requires url.');
+      break;
+    case 'click':
+    case 'hover':
+    case 'download':
+      oneTarget(`Browser ${action.type} requires exactly one of selector or ref.`);
+      break;
+    case 'drag':
+      if (Boolean(action.source_selector) === Boolean(action.source_ref)) {
+        context.addIssue({ code: 'custom', path: ['source_selector'], message: 'Browser drag source requires exactly one of source_selector or source_ref.' });
+      }
+      if (Boolean(action.target_selector) === Boolean(action.target_ref)) {
+        context.addIssue({ code: 'custom', path: ['target_selector'], message: 'Browser drag target requires exactly one of target_selector or target_ref.' });
+      }
+      break;
+    case 'fill':
+      oneTarget('Browser fill requires exactly one of selector or ref.');
+      requireActionField(context, action.value, 'value', 'Browser fill requires value.');
+      break;
+    case 'type_text':
+      oneTarget('Browser type_text requires exactly one of selector or ref.');
+      if (action.text === undefined) context.addIssue({ code: 'custom', path: ['text'], message: 'Browser type_text requires text.' });
+      break;
+    case 'set_checked':
+      oneTarget('Browser set_checked requires exactly one of selector or ref.');
+      if (action.checked === undefined) context.addIssue({ code: 'custom', path: ['checked'], message: 'Browser set_checked requires checked.' });
+      break;
+    case 'press':
+      if (action.selector && action.ref) {
+        context.addIssue({ code: 'custom', path: ['selector'], message: 'Browser press accepts at most one of selector or ref.' });
+      }
+      requireActionField(context, action.key, 'key', 'Browser press requires key.');
+      break;
+    case 'wait':
+      if (action.duration_ms === undefined) context.addIssue({ code: 'custom', path: ['duration_ms'], message: 'Browser wait requires duration_ms.' });
+      break;
+    case 'wait_selector':
+      oneTarget('Browser wait_selector requires exactly one of selector or ref.');
+      break;
+    case 'wait_url':
+      requireActionField(context, action.url, 'url', 'Browser wait_url requires url.');
+      break;
+    case 'wait_text':
+      requireActionField(context, action.text, 'text', 'Browser wait_text requires text.');
+      if (action.text !== undefined && action.text.length > 4096) {
+        context.addIssue({ code: 'custom', path: ['text'], message: 'Browser wait_text text must be at most 4096 characters.' });
+      }
+      if (action.state === 'attached' || action.state === 'detached') {
+        context.addIssue({ code: 'custom', path: ['state'], message: 'Browser wait_text state must be visible or hidden.' });
+      }
+      break;
+    case 'select':
+      oneTarget('Browser select requires exactly one of selector or ref.');
+      requireActionField(context, action.value, 'value', 'Browser select requires value.');
+      if (action.value !== undefined && action.value.length > 4096) {
+        context.addIssue({ code: 'custom', path: ['value'], message: 'Browser select value must be at most 4096 characters.' });
+      }
+      break;
+    case 'set_files':
+      oneTarget('Browser set_files requires exactly one of selector or ref.');
+      if (!action.files) context.addIssue({ code: 'custom', path: ['files'], message: 'Browser set_files requires files.' });
+      break;
+    case 'scroll':
+      break;
+    case 'navigation':
+      if (!action.direction) context.addIssue({ code: 'custom', path: ['direction'], message: 'Browser navigation requires direction.' });
+      break;
+  }
+});
+
 type BrowserActionInput = z.infer<typeof browserActionSchema>;
-type BrowserDownloadAction = Extract<BrowserActionInput, { type: 'download' }>;
+type BrowserDownloadAction = { readonly type: 'download'; readonly selector?: string; readonly ref?: string };
 type ResolvedBrowserToolAction = BrowserAction | BrowserDownloadAction;
+
+function normalizeBrowserAction(action: BrowserActionInput): ResolvedBrowserToolAction {
+  const target = {
+    ...(action.selector ? { selector: action.selector } : {}),
+    ...(action.ref ? { ref: action.ref } : {})
+  };
+  switch (action.type) {
+    case 'goto':
+      return { type: 'goto', url: action.url!, wait_until: action.wait_until ?? 'domcontentloaded', ...(action.timeout_ms !== undefined ? { timeout_ms: action.timeout_ms } : {}) };
+    case 'click': return { type: 'click', ...target };
+    case 'hover': return { type: 'hover', ...target };
+    case 'drag':
+      return {
+        type: 'drag',
+        ...(action.source_selector ? { source_selector: action.source_selector } : {}),
+        ...(action.source_ref ? { source_ref: action.source_ref } : {}),
+        ...(action.target_selector ? { target_selector: action.target_selector } : {}),
+        ...(action.target_ref ? { target_ref: action.target_ref } : {})
+      };
+    case 'fill': return { type: 'fill', ...target, value: action.value! };
+    case 'type_text': return { type: 'type_text', ...target, text: action.text!, delay_ms: action.delay_ms ?? 0 };
+    case 'set_checked': return { type: 'set_checked', ...target, checked: action.checked! };
+    case 'press': return { type: 'press', ...target, key: action.key! };
+    case 'wait': return { type: 'wait', duration_ms: action.duration_ms! };
+    case 'wait_selector':
+      return { type: 'wait_selector', ...target, state: action.state ?? 'visible', ...(action.timeout_ms !== undefined ? { timeout_ms: action.timeout_ms } : {}) };
+    case 'wait_url': return { type: 'wait_url', url: action.url!, ...(action.timeout_ms !== undefined ? { timeout_ms: action.timeout_ms } : {}) };
+    case 'wait_text':
+      return { type: 'wait_text', text: action.text!, exact: action.exact ?? false, state: (action.state as 'visible' | 'hidden' | undefined) ?? 'visible', ...(action.timeout_ms !== undefined ? { timeout_ms: action.timeout_ms } : {}) };
+    case 'select': return { type: 'select', ...target, value: action.value! };
+    case 'download': return { type: 'download', ...target };
+    case 'scroll': return { type: 'scroll', delta_x: action.delta_x ?? 0, delta_y: action.delta_y ?? 0 };
+    case 'navigation': return { type: 'navigation', direction: action.direction!, ...(action.timeout_ms !== undefined ? { timeout_ms: action.timeout_ms } : {}) };
+    case 'set_files':
+      throw new Error('set_files must be resolved through policy before normalization.');
+  }
+}
 
 async function resolveBrowserActions(policy: DesktopPolicy, actions: readonly BrowserActionInput[]): Promise<ResolvedBrowserToolAction[]> {
   const resolved: ResolvedBrowserToolAction[] = [];
   for (const action of actions) {
     if (action.type !== 'set_files') {
-      resolved.push(action as ResolvedBrowserToolAction);
+      resolved.push(normalizeBrowserAction(action));
       continue;
     }
     const files: string[] = [];
-    for (const requested of action.files) {
+    for (const requested of action.files!) {
       const canonical = await policy.resolveReadPath(requested);
       const info = await stat(canonical);
       if (!info.isFile()) throw new Error(`Browser upload path is not a regular file: ${requested}.`);

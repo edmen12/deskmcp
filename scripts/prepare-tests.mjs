@@ -35,4 +35,17 @@ const smoke = spawnSync(
 );
 if (smoke.error) throw smoke.error;
 if (smoke.status !== 0) process.exit(smoke.status ?? 1);
+
+const runtimeCleanup = spawnSync(
+  'powershell.exe',
+  [
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', 'scripts/test-runtime-cleanup.ps1'
+  ],
+  { stdio: 'inherit', windowsHide: true }
+);
+if (runtimeCleanup.error) throw runtimeCleanup.error;
+if (runtimeCleanup.status !== 0) process.exit(runtimeCleanup.status ?? 1);
+
 console.log(`PROCESS_HOST_PRETEST=OK target=${target}`);

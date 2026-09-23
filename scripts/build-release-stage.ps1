@@ -8,8 +8,7 @@ $SourceCommit = Get-DeskMcpGitSourceCommit $ProjectRoot
 Assert-DeskMcpReleaseSourceClean $ProjectRoot
 $RuntimeRoot = Join-Path $ProjectRoot 'runtime'
 $StageRoot = Get-DeskMcpStageRoot $ProjectRoot $Target
-$PanelProject = Join-Path $ProjectRoot 'control-panel\wpf\DeskMCP.ControlPanel.csproj'
-$PanelPublish = Join-Path $RuntimeRoot ('publish\control-panel-' + $Target)
+$SharedDotnetPublish = Join-Path $RuntimeRoot ('publish\dotnet-shared-' + $Target)
 $ProcessHostPublish = Join-Path $RuntimeRoot ('process-host\' + $Target)
 $AgentDesktopRuntime = Join-Path $RuntimeRoot ('agent-desktop-runtime\' + $Target)
 $NodeZip = Join-Path $RuntimeRoot ('downloads\' + $TargetConfig.NodeArchive)
@@ -82,21 +81,35 @@ Assert-StageNotRunning $StageRoot
 Push-Location $ProjectRoot
 try { Invoke-Native 'npm.cmd' @('run','build') } finally { Pop-Location }
 
-if (Test-Path -LiteralPath $PanelPublish) { Remove-Item -LiteralPath $PanelPublish -Recurse -Force }
-Invoke-Native $dotnet @(
-    'publish',$PanelProject,'-c','Release','-r',$TargetConfig.DotnetRid,
-    '--self-contained','true','-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-o',$PanelPublish,'--nologo'
-)
-$publishedPanel = Join-Path $PanelPublish 'DeskMCP.exe'
-Require (Test-Path -LiteralPath $publishedPanel) 'Control Panel publish output is missing.'
-foreach ($forbiddenPanelPayload in @('DeskMCP.dll','DeskMCP.deps.json','DeskMCP.runtimeconfig.json')) {
-    Require (-not (Test-Path -LiteralPath (Join-Path $PanelPublish $forbiddenPanelPayload))) ('Control Panel publish is not single-file: ' + $forbiddenPanelPayload)
+& (Join-Path $PSScriptRoot 'build-shared-dotnet-runtime.ps1') -Target $Target -OutputRoot $SharedDotnetPublish
+$publishedPanel = Join-Path $SharedDotnetPublish 'DeskMCP.exe'
+$processHostExe = Join-Path $SharedDotnetPublish 'DeskMCP.ProcessHost.exe'
+$agentDesktopHostExe = Join-Path $SharedDotnetPublish 'DeskMCP.AgentDesktopHost.exe'
+foreach ($required in @(
+    $publishedPanel,
+    (Join-Path $SharedDotnetPublish 'DeskMCP.dll'),
+    (Join-Path $SharedDotnetPublish 'DeskMCP.runtimeconfig.json'),
+    $processHostExe,
+    (Join-Path $SharedDotnetPublish 'DeskMCP.ProcessHost.dll'),
+    (Join-Path $SharedDotnetPublish 'DeskMCP.ProcessHost.runtimeconfig.json'),
+    $agentDesktopHostExe,
+    (Join-Path $SharedDotnetPublish 'DeskMCP.AgentDesktopHost.dll'),
+    (Join-Path $SharedDotnetPublish 'DeskMCP.AgentDesktopHost.runtimeconfig.json'),
+    (Join-Path $SharedDotnetPublish 'coreclr.dll'),
+    (Join-Path $SharedDotnetPublish 'hostfxr.dll'),
+    (Join-Path $SharedDotnetPublish 'hostpolicy.dll')
+)) {
+    Require (Test-Path -LiteralPath $required) ('Shared .NET release payload is missing: ' + $required)
 }
 $panelMachine = Get-PeMachine $publishedPanel
+$processHostMachine = Get-PeMachine $processHostExe
+$agentDesktopHostMachine = Get-PeMachine $agentDesktopHostExe
 Require ($panelMachine -eq $TargetConfig.PeMachine) ('Control Panel PE architecture mismatch: 0x{0:X4}' -f $panelMachine)
+Require ($processHostMachine -eq $TargetConfig.PeMachine) ('ProcessHost PE architecture mismatch: 0x{0:X4}' -f $processHostMachine)
+Require ($agentDesktopHostMachine -eq $TargetConfig.PeMachine) ('Agent Desktop Host PE architecture mismatch: 0x{0:X4}' -f $agentDesktopHostMachine)
+
 $hostTarget = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
 if ($Target -eq $hostTarget) {
-    Invoke-Native $publishedPanel @('--agent-control-lock-self-test')
     $interopScript = Join-Path $ProjectRoot 'scripts\test-agent-control-lock-interop.mjs'
     $previousControlPanelExe = $env:DESKMCP_CONTROL_PANEL_EXE
     try {
@@ -113,38 +126,58 @@ else {
     Write-Output ('AGENT_CONTROL_LOCK_RELEASE_INTEROP=SKIP cross-architecture target=' + $Target + ' host=' + $hostTarget)
 }
 
+# Keep the dedicated development ProcessHost build/tests as an independent validation path.
 & (Join-Path $PSScriptRoot 'build-process-host.ps1') -Target $Target
-$processHostExe = Join-Path $ProcessHostPublish 'DeskMCP.ProcessHost.exe'
-$processHostMachine = Get-PeMachine $processHostExe
-Require ($processHostMachine -eq $TargetConfig.PeMachine) ('ProcessHost PE architecture mismatch: 0x{0:X4}' -f $processHostMachine)
 
+# Build VirtualDesktopAccessor and validate the dedicated Agent Desktop runtime path.
 & (Join-Path $PSScriptRoot 'build-agent-desktop-runtime.ps1') -Target $Target
-$agentDesktopHostExe = Join-Path $AgentDesktopRuntime 'DeskMCP.AgentDesktopHost.exe'
 $agentDesktopVdaDir = Join-Path $AgentDesktopRuntime 'virtual-desktop-accessor'
 $agentDesktopVdaDll = Join-Path $agentDesktopVdaDir 'VirtualDesktopAccessor.dll'
 $agentDesktopVdaLicense = Join-Path $agentDesktopVdaDir 'LICENSE.txt'
 $agentDesktopVdaCommit = Join-Path $agentDesktopVdaDir 'SOURCE_COMMIT.txt'
 $agentDesktopVdaSums = Join-Path $agentDesktopVdaDir 'SHA256SUMS.txt'
-foreach ($required in @($agentDesktopHostExe,$agentDesktopVdaDll,$agentDesktopVdaLicense,$agentDesktopVdaCommit,$agentDesktopVdaSums)) {
+foreach ($required in @($agentDesktopVdaDll,$agentDesktopVdaLicense,$agentDesktopVdaCommit,$agentDesktopVdaSums)) {
     Require (Test-Path -LiteralPath $required) ('Agent Desktop runtime payload is missing: ' + $required)
 }
-$agentDesktopHostMachine = Get-PeMachine $agentDesktopHostExe
 $agentDesktopVdaMachine = Get-PeMachine $agentDesktopVdaDll
-Require ($agentDesktopHostMachine -eq $TargetConfig.PeMachine) ('Agent Desktop Host PE architecture mismatch: 0x{0:X4}' -f $agentDesktopHostMachine)
 Require ($agentDesktopVdaMachine -eq $TargetConfig.PeMachine) ('VirtualDesktopAccessor PE architecture mismatch: 0x{0:X4}' -f $agentDesktopVdaMachine)
+
+if ($Target -eq $hostTarget) {
+    $previousVda = $env:DESKTOP_MCP_VDA_PATH
+    try {
+        $env:DESKTOP_MCP_VDA_PATH = $agentDesktopVdaDll
+        $sharedAgentInfoText = (& $agentDesktopHostExe info 2>&1 | Out-String).Trim()
+        Require ($LASTEXITCODE -eq 0) ('Shared Agent Desktop Host self-test failed: ' + $sharedAgentInfoText)
+        $sharedAgentInfo = $sharedAgentInfoText | ConvertFrom-Json
+        Require ($sharedAgentInfo.officialApi -eq $true -and $sharedAgentInfo.virtualDesktopAccessor -eq $true) 'Shared Agent Desktop Host did not report both Windows desktop backends available.'
+        Write-Output 'SHARED_AGENT_DESKTOP_RUNTIME_SELF_TEST=PASS'
+    } finally {
+        if ($null -eq $previousVda) { Remove-Item Env:DESKTOP_MCP_VDA_PATH -ErrorAction SilentlyContinue }
+        else { $env:DESKTOP_MCP_VDA_PATH = $previousVda }
+    }
+}
 
 if (Test-Path -LiteralPath $StageRoot) { Remove-Item -LiteralPath $StageRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
-Copy-Item -Path (Join-Path $PanelPublish '*') -Destination $StageRoot -Recurse -Force
-Copy-Item -LiteralPath $processHostExe -Destination (Join-Path $StageRoot 'DeskMCP.ProcessHost.exe') -Force
-foreach ($forbiddenProcessHostPayload in @('DeskMCP.ProcessHost.dll','DeskMCP.ProcessHost.deps.json','DeskMCP.ProcessHost.runtimeconfig.json')) {
-    Require (-not (Test-Path -LiteralPath (Join-Path $ProcessHostPublish $forbiddenProcessHostPayload))) ('ProcessHost publish is not single-file: ' + $forbiddenProcessHostPayload)
-}
-Copy-Item -LiteralPath $agentDesktopHostExe -Destination (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.exe') -Force
+Copy-Item -Path (Join-Path $SharedDotnetPublish '*') -Destination $StageRoot -Recurse -Force
 Copy-Item -LiteralPath $agentDesktopVdaDir -Destination (Join-Path $StageRoot 'virtual-desktop-accessor') -Recurse -Force
-Require (Test-Path -LiteralPath (Join-Path $StageRoot 'Panel.xaml')) 'Panel.xaml payload missing.'
-Require (Test-Path -LiteralPath (Join-Path $StageRoot 'DeskMCP.ProcessHost.exe')) 'ProcessHost payload missing.'
-Require (Test-Path -LiteralPath (Join-Path $StageRoot 'DeskMCP.AgentDesktopHost.exe')) 'Agent Desktop Host payload missing.'
+foreach ($requiredName in @(
+    'Panel.xaml',
+    'DeskMCP.exe',
+    'DeskMCP.dll',
+    'DeskMCP.runtimeconfig.json',
+    'DeskMCP.ProcessHost.exe',
+    'DeskMCP.ProcessHost.dll',
+    'DeskMCP.ProcessHost.runtimeconfig.json',
+    'DeskMCP.AgentDesktopHost.exe',
+    'DeskMCP.AgentDesktopHost.dll',
+    'DeskMCP.AgentDesktopHost.runtimeconfig.json',
+    'coreclr.dll',
+    'hostfxr.dll',
+    'hostpolicy.dll'
+)) {
+    Require (Test-Path -LiteralPath (Join-Path $StageRoot $requiredName)) ('Shared .NET stage payload missing: ' + $requiredName)
+}
 Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\VirtualDesktopAccessor.dll')) 'VirtualDesktopAccessor payload missing.'
 Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\LICENSE.txt')) 'VirtualDesktopAccessor MIT license payload missing.'
 Require (Test-Path -LiteralPath (Join-Path $StageRoot 'virtual-desktop-accessor\SOURCE_COMMIT.txt')) 'VirtualDesktopAccessor source provenance is missing.'
@@ -290,8 +323,7 @@ $stageInfo = [ordered]@{
     agentDesktopContract=2
     agentDesktopPoolContract=1
     browserLeaseLifetimeContract=1
-    panelSingleFileContract=1
-    processHostSingleFileContract=1
+    sharedDotnetRuntimeContract=1
     trayIconEmbeddedContract=1
     virtualDesktopAccessorCommit=(Get-Content -LiteralPath $agentDesktopVdaCommit -Raw).Trim()
     panelPeMachine=('0x{0:X4}' -f $panelMachine)

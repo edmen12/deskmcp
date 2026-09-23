@@ -81,7 +81,7 @@ export function registerDesktopBackendBridgeTools(
   audit: AuditLogger,
   observations: ObservationStore
 ): void {
-  const searches = new SafeSearchRunner(bridge, policy);
+  const searches = new SafeSearchRunner(policy);
 
   server.registerTool(
     'desktop_policy_status',
