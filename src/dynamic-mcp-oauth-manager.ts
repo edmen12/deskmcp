@@ -182,7 +182,7 @@ export class DynamicMcpOAuthManager {
       authProvider: provider,
       requestInit: { headers: { ...requestHeaders } }
     });
-    const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.15' });
+    const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.16' });
 
     try {
       await client.connect(transport);

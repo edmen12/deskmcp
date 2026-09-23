@@ -4,6 +4,21 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.16 — 2026-09-24
+
+### Fixed
+
+- Hardened Windows Agent development/test launches against legacy MAX_PATH failures by adding an explicit verified project working directory to `desktop_start_process`, a short per-process TEMP/TMP mode, and a conservative path-budget guard.
+- Propagated working-directory and short-temp launch context through the Windows ProcessHost, including the elevated-host handoff, instead of relying on shell-embedded `cd` / `Set-Location` commands.
+- Preserved the existing Agent Desktop administrator-launch error contract across non-Windows validation after adding the new launch-context checks.
+
+### Validation
+
+- Local TypeScript typecheck/build and focused process-launch regression suite pass.
+- Local Gateway/runtime regression suite: 203 passed, 0 failed.
+- Windows ProcessHost launch-context test verifies CWD, TEMP and TMP propagation.
+- Hosted CI passes Windows x64, native Windows ARM64, macOS ARM64, and all CodeQL jobs.
+
 ## 0.9.15 — 2026-09-21
 
 ### Added
