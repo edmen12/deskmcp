@@ -4,6 +4,25 @@ All notable changes to DeskMCP are documented here.
 
 ## Unreleased
 
+## 0.9.17 — 2026-09-24
+
+### Changed
+
+- Moved routine Windows file, process and search execution onto DeskMCP-owned native backends, with bundled ripgrep for search and ProcessHost for owned terminal sessions.
+- Changed startup to preflight the backend and connect the legacy backend lazily only when a fallback operation requires it.
+- Tightened idle Browser teardown so ephemeral profile cleanup completes before profile ownership is released and the session disappears from runtime state.
+- Split the test suite into fast, integration, browser and process groups and added a build-time open-task-marker guard.
+- Added deterministic runtime cleanup tooling for disposable build/test output.
+- Reworked Windows packaging so the Control Panel, ProcessHost and Agent Desktop Host share one self-contained .NET runtime instead of carrying duplicated self-contained runtimes.
+
+### Validation
+
+- Local Gateway/runtime suite: 213 passed, 0 failed (136 fast + 77 integration).
+- Browser focused suite: 53 passed, 0 failed, with real Chrome Start / CDP / Snapshot / Console / Close validation.
+- Shared .NET release-stage and full installer install/rollback/upgrade/recovery/runtime/uninstall validation pass.
+- Hosted Windows x64, Windows ARM64 and macOS ARM64 CI pass.
+- CodeQL Actions, C#, JavaScript/TypeScript and Swift analyses pass.
+
 ## 0.9.16 — 2026-09-24
 
 ### Fixed

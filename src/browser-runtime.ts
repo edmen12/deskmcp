@@ -592,15 +592,16 @@ export class BrowserRuntime {
   }
 
   private async disposeRecord(record: BrowserSessionRecord): Promise<void> {
-    // Do not relinquish the profile lock until the owned browser process is
-    // confirmed terminated. If termination fails, keeping the session and lock
-    // is safer than allowing a second browser to reuse a profile still in use.
+    // Keep profile ownership until both the owned browser process and its
+    // ephemeral profile are gone. Session disappearance therefore means the
+    // disposable profile cleanup has completed, instead of exposing a race
+    // where another observer can see the session gone while files remain.
     await this.processController.terminate(record.processSessionId);
+    if (!record.persistentProfile) await removeBrowserProfileDirectory(record.profileDir);
     await record.profileLock.release();
     this.sessions.delete(record.sessionId);
     this.profilesInUse.delete(record.profileId);
     this.invalidateSessionObservations(record.sessionId);
-    if (!record.persistentProfile) await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
   }
 
   private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {

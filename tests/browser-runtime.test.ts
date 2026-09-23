@@ -590,6 +590,16 @@ test('idle direct browser sessions are automatically reaped and ephemeral profil
   const profileDir = path.join(browserRoot, 'profiles', started.profile_id);
   assert.equal((await stat(profileDir)).isDirectory(), true);
 
+  const internalRecord = (browser as unknown as {
+    sessions: Map<string, { profileLock: { release(): Promise<void> } }>
+  }).sessions.get(started.session_id);
+  assert.ok(internalRecord);
+  const releaseProfileLock = internalRecord.profileLock.release.bind(internalRecord.profileLock);
+  internalRecord.profileLock.release = async () => {
+    await assert.rejects(() => stat(profileDir), /ENOENT/);
+    await releaseProfileLock();
+  };
+
   const deadline = Date.now() + 3500;
   while ((await browser.list()).length > 0 && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
