@@ -528,7 +528,66 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[]; type?: string }> }).properties;
       assert.deepEqual(startProperties?.window_mode?.enum, ['hidden', 'visible']);
       assert.deepEqual(startProperties?.elevation?.enum, ['standard', 'admin']);
+      assert.equal(startProperties?.cwd?.type, 'string');
+      assert.deepEqual(startProperties?.temp_mode?.enum, ['inherit', 'short']);
       assert.equal(startProperties?.agent_desktop_lease_id?.type, 'string');
+
+      if (process.platform === 'win32') {
+        const escapedCwd = await fullControlClient.callTool({
+          name: 'desktop_start_process',
+          arguments: {
+            command: 'node -e "setInterval(()=>{},1000)"',
+            timeout_ms: 1000,
+            shell: 'cmd.exe',
+            cwd: PROJECT_ROOT
+          }
+        });
+        assert.equal(escapedCwd.isError, true);
+        assert.match(JSON.stringify(escapedCwd.content), /outside the selected DeskMCP Workspace/);
+        assert.equal(processSessions.size(), 0);
+
+        const previousShortTempRoot = process.env.DESKTOP_MCP_SHORT_TEMP_ROOT;
+        const shortTempRoot = path.join(TEST_AREA, 'short-temp-e2e');
+        process.env.DESKTOP_MCP_SHORT_TEMP_ROOT = shortTempRoot;
+        try {
+          const contextStarted = await fullControlClient.callTool({
+            name: 'desktop_start_process',
+            arguments: {
+              command: 'node -e "console.log(\'CTX_CWD=\'+process.cwd()); console.log(\'CTX_TEMP=\'+process.env.TEMP); setInterval(()=>{},1000)"',
+              timeout_ms: 1000,
+              shell: 'cmd.exe',
+              cwd: TEST_AREA
+            }
+          });
+          assert.equal(contextStarted.isError, undefined);
+          assert.match(JSON.stringify(contextStarted.content), /Windows short TEMP\/TMP enabled/);
+          const contextSessionMatch = JSON.stringify(contextStarted.content).match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+          assert.ok(contextSessionMatch);
+
+          const contextRead = await fullControlClient.callTool({
+            name: 'desktop_read_process',
+            arguments: { session_id: contextSessionMatch[0], timeout_ms: 1000, offset: 0, length: 500 }
+          });
+          assert.equal(contextRead.isError, undefined);
+          const contextText = contextRead.content
+            .map(block => ('text' in block ? block.text : ''))
+            .join('\n')
+            .toLowerCase();
+          assert.ok(contextText.includes(('CTX_CWD=' + TEST_AREA).toLowerCase()));
+          assert.ok(contextText.includes(('CTX_TEMP=' + shortTempRoot).toLowerCase()));
+
+          const contextTerminated = await fullControlClient.callTool({
+            name: 'desktop_terminate_process',
+            arguments: { session_id: contextSessionMatch[0] }
+          });
+          assert.equal(contextTerminated.isError, undefined);
+          assert.equal(processSessions.size(), 0);
+        } finally {
+          if (previousShortTempRoot === undefined) delete process.env.DESKTOP_MCP_SHORT_TEMP_ROOT;
+          else process.env.DESKTOP_MCP_SHORT_TEMP_ROOT = previousShortTempRoot;
+          await rm(shortTempRoot, { recursive: true, force: true });
+        }
+      }
 
       const agentStarted = await fullControlClient.callTool({
         name: 'desktop_start_process',
@@ -685,13 +744,27 @@ test('Windows owned process wrapper leaves the backend install cwd before Proces
   };
 
   try {
-    const result = await bridge.startProcess('echo SAFE_CWD', 1000, 'cmd.exe');
+    const tempDirectory = path.join(TEST_AREA, 'short-temp-wrapper');
+    const result = await bridge.startProcess(
+      'echo SAFE_CWD',
+      1000,
+      'cmd.exe',
+      'hidden',
+      'standard',
+      'root',
+      TEST_AREA,
+      tempDirectory
+    );
     assert.equal(result.isError, false);
     assert.equal(captured?.name, 'start_process');
     assert.equal(captured?.args.shell, 'cmd.exe');
     const ownedCommand = String(captured?.args.command ?? '');
     assert.match(ownedCommand, /^cd \/d "%USERPROFILE%" && "/u);
     assert.match(ownedCommand, /fake-process-host\.exe" --shell cmd\.exe/u);
+    assert.match(ownedCommand, /--working-directory64\s+/u);
+    assert.match(ownedCommand, /--temp-directory64\s+/u);
+    assert.match(ownedCommand, new RegExp(Buffer.from(TEST_AREA, 'utf8').toString('base64')));
+    assert.match(ownedCommand, new RegExp(Buffer.from(tempDirectory, 'utf8').toString('base64')));
   } finally {
     await rm(fakeProcessHost, { force: true });
   }

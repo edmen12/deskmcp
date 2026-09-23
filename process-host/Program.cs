@@ -41,11 +41,19 @@ internal static class Program
 
         try
         {
-            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out elevatedChild, out int ownerPid, out errorFile);
+            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? workingDirectory, out string? tempDirectory, out elevatedChild, out int ownerPid, out errorFile);
+            if (workingDirectory != null && !Directory.Exists(workingDirectory))
+                throw new InvalidOperationException("DeskMCP working directory does not exist: " + workingDirectory);
+            if (tempDirectory != null)
+            {
+                Directory.CreateDirectory(tempDirectory);
+                Environment.SetEnvironmentVariable("TEMP", tempDirectory);
+                Environment.SetEnvironmentVariable("TMP", tempDirectory);
+            }
             if (elevation == "admin" && !elevatedChild)
             {
                 ElevationDisclosure.ShowIfEnabled(shell, command);
-                return RunElevatedHost(shell, command, windowMode, lifetime);
+                return RunElevatedHost(shell, command, windowMode, lifetime, workingDirectory, tempDirectory);
             }
             int owningPid = ownerPid > 0 ? ownerPid : GetParentProcessId(Environment.ProcessId);
             if (owningPid <= 0)
@@ -92,7 +100,7 @@ internal static class Program
                 true,
                 creationFlags,
                 IntPtr.Zero,
-                ResolveSafeWorkingDirectory(),
+                workingDirectory ?? ResolveSafeWorkingDirectory(),
                 ref startup,
                 out PROCESS_INFORMATION processInfo))
             {
@@ -202,13 +210,15 @@ internal static class Program
         }
     }
 
-    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out bool elevatedChild, out int ownerPid, out string? errorFile)
+    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? workingDirectory, out string? tempDirectory, out bool elevatedChild, out int ownerPid, out string? errorFile)
     {
         string? shellValue = null;
         string? command64 = null;
         string? windowModeValue = null;
         string? elevationValue = null;
         string? lifetimeValue = null;
+        string? workingDirectory64 = null;
+        string? tempDirectory64 = null;
         string? ownerPidValue = null;
         string? errorFile64 = null;
         elevatedChild = false;
@@ -219,6 +229,8 @@ internal static class Program
             else if (args[index] == "--window-mode" && index + 1 < args.Length) windowModeValue = args[++index];
             else if (args[index] == "--elevation" && index + 1 < args.Length) elevationValue = args[++index];
             else if (args[index] == "--lifetime" && index + 1 < args.Length) lifetimeValue = args[++index];
+            else if (args[index] == "--working-directory64" && index + 1 < args.Length) workingDirectory64 = args[++index];
+            else if (args[index] == "--temp-directory64" && index + 1 < args.Length) tempDirectory64 = args[++index];
             else if (args[index] == "--owner-pid" && index + 1 < args.Length) ownerPidValue = args[++index];
             else if (args[index] == "--elevated-child") elevatedChild = true;
             else if (args[index] == "--error-file64" && index + 1 < args.Length) errorFile64 = args[++index];
@@ -239,6 +251,22 @@ internal static class Program
         lifetime = (lifetimeValue ?? "root").ToLowerInvariant();
         if (lifetime != "root" && lifetime != "job")
             throw new ArgumentException("Unsupported process lifetime mode.");
+        workingDirectory = null;
+        if (!String.IsNullOrWhiteSpace(workingDirectory64))
+        {
+            try { workingDirectory = Encoding.UTF8.GetString(Convert.FromBase64String(workingDirectory64)); }
+            catch (FormatException) { throw new ArgumentException("Invalid working directory encoding."); }
+            if (!Path.IsPathFullyQualified(workingDirectory))
+                throw new ArgumentException("Working directory must be an absolute path.");
+        }
+        tempDirectory = null;
+        if (!String.IsNullOrWhiteSpace(tempDirectory64))
+        {
+            try { tempDirectory = Encoding.UTF8.GetString(Convert.FromBase64String(tempDirectory64)); }
+            catch (FormatException) { throw new ArgumentException("Invalid temp directory encoding."); }
+            if (!Path.IsPathFullyQualified(tempDirectory))
+                throw new ArgumentException("Temp directory must be an absolute path.");
+        }
         errorFile = null;
         if (!String.IsNullOrWhiteSpace(errorFile64))
         {
@@ -254,19 +282,27 @@ internal static class Program
         if (String.IsNullOrWhiteSpace(command)) throw new ArgumentException("Process command is empty.");
     }
 
-    private static int RunElevatedHost(string shell, string command, string windowMode, string lifetime)
+    private static int RunElevatedHost(string shell, string command, string windowMode, string lifetime, string? workingDirectory, string? tempDirectory)
     {
         string executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("Could not resolve the DeskMCP process host path.");
         string command64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(command));
         string errorFile = Path.Combine(Path.GetTempPath(), "deskmcp-elevation-" + Guid.NewGuid().ToString("N") + ".txt");
         string errorFile64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(errorFile));
+        string workingDirectoryArg = workingDirectory == null
+            ? String.Empty
+            : " --working-directory64 " + Convert.ToBase64String(Encoding.UTF8.GetBytes(workingDirectory));
+        string tempDirectoryArg = tempDirectory == null
+            ? String.Empty
+            : " --temp-directory64 " + Convert.ToBase64String(Encoding.UTF8.GetBytes(tempDirectory));
         string arguments = "--elevated-child --owner-pid " + Environment.ProcessId
             + " --shell " + shell
             + " --command64 " + command64
             + " --window-mode " + windowMode
             + " --elevation admin"
             + " --lifetime " + lifetime
+            + workingDirectoryArg
+            + tempDirectoryArg
             + " --error-file64 " + errorFile64;
         ProcessStartInfo start = new ProcessStartInfo
         {
@@ -275,7 +311,7 @@ internal static class Program
             UseShellExecute = true,
             Verb = "runas",
             WindowStyle = ProcessWindowStyle.Hidden,
-            WorkingDirectory = ResolveSafeWorkingDirectory()
+            WorkingDirectory = workingDirectory ?? ResolveSafeWorkingDirectory()
         };
         try
         {

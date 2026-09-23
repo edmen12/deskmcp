@@ -1,3 +1,6 @@
+import { stat } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
@@ -75,6 +78,80 @@ export function requireSupportedProcessPresentation(
   }
 }
 
+const WINDOWS_LEGACY_FILE_PATH_LIMIT = 259;
+const WINDOWS_PATH_HARD_MIN_HEADROOM = 48;
+const WINDOWS_PATH_WARNING_HEADROOM = 96;
+
+export function windowsRelativePathBudget(basePath: string): number {
+  return WINDOWS_LEGACY_FILE_PATH_LIMIT - basePath.length - 1;
+}
+
+function resolveShortTempDirectory(): string {
+  const override = process.env.DESKTOP_MCP_SHORT_TEMP_ROOT?.trim();
+  if (override) {
+    if (!path.isAbsolute(override)) {
+      throw new PolicyDeniedError('DESKTOP_MCP_SHORT_TEMP_ROOT must be an absolute path.');
+    }
+    return path.normalize(override);
+  }
+  const base = process.env.LOCALAPPDATA?.trim() || os.tmpdir();
+  return path.join(base, 'DMC', 't');
+}
+
+async function resolveProcessLaunchContext(
+  policy: DesktopPolicy,
+  cwd: string | undefined,
+  tempMode: 'inherit' | 'short' | undefined,
+  platform = process.platform
+): Promise<{ workingDirectory?: string; tempDirectory?: string; warning?: string }> {
+  if (platform !== 'win32') {
+    if (cwd || tempMode === 'short') {
+      throw new PolicyDeniedError('Process cwd and short temp mode are currently supported on Windows only.');
+    }
+    return {};
+  }
+
+  let workingDirectory: string | undefined;
+  let warning: string | undefined;
+  if (cwd) {
+    workingDirectory = await policy.resolveReadPath(cwd);
+    const metadata = await stat(workingDirectory);
+    if (!metadata.isDirectory()) {
+      throw new PolicyDeniedError(`Process cwd is not a directory: ${workingDirectory}`);
+    }
+    const headroom = windowsRelativePathBudget(workingDirectory);
+    if (headroom < WINDOWS_PATH_HARD_MIN_HEADROOM) {
+      throw new PolicyDeniedError(
+        `Windows path budget is too small for safe development/test execution: cwd length=${workingDirectory.length}, remaining legacy relative budget=${headroom}. Use a shorter project path.`
+      );
+    }
+    if (headroom < WINDOWS_PATH_WARNING_HEADROOM) {
+      warning = `WINDOWS_PATH_BUDGET_WARNING cwd_length=${workingDirectory.length} remaining_relative=${headroom}`;
+    }
+  }
+
+  const effectiveTempMode = tempMode ?? (workingDirectory ? 'short' : 'inherit');
+  if (effectiveTempMode === 'inherit') {
+    return {
+      ...(workingDirectory ? { workingDirectory } : {}),
+      ...(warning ? { warning } : {})
+    };
+  }
+
+  const tempDirectory = resolveShortTempDirectory();
+  const tempHeadroom = windowsRelativePathBudget(tempDirectory);
+  if (tempHeadroom < WINDOWS_PATH_HARD_MIN_HEADROOM) {
+    throw new PolicyDeniedError(
+      `DeskMCP short temp root is still too deep for safe Windows execution: ${tempDirectory}`
+    );
+  }
+  return {
+    ...(workingDirectory ? { workingDirectory } : {}),
+    tempDirectory,
+    ...(warning ? { warning } : {})
+  };
+}
+
 async function reconcileActiveProcessSessions(
   bridge: DesktopBackendBridge,
   sessions: ProcessSessionRegistry
@@ -147,11 +224,17 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
         shell: z.enum(['powershell.exe', 'cmd.exe']).optional(),
+        cwd: z.string().min(1).max(4096).optional().describe(
+          'Windows project working directory. DeskMCP resolves and verifies it before launch and applies a legacy path-budget guard.'
+        ),
+        temp_mode: z.enum(['inherit', 'short']).optional().describe(
+          'Windows TEMP/TMP behavior. With cwd, the default is short; otherwise the default is inherit.'
+        ),
         window_mode: z.enum(['hidden', 'visible']).optional().default('hidden').describe(
           'Controls whether the CMD/PowerShell console itself is hidden or visible. It does not control UAC.'
         ),
@@ -169,7 +252,7 @@ export function registerProcessTools(
         openWorldHint: true
       }
     },
-    async ({ command, timeout_ms, shell, window_mode, elevation, agent_desktop_lease_id }) => auditedProcessCall(
+    async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, agent_desktop_lease_id }) => auditedProcessCall(
       audit,
       policy,
       'desktop_start_process',
@@ -184,6 +267,8 @@ export function registerProcessTools(
           }
           await agentDesktop.assertLease(agent_desktop_lease_id);
         }
+        requireSupportedProcessPresentation(window_mode, elevation);
+        const launchContext = await resolveProcessLaunchContext(policy, cwd, temp_mode);
         if (sessions.atCapacity()) {
           await reconcileActiveProcessSessions(bridge, sessions);
         }
@@ -191,8 +276,16 @@ export function registerProcessTools(
         let pid: number | undefined;
         let sessionId: string | undefined;
         try {
-          requireSupportedProcessPresentation(window_mode, elevation);
-          const result = await bridge.startProcess(command, timeout_ms, shell, window_mode, elevation);
+          const result = await bridge.startProcess(
+            command,
+            timeout_ms,
+            shell,
+            window_mode,
+            elevation,
+            'root',
+            launchContext.workingDirectory,
+            launchContext.tempDirectory
+          );
           if (result.isError) {
             sessions.releaseStart(reservationId);
             return result;
@@ -203,9 +296,11 @@ export function registerProcessTools(
             await agentDesktop!.placeProcessTreeWindows(pid, agent_desktop_lease_id);
           }
           const sanitized = sanitizeProcessResult(result, pid, sessionId);
-          const placed = agent_desktop_lease_id
+          let placed = agent_desktop_lease_id
             ? sanitized.text + '\\nOwned process tree constrained to the active Agent Desktop lease.'
             : sanitized.text;
+          if (launchContext.warning) placed += `\\n${launchContext.warning}`;
+          if (launchContext.tempDirectory) placed += '\\nWindows short TEMP/TMP enabled for this owned process.';
           return window_mode === 'visible'
             ? { ...sanitized, text: placed + '\\nVisible console opened. Use the console window for interactive input.' }
             : { ...sanitized, text: placed };

@@ -82,7 +82,9 @@ finally {
 
 $nativeTarget = if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'win-arm64'}else{'win-x64'}
 if($Target -eq $nativeTarget){
-    & (Join-Path $PSScriptRoot 'test-process-host-job-lifetime.ps1') -ProcessHostPath (Join-Path $Output 'DeskMCP.ProcessHost.exe')
+    $nativeProcessHost = Join-Path $Output 'DeskMCP.ProcessHost.exe'
+    & (Join-Path $PSScriptRoot 'test-process-host-job-lifetime.ps1') -ProcessHostPath $nativeProcessHost
+    & (Join-Path $PSScriptRoot 'test-process-host-launch-context.ps1') -ProcessHostPath $nativeProcessHost
 }
 
 Write-Output 'PROCESS_HOST_BUILD_OK'

@@ -53,10 +53,18 @@ function buildProcessHostCommand(
   command: string,
   windowMode: 'hidden' | 'visible' = 'hidden',
   elevation: 'standard' | 'admin' = 'standard',
-  lifetime: 'root' | 'job' = 'root'
+  lifetime: 'root' | 'job' = 'root',
+  workingDirectory?: string,
+  tempDirectory?: string
 ): string {
   const command64 = Buffer.from(command, 'utf8').toString('base64');
-  return `cd /d "%USERPROFILE%" && "${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}`;
+  const workingDirectoryArg = workingDirectory
+    ? ` --working-directory64 ${Buffer.from(workingDirectory, 'utf8').toString('base64')}`
+    : '';
+  const tempDirectoryArg = tempDirectory
+    ? ` --temp-directory64 ${Buffer.from(tempDirectory, 'utf8').toString('base64')}`
+    : '';
+  return `cd /d "%USERPROFILE%" && "${processHostEntry}" --shell ${shell} --command64 ${command64} --window-mode ${windowMode} --elevation ${elevation} --lifetime ${lifetime}${workingDirectoryArg}${tempDirectoryArg}`;
 }
 
 function elapsedMs(startedAt: number): number {
@@ -280,7 +288,9 @@ export class DesktopBackendBridge {
     shell?: 'powershell.exe' | 'cmd.exe',
     windowMode: 'hidden' | 'visible' = 'hidden',
     elevation: 'standard' | 'admin' = 'standard',
-    lifetime: 'root' | 'job' = 'root'
+    lifetime: 'root' | 'job' = 'root',
+    workingDirectory?: string,
+    tempDirectory?: string
   ): Promise<DesktopBackendToolResult> {
     if (process.platform !== 'win32') {
       return this.callTextTool('start_process', {
@@ -299,7 +309,9 @@ export class DesktopBackendBridge {
       command,
       windowMode,
       elevation,
-      lifetime
+      lifetime,
+      workingDirectory,
+      tempDirectory
     );
     return this.callTextTool('start_process', {
       command: ownedCommand,
