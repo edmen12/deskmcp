@@ -1,0 +1,231 @@
+name: Release live-upgrade validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag being validated
+        required: true
+        default: v0.9.17
+        type: string
+      candidate_run_id:
+        description: Successful unsigned-release-candidate workflow run id
+        required: true
+        default: "35938099324"
+        type: string
+      previous_version:
+        description: Currently published Latest version
+        required: true
+        default: "0.9.15"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-live-upgrade-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Windows live upgrade ${{ inputs.previous_version }} -> ${{ inputs.tag }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+      RUN_ID: ${{ inputs.candidate_run_id }}
+      PREVIOUS_VERSION: ${{ inputs.previous_version }}
+
+    steps:
+      - name: Resolve exact release tag
+        id: release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:TAG
+          if (-not $tag.StartsWith('v')) { throw "Tag must start with v: $tag" }
+          $version = $tag.Substring(1)
+          $run = gh api "repos/$env:REPO/actions/runs/$env:RUN_ID" | ConvertFrom-Json
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success') { throw "Candidate run is not completed/success." }
+          $ref = gh api "repos/$env:REPO/git/ref/tags/$tag" | ConvertFrom-Json
+          $type = [string]$ref.object.type
+          $sha = ([string]$ref.object.sha).ToLowerInvariant()
+          if ($type -eq 'tag') {
+            $tagObject = gh api "repos/$env:REPO/git/tags/$sha" | ConvertFrom-Json
+            $type = [string]$tagObject.object.type
+            $sha = ([string]$tagObject.object.sha).ToLowerInvariant()
+          }
+          if ($type -ne 'commit') { throw "Tag does not resolve to a commit: type=$type" }
+          if (([string]$run.head_sha).ToLowerInvariant() -ne $sha) { throw "Candidate run SHA does not match tag commit." }
+          $latest = gh api "repos/$env:REPO/releases/latest" | ConvertFrom-Json
+          if ([string]$latest.tag_name -ne "v$env:PREVIOUS_VERSION") { throw "Published Latest=$($latest.tag_name); expected=v$env:PREVIOUS_VERSION" }
+          if ($env:PREVIOUS_VERSION -eq $version) { throw 'Previous and target versions must differ.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "source_sha=$sha" >> $env:GITHUB_OUTPUT
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          "SOURCE_SHA=$sha" >> $env:GITHUB_ENV
+          Write-Output "RELEASE_PROVENANCE=PASS tag=$tag source=$sha run=$env:RUN_ID"
+
+      - name: Checkout exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Download exact x64 candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path candidate | Out-Null
+          $artifact = "deskmcp-unsigned-win-x64-$env:SOURCE_SHA"
+          gh run download $env:RUN_ID --repo $env:REPO --name $artifact --dir candidate
+          Get-ChildItem candidate -File | Select-Object Name,Length | Format-Table -AutoSize
+
+      - name: Verify candidate and published previous installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = Join-Path $PWD 'candidate\release-manifest.json'
+          $setupPath = Join-Path $PWD ("candidate\DeskMCP-Setup-$env:RELEASE_VERSION.exe")
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Candidate manifest missing.' }
+          if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) { throw 'Candidate Setup missing.' }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ([string]$manifest.version -ne $env:RELEASE_VERSION) { throw "Candidate version mismatch: $($manifest.version)" }
+          if ([string]$manifest.target -ne 'win-x64') { throw "Candidate target mismatch: $($manifest.target)" }
+          if (([string]$manifest.sourceCommit).ToLowerInvariant() -ne $env:SOURCE_SHA) { throw 'Candidate source commit mismatch.' }
+          if ([string]$manifest.installerSmoke -ne 'passed') { throw 'Candidate installer smoke did not pass.' }
+          if ([string]$manifest.releaseStageSmoke -ne 'passed') { throw 'Candidate release-stage smoke did not pass.' }
+          $candidateSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $setupPath).Hash.ToLowerInvariant()
+          if ($candidateSha -ne ([string]$manifest.sha256).ToLowerInvariant()) { throw 'Candidate Setup SHA mismatch.' }
+          if ((Get-Item -LiteralPath $setupPath).Length -ne [int64]$manifest.sizeBytes) { throw 'Candidate Setup size mismatch.' }
+
+          New-Item -ItemType Directory -Force -Path previous | Out-Null
+          gh release download "v$env:PREVIOUS_VERSION" --repo $env:REPO --pattern "DeskMCP-Setup-$env:PREVIOUS_VERSION.exe" --dir previous
+          $previousSetup = Join-Path $PWD ("previous\DeskMCP-Setup-$env:PREVIOUS_VERSION.exe")
+          if (-not (Test-Path -LiteralPath $previousSetup -PathType Leaf)) { throw 'Published previous Setup missing.' }
+          $release = gh api "repos/$env:REPO/releases/tags/v$env:PREVIOUS_VERSION" | ConvertFrom-Json
+          $asset = @($release.assets | Where-Object { $_.name -eq "DeskMCP-Setup-$env:PREVIOUS_VERSION.exe" }) | Select-Object -First 1
+          if (-not $asset) { throw 'Published previous Setup asset metadata missing.' }
+          $previousSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $previousSetup).Hash.ToLowerInvariant()
+          if ([string]$asset.digest -and ([string]$asset.digest).ToLowerInvariant() -ne "sha256:$previousSha") { throw 'Published previous Setup digest mismatch.' }
+
+          "CANDIDATE_SETUP=$setupPath" >> $env:GITHUB_ENV
+          "CANDIDATE_SHA256=$candidateSha" >> $env:GITHUB_ENV
+          "PREVIOUS_SETUP=$previousSetup" >> $env:GITHUB_ENV
+          Write-Output "CANDIDATE_INTEGRITY=PASS sha256=$candidateSha"
+          Write-Output "PREVIOUS_RELEASE_INTEGRITY=PASS version=$env:PREVIOUS_VERSION sha256=$previousSha"
+
+      - name: Install published previous version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $process = Start-Process -FilePath $env:PREVIOUS_SETUP -ArgumentList '--install-current-user' -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Previous Setup exit=$($process.ExitCode)" }
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\DesktopMCP'
+          $packagePath = Join-Path $installDir 'gateway\package.json'
+          if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw 'Installed previous package.json missing.' }
+          $installed = [string]((Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json).version)
+          if ($installed -ne $env:PREVIOUS_VERSION) { throw "Installed previous version=$installed" }
+          Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+              if ($_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(([IO.Path]::GetFullPath($installDir).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+              }
+            } catch {}
+          }
+          Start-Sleep -Milliseconds 750
+          Write-Output "PREVIOUS_INSTALL=PASS version=$installed"
+
+      - name: Seed deterministic user state
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $settingsDir = Join-Path $env:APPDATA 'DesktopMCP'
+          $settingsPath = Join-Path $settingsDir 'settings.json'
+          $tunnelDir = Join-Path $env:APPDATA 'tunnel-client'
+          $tunnelPath = Join-Path $tunnelDir 'desktop-mcp.yaml'
+          $startupPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)) 'DeskMCP Control Panel.lnk'
+          New-Item -ItemType Directory -Force -Path $settingsDir,$tunnelDir | Out-Null
+          $settings = [ordered]@{
+            onboardingCompleted = $true
+            profile = 'read-only'
+            autoStartTunnel = $false
+            theme = 'system'
+            workspace = (Join-Path $env:USERPROFILE 'Desktop')
+            liveUpgradeValidationMarker = "$env:PREVIOUS_VERSION-to-$env:RELEASE_VERSION"
+          } | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText($settingsPath, $settings, [Text.UTF8Encoding]::new($false))
+          [IO.File]::WriteAllLines($tunnelPath, @('tunnel: github-actions-live-upgrade-validation',"validation-marker: $env:PREVIOUS_VERSION-to-$env:RELEASE_VERSION"), [Text.UTF8Encoding]::new($false))
+          if (-not (Test-Path -LiteralPath $startupPath -PathType Leaf)) { throw 'Published previous installer did not create the Startup shortcut.' }
+          Write-Output 'USER_STATE_SEEDED=PASS'
+
+      - name: Run official live-upgrade validator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resultPath = Join-Path $PWD 'artifacts\live-upgrade-result.json'
+          New-Item -ItemType Directory -Force -Path (Split-Path $resultPath -Parent) | Out-Null
+          & .\scripts\run-live-upgrade-validation.ps1 -SetupPath $env:CANDIDATE_SETUP -ExpectedFromVersion $env:PREVIOUS_VERSION -ExpectedToVersion $env:RELEASE_VERSION -ExpectedSourceCommit $env:SOURCE_SHA -ExpectedSetupSha256 $env:CANDIDATE_SHA256 -ResultPath $resultPath
+          if ($LASTEXITCODE -ne 0) { throw "Live-upgrade validator exit=$LASTEXITCODE" }
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          if ($result.success -ne $true -or $result.statePreserved -ne $true) { throw "Live-upgrade result failed: $($result.error)" }
+          "LIVE_UPGRADE_RESULT=$resultPath" >> $env:GITHUB_ENV
+          Write-Output 'LIVE_UPGRADE_STATE=PASS'
+
+      - name: Verify Desktop 1 reservation in installed exact candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\DesktopMCP'
+          $nodePath = Join-Path $installDir 'node\node.exe'
+          $modulePath = Join-Path $installDir 'gateway\dist\agent-desktop-state.js'
+          if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) { throw 'Installed node.exe missing.' }
+          if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) { throw 'Installed Agent Desktop module missing.' }
+          $moduleUri = ([Uri]$modulePath).AbsoluteUri
+          $guardPath = Join-Path $PWD 'artifacts\desktop1-reservation.mjs'
+          $guard = @"
+          import { AgentDesktopManager } from '$moduleUri';
+          const manager = new AgentDesktopManager('C:/deskmcp-release-desktop1-guard', {});
+          try {
+            await manager.startControl('release gate', undefined, 1);
+            console.error('DESKTOP1_RESERVED=FAIL accepted Desktop 1');
+            process.exit(2);
+          } catch (error) {
+            const message = String(error?.message ?? error);
+            if (!/Desktop 2 or later/i.test(message)) {
+              console.error('DESKTOP1_RESERVED=FAIL unexpected error: ' + message);
+              process.exit(3);
+            }
+            console.log('DESKTOP1_RESERVED=PASS ' + message);
+          }
+          "@
+          [IO.File]::WriteAllText($guardPath, $guard, [Text.UTF8Encoding]::new($false))
+          & $nodePath $guardPath
+          if ($LASTEXITCODE -ne 0) { throw "Desktop 1 reservation runtime check exit=$LASTEXITCODE" }
+          Write-Output 'DESKTOP1_RESERVATION=PASS'
+
+      - name: Generate release attestation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & .\scripts\new-live-upgrade-attestation.ps1 -ResultPath $env:LIVE_UPGRADE_RESULT -Desktop1Reserved
+          $output | ForEach-Object { Write-Output $_ }
+          $line = @($output | ForEach-Object { [string]$_ } | Where-Object { $_ -like 'LIVE_UPGRADE_ATTESTATION=*' }) | Select-Object -First 1
+          if (-not $line) { throw 'Attestation token missing.' }
+          $token = $line.Substring('LIVE_UPGRADE_ATTESTATION='.Length)
+          [IO.File]::WriteAllText((Join-Path $PWD 'artifacts\attestation.txt'), $token, [Text.UTF8Encoding]::new($false))
+          Write-Output 'ATTESTATION_GENERATION=PASS'
+
+      - name: Upload validation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-live-upgrade-${{ inputs.previous_version }}-to-${{ steps.release.outputs.version }}-${{ steps.release.outputs.source_sha }}
+          path: |
+            artifacts/live-upgrade-result.json
+            artifacts/attestation.txt
+            artifacts/desktop1-reservation.mjs
+          if-no-files-found: error
+          retention-days: 30
