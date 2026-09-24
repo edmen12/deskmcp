@@ -122,8 +122,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $process = Start-Process -FilePath $env:PREVIOUS_SETUP -ArgumentList '--install-current-user' -PassThru -Wait
-          if ($process.ExitCode -ne 0) { throw "Previous Setup exit=$($process.ExitCode)" }
+          $process = Start-Process -FilePath $env:PREVIOUS_SETUP -ArgumentList '--install-current-user' -PassThru
+          try {
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
+          } finally {
+            $process.Dispose()
+          }
+          if ($exitCode -ne 0) { throw "Previous Setup exit=$exitCode" }
           $installDir = Join-Path $env:LOCALAPPDATA 'Programs\DesktopMCP'
           $packagePath = Join-Path $installDir 'gateway\package.json'
           if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw 'Installed previous package.json missing.' }
