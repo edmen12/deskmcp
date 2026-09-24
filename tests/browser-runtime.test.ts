@@ -325,7 +325,7 @@ test('browser runtime is disabled until an executable is configured locally', as
   await artifacts.init();
   const browserRoot = path.join(root, 'browser');
   const controller = new FakeProcessController(browserRoot);
-  const browser = new BrowserRuntime(browserRoot, controller, artifacts, new FakeCdpDriver(), undefined);
+  const browser = new BrowserRuntime(browserRoot, controller, artifacts, new FakeCdpDriver(), '');
   await browser.init();
   assert.equal(browser.info().configured, false);
   await assert.rejects(() => browser.start({ profile_id: 'test' }), /Settings → Browser Automation.*development override/i);
