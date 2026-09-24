@@ -187,7 +187,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installDir = Join-Path $env:LOCALAPPDATA 'Programs\DesktopMCP'
           $nodePath = Join-Path $installDir 'node\node.exe'
-          $modulePath = Join-Path $installDir 'gateway\dist\agent-desktop-state.js'
+          $modulePath = Join-Path $installDir 'gateway\dist\src\agent-desktop-state.js'
           if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) { throw 'Installed node.exe missing.' }
           if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) { throw 'Installed Agent Desktop module missing.' }
           $moduleUri = ([Uri]$modulePath).AbsoluteUri
