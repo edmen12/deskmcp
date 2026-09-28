@@ -70,7 +70,7 @@ jobs:
           Write-Output "RELEASE_PROVENANCE=PASS tag=$tag source=$sha run=$env:RUN_ID"
 
       - name: Checkout exact release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag }}
           persist-credentials: false
