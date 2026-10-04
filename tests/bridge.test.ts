@@ -528,6 +528,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[]; type?: string }> }).properties;
       assert.deepEqual(startProperties?.window_mode?.enum, ['hidden', 'visible']);
       assert.deepEqual(startProperties?.elevation?.enum, ['standard', 'admin']);
+      assert.deepEqual(startProperties?.process_lifetime?.enum, ['root', 'job']);
       assert.equal(startProperties?.cwd?.type, 'string');
       assert.deepEqual(startProperties?.temp_mode?.enum, ['inherit', 'short']);
       assert.equal(startProperties?.agent_desktop_lease_id?.type, 'string');
@@ -589,11 +590,25 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
         }
       }
 
+      const jobLifetimeDenied = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: {
+          command: 'node -i',
+          timeout_ms: 1000,
+          process_lifetime: 'job',
+          ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {})
+        }
+      });
+      assert.equal(jobLifetimeDenied.isError, true);
+      assert.match(JSON.stringify(jobLifetimeDenied.content), /process_lifetime=job is only supported with agent_desktop_lease_id/);
+      assert.equal(processSessions.size(), 0);
+
       const agentStarted = await fullControlClient.callTool({
         name: 'desktop_start_process',
         arguments: {
           command: 'node -i',
           timeout_ms: 1000,
+          process_lifetime: 'job',
           ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {}),
           agent_desktop_lease_id: agentLeaseId
         }

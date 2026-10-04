@@ -224,7 +224,7 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails. process_lifetime=job is only allowed with Agent Desktop and is intended for GUI launchers whose shell exits while owned descendants remain alive.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -241,6 +241,9 @@ export function registerProcessTools(
         elevation: z.enum(['standard', 'admin']).optional().default('standard').describe(
           'Controls process privilege. admin uses the standard Windows UAC prompt and is valid with either hidden or visible window mode.'
         ),
+        process_lifetime: z.enum(['root', 'job']).optional().default('root').describe(
+          'root ends owned descendants when the shell exits. job keeps the owned Windows job alive until all descendants exit and is only allowed with Agent Desktop.'
+        ),
         agent_desktop_lease_id: z.string().uuid().optional().describe(
           'Bind this owned process tree to an active Agent Desktop lease. GUI windows from the root process and descendants are moved and verified on that lease desktop.'
         )
@@ -252,7 +255,7 @@ export function registerProcessTools(
         openWorldHint: true
       }
     },
-    async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, agent_desktop_lease_id }) => auditedProcessCall(
+    async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, process_lifetime, agent_desktop_lease_id }) => auditedProcessCall(
       audit,
       policy,
       'desktop_start_process',
@@ -260,6 +263,9 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        if (process_lifetime === 'job' && !agent_desktop_lease_id) {
+          throw new PolicyDeniedError('process_lifetime=job is only supported with agent_desktop_lease_id so owned GUI descendants remain scoped to an Agent Desktop lease.');
+        }
         if (agent_desktop_lease_id) {
           if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
           if (elevation === 'admin') {
@@ -282,7 +288,7 @@ export function registerProcessTools(
             shell,
             window_mode,
             elevation,
-            'root',
+            process_lifetime,
             launchContext.workingDirectory,
             launchContext.tempDirectory
           );
@@ -291,8 +297,11 @@ export function registerProcessTools(
             return result;
           }
           pid = extractStartedPid(result.text);
+          if (agent_desktop_lease_id && resultShowsCompletedProcess(result)) {
+            throw new Error('Agent Desktop process exited before GUI placement could be verified. For GUI launchers whose shell exits while descendants remain alive, retry with process_lifetime=job.');
+          }
           sessionId = sessions.registerReserved(reservationId, pid, window_mode);
-          if (agent_desktop_lease_id && !resultShowsCompletedProcess(result)) {
+          if (agent_desktop_lease_id) {
             await agentDesktop!.placeProcessTreeWindows(pid, agent_desktop_lease_id);
           }
           const sanitized = sanitizeProcessResult(result, pid, sessionId);
