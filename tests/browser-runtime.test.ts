@@ -661,6 +661,43 @@ test('expired Agent Desktop placement detaches without closing the browser sessi
 });
 
 
+test('Agent Desktop browser survives a transient placement refresh failure while the lease stays active', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const browserRoot = path.join(root, 'browser');
+  const controller = new FakeProcessController(browserRoot);
+  const cdp = new FakeCdpDriver();
+  const leaseId = '44444444-4444-4444-8444-444444444444';
+  const agentDesktop = {
+    async assertLease() { return {}; },
+    async isLeaseActive() { return true; }
+  } as unknown as AgentDesktopManager;
+  const browser = new BrowserRuntime(browserRoot, controller, artifacts, cdp, executable, agentDesktop);
+  await browser.init();
+
+  const session = await browser.start({ profile_id: 'transient-placement', agent_desktop_lease_id: leaseId });
+  controller.placementErrors.push(new Error('INJECTED_TRANSIENT_AGENT_DESKTOP_PLACEMENT_FAILURE'));
+
+  const deadline = Date.now() + 2500;
+  while (controller.placements.filter(row => row.reconcile).length < 2 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  const sessions = await browser.list();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0]?.session_id, session.session_id);
+  assert.equal(sessions[0]?.agent_desktop, true);
+  assert.deepEqual(controller.terminated, []);
+  assert.ok(controller.placements.some(row => row.reconcile && row.timeoutMs === 500));
+
+  await browser.closeAll();
+});
+
+
 test('Agent Desktop browser waits until a real window is placed before start succeeds', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });

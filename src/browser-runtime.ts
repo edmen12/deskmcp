@@ -55,6 +55,8 @@ const MAX_PERSISTENT_PROFILES = 32;
 const MAX_BROWSER_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 const DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_REAPER_INTERVAL_MS = 1000;
+const AGENT_DESKTOP_REAPER_PLACEMENT_TIMEOUT_MS = 500;
+const AGENT_DESKTOP_REAPER_MAX_CONSECUTIVE_FAILURES = 5;
 
 function browserActionMutatesObservedState(action: BrowserAction): boolean {
   switch (action.type) {
@@ -145,6 +147,7 @@ interface BrowserSessionRecord {
   readonly headless: boolean;
   readonly port: number;
   agentDesktopLeaseId?: string;
+  agentDesktopPlacementFailures: number;
   readonly createdAt: string;
   lastActivityAt: number;
 }
@@ -606,6 +609,7 @@ export class BrowserRuntime {
 
   private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {
     delete record.agentDesktopLeaseId;
+    record.agentDesktopPlacementFailures = 0;
     record.lastActivityAt = Date.now();
   }
 
@@ -618,6 +622,7 @@ export class BrowserRuntime {
     }
     try {
       await this.processController.place(record.processSessionId, leaseId, timeoutMs);
+      record.agentDesktopPlacementFailures = 0;
     } catch (error) {
       if (!await this.agentDesktop.isLeaseActive(leaseId)) {
         this.detachAgentDesktopPlacement(record);
@@ -632,9 +637,17 @@ export class BrowserRuntime {
       const placed = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
       for (const record of placed) {
         try {
-          await this.refreshAgentDesktopPlacement(record, 100);
-        } catch {
-          await this.disposeRecord(record);
+          await this.refreshAgentDesktopPlacement(record, AGENT_DESKTOP_REAPER_PLACEMENT_TIMEOUT_MS);
+        } catch (error) {
+          record.agentDesktopPlacementFailures += 1;
+          let processActive = true;
+          try { processActive = await this.processController.active(record.processSessionId); }
+          catch { /* Treat process liveness as unknown; consecutive placement failures remain the fallback. */ }
+          if (!processActive || record.agentDesktopPlacementFailures >= AGENT_DESKTOP_REAPER_MAX_CONSECUTIVE_FAILURES) {
+            const detail = error instanceof Error ? error.message : String(error);
+            process.stderr.write(`[DeskMCP] Agent Desktop browser placement failed ${record.agentDesktopPlacementFailures} consecutive time(s); disposing session ${record.sessionId}: ${detail}\n`);
+            await this.disposeRecord(record);
+          }
         }
       }
 
@@ -769,6 +782,7 @@ export class BrowserRuntime {
           headless,
           port,
           ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {}),
+          agentDesktopPlacementFailures: 0,
           createdAt: new Date().toISOString(),
           lastActivityAt: Date.now()
         };
