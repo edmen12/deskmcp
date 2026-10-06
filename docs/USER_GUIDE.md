@@ -31,7 +31,7 @@ Create a Tunnel in OpenAI Platform, then enter:
 - **Tunnel ID**
 - **Runtime API Key**
 
-The Runtime API Key is encrypted with Windows DPAPI and is not stored in `settings.json`. You may skip this step and configure it later.
+The Runtime API Key is encrypted by Windows and is not stored in `settings.json`. Current-user DPAPI is used normally. If it is unavailable, DeskMCP supports recovery encryption with a non-exportable Windows CNG key restricted to the same user, SYSTEM, and administrators. Recovery initialization needs administrator access once. You may skip this step and configure it later.
 
 ### Connect ChatGPT
 

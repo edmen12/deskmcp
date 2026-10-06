@@ -49,7 +49,7 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
 
 Expected result: **27 DeskMCP tools**.
 
-The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. Secret writes are verified by immediate DPAPI readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
+The Runtime API Key is encrypted by Windows and is not written to `settings.json`. DeskMCP normally uses current-user DPAPI; when that Windows facility is unavailable, recovery storage uses authenticated encryption and a non-exportable Windows CNG key restricted to the current user, SYSTEM, and administrators. Recovery initialization requires administrator access once. Secret writes are verified by immediate protected-key readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
 ## Architecture
 
 <p align="center">

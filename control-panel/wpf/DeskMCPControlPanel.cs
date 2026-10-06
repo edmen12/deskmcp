@@ -1830,10 +1830,10 @@ internal sealed partial class ControlPanelRuntime
         byte[] verified = null;
         try
         {
-            encrypted = ProtectedData.Protect(plain, TunnelEntropy, DataProtectionScope.CurrentUser);
+            encrypted = TunnelKeyProtection.Protect(plain, TunnelEntropy);
             RuntimeReliability.WriteAllBytesAtomic(tunnelSecretPath, encrypted, false);
             stored = File.ReadAllBytes(tunnelSecretPath);
-            verified = ProtectedData.Unprotect(stored, TunnelEntropy, DataProtectionScope.CurrentUser);
+            verified = TunnelKeyProtection.Unprotect(stored, TunnelEntropy);
             if (!CryptographicOperations.FixedTimeEquals(plain, verified))
                 throw new CryptographicException("Tunnel Runtime Key verification failed after save.");
             tunnelCredentialInvalid = false;
@@ -1857,7 +1857,7 @@ internal sealed partial class ControlPanelRuntime
         try
         {
             encrypted = File.ReadAllBytes(tunnelSecretPath);
-            plain = ProtectedData.Unprotect(encrypted, TunnelEntropy, DataProtectionScope.CurrentUser);
+            plain = TunnelKeyProtection.Unprotect(encrypted, TunnelEntropy);
             tunnelCredentialInvalid = false;
             return Encoding.UTF8.GetString(plain);
         }
@@ -2125,7 +2125,7 @@ internal sealed partial class ControlPanelRuntime
         TextBlock hint = Find<TextBlock>("TunnelSetupHint");
         hint.Text = "Paste the Tunnel ID and Runtime API Key from OpenAI Platform.";
         hint.Foreground = BrushFrom(isDarkTheme ? "#98989F" : "#71717A");
-        Find<TextBlock>("TunnelRuntimeKeyHint").Text = HasTunnelKey() ? "Leave blank to keep the existing protected key." : "Required once. Protected with Windows DPAPI for this Windows user.";
+        Find<TextBlock>("TunnelRuntimeKeyHint").Text = HasTunnelKey() ? "Leave blank to keep the existing protected key." : "Required once. Encrypted by Windows for this Windows user.";
         idInput.Text = IsValidTunnelId(tunnelId) ? tunnelId : "";
         keyInput.Clear();
         overlay.BeginAnimation(UIElement.OpacityProperty, null);
@@ -2202,6 +2202,7 @@ internal sealed partial class ControlPanelRuntime
         }
         catch (Exception ex)
         {
+            LogRuntimeError("Tunnel configuration failed.", ex);
             keyInput.Clear(); hint.Text = "Could not configure Tunnel: " + ex.Message; hint.Foreground = BrushFrom("#FF453A");
         }
         finally { saveButton.IsEnabled = true; cancelButton.IsEnabled = true; }
@@ -3531,6 +3532,12 @@ internal static class Program
                 return ControlPanelRuntime.RunUpdateSecuritySelfTest();
             if (args.Length > 0 && args[0] == "--runtime-reliability-self-test")
                 return RuntimeReliability.RunSelfTest();
+            if (args.Length > 0 && args[0] == "--tunnel-key-self-test")
+                return TunnelKeyProtection.RunSelfTest();
+            if (args.Length > 0 && args[0] == "--tunnel-key-initialize-recovery")
+                return TunnelKeyProtection.InitializeRecoveryKey();
+            if (args.Length > 0 && args[0] == "--tunnel-key-recovery-self-test")
+                return TunnelKeyProtection.RunRecoveryReadbackSelfTest();
             if (args.Length > 0 && args[0] == "--tray-icon-self-test")
                 return ControlPanelRuntime.RunTrayIconSelfTest();
             if (args.Length > 0 && args[0] == "--tunnel-status-self-test")
