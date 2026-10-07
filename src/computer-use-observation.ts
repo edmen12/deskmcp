@@ -52,6 +52,20 @@ export class ComputerObservationRegistry {
     return id;
   }
 
+  peekLease(id: string, windowId: string, now = Date.now()): string | undefined {
+    this.prune(now);
+    const record = this.records.get(id);
+    if (!record) {
+      throw new ComputerObservationError(
+        'Computer observation is missing, expired, or already used. Take a fresh desktop_ui_snapshot.'
+      );
+    }
+    if (record.windowId !== windowId) {
+      throw new ComputerObservationError('Computer observation does not belong to the requested window.');
+    }
+    return record.agentDesktopLeaseId;
+  }
+
   consume(id: string, windowId: string, now = Date.now(), requestedAgentDesktopLeaseId?: string): string | undefined {
     this.prune(now);
     const record = this.records.get(id);

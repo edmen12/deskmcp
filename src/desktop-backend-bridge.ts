@@ -270,7 +270,8 @@ export class DesktopBackendBridge {
     elevation: 'standard' | 'admin' = 'standard',
     lifetime: 'root' | 'job' = 'root',
     workingDirectory?: string,
-    tempDirectory?: string
+    tempDirectory?: string,
+    desktopObjectName?: string
   ): Promise<DesktopBackendToolResult> {
     if (process.platform !== 'win32') {
       return this.callTextTool('start_process', {
@@ -291,7 +292,8 @@ export class DesktopBackendBridge {
       elevation,
       lifetime,
       workingDirectory,
-      tempDirectory
+      tempDirectory,
+      desktopObjectName
     );
   }
 

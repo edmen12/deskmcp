@@ -305,25 +305,37 @@ test('Agent Desktop warns when Windows Forms semantic UIA collapses to window ch
 });
 
 
-test('Agent Desktop background mode permits only wait after live foreground regression', () => {
+test('Agent Desktop isolated desktop permits semantic UIA actions and wait', () => {
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'invoke', selector: 'ApplyButton' }),
+    { type: 'invoke', selector: 'ApplyButton' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'set_value', selector: 'AgentInput', value: 'ok' }),
+    { type: 'set_value', selector: 'AgentInput', value: 'ok' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'scroll', selector: 'List', direction: 'down' }),
+    { type: 'scroll', selector: 'List', direction: 'down' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'scroll', selector: 'List', to: 'bottom' }),
+    { type: 'scroll', selector: 'List', to: 'bottom' }
+  );
   assert.deepEqual(
     prepareAgentDesktopAction({ type: 'wait', milliseconds: 50 }),
     { type: 'wait', milliseconds: 50 }
   );
 });
 
-test('Agent Desktop background mode rejects all UI-mutating or focus-capable actions', () => {
+test('Agent Desktop isolated desktop still rejects unverified global input paths', () => {
   const blocked = [
-    { type: 'invoke', selector: 'ApplyButton' },
-    { type: 'set_value', selector: 'AgentInput', value: 'ok' },
     { type: 'send_keys', keys: 'hello', transport: 'post-message' },
     { type: 'send_keys', keys: 'hello', transport: 'send-input' },
     { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true },
     { type: 'click', selector: 'ApplyButton' },
     { type: 'hover', selector: 'ApplyButton' },
     { type: 'drag', from: 'A', to: 'B' },
-    { type: 'scroll', selector: 'List', direction: 'down' },
-    { type: 'scroll', selector: 'List', to: 'bottom' },
     { type: 'scroll', wheel: 3 }
   ] as const;
 

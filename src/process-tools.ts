@@ -245,7 +245,7 @@ export function registerProcessTools(
           'root ends owned descendants when the shell exits. job keeps the owned Windows job alive until all descendants exit and is only allowed with Agent Desktop.'
         ),
         agent_desktop_lease_id: z.string().uuid().optional().describe(
-          'Bind this owned process tree to an active Agent Desktop lease. GUI windows from the root process and descendants are moved and verified on that lease desktop.'
+          'Bind this owned process tree to an active Agent Desktop lease. On Windows, the process tree is created directly inside a lease-scoped isolated Win32 desktop object instead of being moved after launch.'
         )
       }),
       annotations: {
@@ -266,12 +266,13 @@ export function registerProcessTools(
         if (process_lifetime === 'job' && !agent_desktop_lease_id) {
           throw new PolicyDeniedError('process_lifetime=job is only supported with agent_desktop_lease_id so owned GUI descendants remain scoped to an Agent Desktop lease.');
         }
+        let desktopObjectName: string | undefined;
         if (agent_desktop_lease_id) {
           if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
           if (elevation === 'admin') {
             throw new PolicyDeniedError('Administrator process launch is not supported inside Agent Desktop background control. Exit Agent Control or launch without agent_desktop_lease_id.');
           }
-          await agentDesktop.assertLease(agent_desktop_lease_id);
+          desktopObjectName = await agentDesktop.desktopObjectNameForLease(agent_desktop_lease_id);
         }
         requireSupportedProcessPresentation(window_mode, elevation);
         const launchContext = await resolveProcessLaunchContext(policy, cwd, temp_mode);
@@ -290,23 +291,19 @@ export function registerProcessTools(
             elevation,
             process_lifetime,
             launchContext.workingDirectory,
-            launchContext.tempDirectory
+            launchContext.tempDirectory,
+            desktopObjectName
           );
           if (result.isError) {
             sessions.releaseStart(reservationId);
             return result;
           }
           pid = extractStartedPid(result.text);
-          if (agent_desktop_lease_id && resultShowsCompletedProcess(result)) {
-            throw new Error('Agent Desktop process exited before GUI placement could be verified. For GUI launchers whose shell exits while descendants remain alive, retry with process_lifetime=job.');
-          }
           sessionId = sessions.registerReserved(reservationId, pid, window_mode);
-          if (agent_desktop_lease_id) {
-            await agentDesktop!.placeProcessTreeWindows(pid, agent_desktop_lease_id);
-          }
+          if (agent_desktop_lease_id) await agentDesktop!.assertLease(agent_desktop_lease_id);
           const sanitized = sanitizeProcessResult(result, pid, sessionId);
           let placed = agent_desktop_lease_id
-            ? sanitized.text + '\\nOwned process tree constrained to the active Agent Desktop lease.'
+            ? sanitized.text + '\\nOwned process tree launched inside the active Agent Desktop isolated desktop object.'
             : sanitized.text;
           if (launchContext.warning) placed += `\\n${launchContext.warning}`;
           if (launchContext.tempDirectory) placed += '\\nWindows short TEMP/TMP enabled for this owned process.';

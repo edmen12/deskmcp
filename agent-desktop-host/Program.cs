@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -178,6 +179,38 @@ internal static class Program
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr hwnd, int command);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenDesktopW(string desktopName, uint flags, bool inherit, uint desiredAccess);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseDesktop(IntPtr desktop);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumDesktopWindows(IntPtr desktop, EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr hwnd, StringBuilder text, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassNameW(IntPtr hwnd, StringBuilder className, int maxCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    private const uint DesktopReadObjects = 0x0001;
+    private const uint DesktopEnumerate = 0x0040;
     private const uint Th32csSnapProcess = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -237,6 +270,7 @@ internal static class Program
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
+                "object-windows" => ObjectWindows(ParseDesktopObjectName(Required(options, "desktop-object"))),
                 "self-test" => SelfTest(vda),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };
@@ -518,6 +552,62 @@ internal static class Program
         return new { processId, moved = moved.Count, windows };
     }
 
+    private static object ObjectWindows(string desktopObject)
+    {
+        IntPtr desktop = OpenDesktopW(desktopObject, 0, false, DesktopReadObjects | DesktopEnumerate);
+        if (desktop == IntPtr.Zero)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the DeskMCP isolated desktop object.");
+        try
+        {
+            List<object> windows = new();
+            bool enumerated = EnumDesktopWindows(desktop, (hwnd, _) =>
+            {
+                if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) return true;
+                GetWindowThreadProcessId(hwnd, out uint processId);
+                if (processId == 0 || processId > Int32.MaxValue) return true;
+
+                string processName;
+                try
+                {
+                    using Process process = Process.GetProcessById(unchecked((int)processId));
+                    processName = process.ProcessName;
+                }
+                catch
+                {
+                    return true;
+                }
+
+                StringBuilder title = new(1024);
+                GetWindowTextW(hwnd, title, title.Capacity);
+                StringBuilder className = new(512);
+                GetClassNameW(hwnd, className, className.Capacity);
+                if (!GetWindowRect(hwnd, out Rect rect)) return true;
+                int width = Math.Max(0, rect.Right - rect.Left);
+                int height = Math.Max(0, rect.Bottom - rect.Top);
+
+                windows.Add(new
+                {
+                    hwnd = hwnd.ToInt64(),
+                    processId = unchecked((int)processId),
+                    processName,
+                    title = title.ToString(),
+                    className = className.ToString(),
+                    width,
+                    height,
+                    isForeground = false
+                });
+                return true;
+            }, IntPtr.Zero);
+            if (!enumerated)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate the DeskMCP isolated desktop object.");
+            return windows;
+        }
+        finally
+        {
+            CloseDesktop(desktop);
+        }
+    }
+
     private static object SelfTest(VirtualDesktopAccessor vda)
     {
         IVirtualDesktopManager manager = CreateManager();
@@ -674,6 +764,19 @@ internal static class Program
         if (!options.TryGetValue(name, out string? value) || String.IsNullOrWhiteSpace(value))
             throw new ArgumentException("Missing --" + name + ".");
         return value;
+    }
+
+    private static string ParseDesktopObjectName(string value)
+    {
+        string result = value.Trim();
+        if (result.Length == 0 || result.Length > 128 || !result.StartsWith("DeskMCP-Agent-", StringComparison.Ordinal))
+            throw new ArgumentException("Invalid DeskMCP isolated desktop object name.");
+        foreach (char ch in result)
+        {
+            if (!(Char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.'))
+                throw new ArgumentException("Invalid DeskMCP isolated desktop object name.");
+        }
+        return result;
     }
 
     private static IntPtr ParseHwnd(string value)

@@ -499,6 +499,11 @@ export class AgentDesktopManager {
     return { binding, control };
   }
 
+  async desktopObjectNameForLease(leaseId: string): Promise<string> {
+    await this.assertLease(leaseId);
+    return `DeskMCP-Agent-${leaseId.replaceAll('-', '')}`;
+  }
+
   async hasActiveControls(): Promise<boolean> {
     return (await this.readControlDocument()).controls.length > 0;
   }
