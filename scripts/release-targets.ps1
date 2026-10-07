@@ -50,6 +50,18 @@ function Get-DeskMcpReleaseTarget {
 
 function Get-DeskMcpStageRoot {
     param([Parameter(Mandatory=$true)][string]$ProjectRoot,[Parameter(Mandatory=$true)][string]$Target)
+    $override = [string]$env:DESKMCP_RELEASE_STAGE_ROOT
+    if (-not [string]::IsNullOrWhiteSpace($override)) {
+        $projectFull = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+        $runtimeFull = [IO.Path]::GetFullPath((Join-Path $projectFull 'runtime')).TrimEnd([IO.Path]::DirectorySeparatorChar)
+        $overrideFull = [IO.Path]::GetFullPath($override).TrimEnd([IO.Path]::DirectorySeparatorChar)
+        $runtimePrefix = $runtimeFull + [IO.Path]::DirectorySeparatorChar
+        if (-not $overrideFull.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'DESKMCP_RELEASE_STAGE_ROOT must stay under the project runtime directory.'
+        }
+        return $overrideFull
+    }
+
     return Join-Path $ProjectRoot ('runtime\release-stage\' + $Target + '\DesktopMCP')
 }
 
