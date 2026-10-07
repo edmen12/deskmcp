@@ -1,0 +1,55 @@
+import { getParentDirectory } from '../path-utils.js';
+export function shellQuote(value) {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+export function encodePowerShellCommand(script) {
+    const utf16leBytes = [];
+    for (let index = 0; index < script.length; index += 1) {
+        const codeUnit = script.charCodeAt(index);
+        utf16leBytes.push(codeUnit & 0xff, codeUnit >> 8);
+    }
+    let binary = '';
+    for (const byte of utf16leBytes) {
+        binary += String.fromCharCode(byte);
+    }
+    return btoa(binary);
+}
+export function buildOpenInFolderCommand(filePath, isLikelyUrl) {
+    const trimmedPath = filePath.trim();
+    if (!trimmedPath || isLikelyUrl(trimmedPath)) {
+        return undefined;
+    }
+    const userAgent = navigator.userAgent.toLowerCase();
+    if (userAgent.includes('win')) {
+        const escapedForPowerShell = trimmedPath.replace(/'/g, "''");
+        const script = `Start-Process -FilePath explorer.exe -ArgumentList @('/select,','${escapedForPowerShell}')`;
+        return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodePowerShellCommand(script)}`;
+    }
+    if (userAgent.includes('mac')) {
+        return `open -R ${shellQuote(trimmedPath)}`;
+    }
+    return `xdg-open ${shellQuote(getParentDirectory(trimmedPath))}`;
+}
+export function buildOpenInEditorCommand(filePath, isLikelyUrl, editorAppCache) {
+    const trimmedPath = filePath.trim();
+    if (!trimmedPath || isLikelyUrl(trimmedPath)) {
+        return undefined;
+    }
+    const cachedApp = editorAppCache.get(trimmedPath);
+    if (cachedApp?.appPath && navigator.userAgent.toLowerCase().includes('mac')) {
+        return `open -a ${shellQuote(cachedApp.appPath)} ${shellQuote(trimmedPath)}`;
+    }
+    const userAgent = navigator.userAgent.toLowerCase();
+    if (userAgent.includes('win')) {
+        const escapedForPowerShell = trimmedPath.replace(/'/g, "''");
+        const script = `Start-Process -FilePath '${escapedForPowerShell}'`;
+        return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodePowerShellCommand(script)}`;
+    }
+    if (userAgent.includes('mac')) {
+        return `open ${shellQuote(trimmedPath)}`;
+    }
+    return `xdg-open ${shellQuote(trimmedPath)}`;
+}
+export function renderMarkdownEditorAppIcon() {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+}

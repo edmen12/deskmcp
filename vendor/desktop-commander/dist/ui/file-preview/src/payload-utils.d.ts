@@ -1,0 +1,11 @@
+import type { FilePreviewStructuredContent } from '../../../types.js';
+import type { RenderPayload } from './model.js';
+export declare function getFileExtensionForAnalytics(filePath: string): string;
+export declare function isPreviewStructuredContent(value: unknown): value is FilePreviewStructuredContent;
+export declare function buildRenderPayload(meta: FilePreviewStructuredContent, text: string): RenderPayload;
+export declare function extractToolText(value: unknown): string | undefined;
+export declare function extractRenderPayload(value: unknown): RenderPayload | undefined;
+export declare function assertSuccessfulEditBlockResult(result: unknown): void;
+export declare function isLikelyUrl(filePath: string): boolean;
+export declare function buildBreadcrumb(filePath: string): string;
+export declare function countContentLines(content: string): number;

@@ -1,0 +1,119 @@
+import { escapeHtml } from './components/highlighting.js';
+import { stripReadStatusLine } from './document-workspace.js';
+function isObjectRecord(value) {
+    return typeof value === 'object' && value !== null;
+}
+export function getFileExtensionForAnalytics(filePath) {
+    const normalizedPath = filePath.trim().replace(/\\/g, '/');
+    const fileName = normalizedPath.split('/').pop() ?? normalizedPath;
+    const dotIndex = fileName.lastIndexOf('.');
+    if (dotIndex <= 0 || dotIndex === fileName.length - 1) {
+        return 'none';
+    }
+    return fileName.slice(dotIndex + 1).toLowerCase();
+}
+export function isPreviewStructuredContent(value) {
+    if (!isObjectRecord(value)) {
+        return false;
+    }
+    return (typeof value.fileName === 'string' &&
+        typeof value.filePath === 'string' &&
+        typeof value.fileType === 'string');
+}
+export function buildRenderPayload(meta, text) {
+    return { ...meta, content: text };
+}
+export function extractToolText(value) {
+    if (!isObjectRecord(value)) {
+        return undefined;
+    }
+    const content = value.content;
+    if (!Array.isArray(content)) {
+        return undefined;
+    }
+    for (const item of content) {
+        if (!isObjectRecord(item)) {
+            continue;
+        }
+        if (item.type === 'text' && typeof item.text === 'string' && item.text.trim().length > 0) {
+            return item.text;
+        }
+    }
+    return undefined;
+}
+// Join ALL non-empty text blocks, not just the first. Most reads return a
+// single text block, but PDF reads return a summary block followed by
+// per-page text blocks — taking only the first would drop the page text.
+function extractJoinedToolText(value) {
+    if (!isObjectRecord(value)) {
+        return undefined;
+    }
+    const content = value.content;
+    if (!Array.isArray(content)) {
+        return undefined;
+    }
+    const texts = [];
+    for (const item of content) {
+        if (isObjectRecord(item)
+            && item.type === 'text'
+            && typeof item.text === 'string'
+            && item.text.trim().length > 0) {
+            texts.push(item.text);
+        }
+    }
+    return texts.length > 0 ? texts.join('\n') : undefined;
+}
+export function extractRenderPayload(value) {
+    if (!isObjectRecord(value)) {
+        return undefined;
+    }
+    const meta = isPreviewStructuredContent(value.structuredContent)
+        ? value.structuredContent
+        : isPreviewStructuredContent(value)
+            ? value
+            : null;
+    if (!meta)
+        return undefined;
+    // Content always comes from the read output's content[] text blocks; the
+    // structuredContent alongside it is metadata-only. Images arrive as a base64
+    // text block too (origin:'ui' reads carry no image block, so the host won't
+    // inline-render and stall the RPC).
+    return buildRenderPayload(meta, extractJoinedToolText(value) ?? '');
+}
+export function assertSuccessfulEditBlockResult(result) {
+    if (!isObjectRecord(result)) {
+        throw new Error('edit_block did not return a valid result.');
+    }
+    if (result.isError === true) {
+        const message = extractToolText(result) ?? '';
+        throw new Error(message || 'edit_block failed.');
+    }
+    // edit_block uses soft-failure returns (no isError flag) for cases the LLM
+    // is meant to recover from — "Search content not found", "Expected N
+    // occurrences but found M", fuzzy-match-too-close-to-ignore, etc. These
+    // look like success to a naive client. A real success always carries
+    // structuredContent (see src/tools/edit.ts — the write path attaches
+    // fileName/filePath/fileType); absence means the edit did not land.
+    // Throwing here routes soft failures through saveDocument's catch, which
+    // reloads disk, preserves the user's draft, and surfaces the server's
+    // message to the user.
+    if (!isObjectRecord(result.structuredContent)) {
+        const message = extractToolText(result) ?? '';
+        throw new Error(message || 'edit_block did not confirm success.');
+    }
+}
+export function isLikelyUrl(filePath) {
+    return /^https?:\/\//i.test(filePath);
+}
+export function buildBreadcrumb(filePath) {
+    const normalized = filePath.replace(/\\/g, '/');
+    const parts = normalized.split('/').filter(Boolean);
+    return parts.map((part) => escapeHtml(part)).join(' <span class="breadcrumb-sep">›</span> ');
+}
+export function countContentLines(content) {
+    const cleaned = stripReadStatusLine(content);
+    if (cleaned === '')
+        return 0;
+    const lines = cleaned.split('\n');
+    return lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+}

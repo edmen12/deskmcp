@@ -6,9 +6,10 @@
 - Upstream tarball: https://registry.npmjs.org/@wonderwhy-er/desktop-commander/-/desktop-commander-0.2.52.tgz
 
 DeskMCP patch:
-- Published dist bytes are copied unchanged from the verified installed upstream package.
-- md-to-pdf is removed from the vendored package dependency manifest.
-- sharp is pinned from the upstream ^0.34.5 range to security-fixed 0.35.5; published Desktop Commander dist bytes remain unchanged.
-- Fresh repository-wide search of the upstream published dist found zero references to md-to-pdf, gray-matter, or chokidar.
-- The removed dependency pulled an unused vulnerable chain into the production closure and prevented the zero-vulnerability release gate from passing.
+- The vendored runtime starts from the upstream 0.2.52 published dist.
+- dist/tools/pdf/markdown.js replaces md-to-pdf with markdown-it + playwright-core while preserving Chrome discovery/cache/install behavior through an explicit @puppeteer/browsers dependency.
+- dist/tools/schemas.js updates the stale md-to-pdf option comment only.
+- md-to-pdf is removed from the dependency manifest, eliminating its vulnerable chokidar/gray-matter/js-yaml chain.
+- sharp is pinned from the upstream ^0.34.5 range to security-fixed 0.35.5.
 - Upstream development/build scripts and devDependencies are omitted because this vendored package contains published runtime output only; DeskMCP never rebuilds the third-party package.
+- The patched Markdown-to-PDF path is verified by generating a real PDF with system Chrome during DeskMCP release validation.
