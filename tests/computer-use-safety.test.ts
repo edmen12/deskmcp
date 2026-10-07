@@ -305,23 +305,16 @@ test('Agent Desktop warns when Windows Forms semantic UIA collapses to window ch
 });
 
 
-test('Agent Desktop background mode permits only actions fresh-verified not to switch the user desktop', () => {
-  assert.deepEqual(
-    prepareAgentDesktopAction({ type: 'invoke', selector: 'ApplyButton' }),
-    { type: 'invoke', selector: 'ApplyButton' }
-  );
-  assert.deepEqual(
-    prepareAgentDesktopAction({ type: 'scroll', selector: 'List', direction: 'down' }),
-    { type: 'scroll', selector: 'List', direction: 'down' }
-  );
+test('Agent Desktop background mode permits only wait after live foreground regression', () => {
   assert.deepEqual(
     prepareAgentDesktopAction({ type: 'wait', milliseconds: 50 }),
     { type: 'wait', milliseconds: 50 }
   );
 });
 
-test('Agent Desktop background mode rejects actions that can steal or switch the user desktop', () => {
+test('Agent Desktop background mode rejects all UI-mutating or focus-capable actions', () => {
   const blocked = [
+    { type: 'invoke', selector: 'ApplyButton' },
     { type: 'set_value', selector: 'AgentInput', value: 'ok' },
     { type: 'send_keys', keys: 'hello', transport: 'post-message' },
     { type: 'send_keys', keys: 'hello', transport: 'send-input' },
@@ -329,6 +322,8 @@ test('Agent Desktop background mode rejects actions that can steal or switch the
     { type: 'click', selector: 'ApplyButton' },
     { type: 'hover', selector: 'ApplyButton' },
     { type: 'drag', from: 'A', to: 'B' },
+    { type: 'scroll', selector: 'List', direction: 'down' },
+    { type: 'scroll', selector: 'List', to: 'bottom' },
     { type: 'scroll', wheel: 3 }
   ] as const;
 

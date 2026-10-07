@@ -71,16 +71,14 @@ export class RequiresForegroundInputError extends Error {
 
 export function prepareAgentDesktopAction(action: UiAction): UiAction {
   switch (action.type) {
-    case 'invoke':
     case 'wait':
       return action;
+    case 'invoke':
+      throw new RequiresForegroundInputError('invoke is disabled in Agent Desktop background mode because the current Windows UI backend can intermittently activate a control on a non-current virtual desktop and switch the user desktop.');
     case 'set_value':
       throw new RequiresForegroundInputError('set_value is disabled in Agent Desktop background mode because the current Windows UI backend can activate a control on a non-current virtual desktop and switch the user desktop.');
     case 'scroll':
-      if (action.wheel !== undefined) {
-        throw new RequiresForegroundInputError('mouse-wheel scrolling is disabled in Agent Desktop background mode. Use semantic direction/to scrolling when supported.');
-      }
-      return action;
+      throw new RequiresForegroundInputError('scroll is disabled in Agent Desktop background mode because both semantic UI scrolling and mouse-wheel delivery can intermittently activate a non-current virtual desktop and switch the user desktop.');
     case 'send_keys':
       throw new RequiresForegroundInputError('keyboard delivery is disabled in Agent Desktop background mode because both SendInput and the current window-targeted path can activate a non-current virtual desktop.');
     case 'click':
@@ -369,7 +367,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Windows on an active Agent Desktop automatically inherit that lease even if the caller omits agent_desktop_lease_id. In Agent Desktop background mode, only actions fresh-verified not to switch the user virtual desktop are allowed: invoke, semantic direction/to scroll, and wait. Text entry/value editing, physical mouse input, SendInput, window-targeted keyboard delivery, wheel injection, drag, and hover return requires_foreground_input instead of stealing the user desktop. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Windows on an active Agent Desktop automatically inherit that lease even if the caller omits agent_desktop_lease_id. In Agent Desktop background mode, only wait is allowed. All UI-mutating or focus-capable actions, including invoke, set_value, click, hover, semantic or wheel scroll, send_keys, and drag, return requires_foreground_input because live regression proved they cannot currently guarantee the user virtual desktop will remain unchanged. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
