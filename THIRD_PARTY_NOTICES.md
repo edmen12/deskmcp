@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This notice is generated from the actual Windows x64 release stage for DeskMCP 0.9.17. DeskMCP itself is licensed under Apache License 2.0; see the repository root `LICENSE`. Third-party components retain the licenses documented below.
+This notice is generated from the actual Windows x64 release stage for DeskMCP 0.9.18. DeskMCP itself is licensed under Apache License 2.0; see the repository root `LICENSE`. Third-party components retain the licenses documented below.
 
 ## Bundled runtimes and major components
 
@@ -9,8 +9,8 @@ This notice is generated from the actual Windows x64 release stage for DeskMCP 0
 - **Microsoft WinApp CLI v0.5.0** — MIT; DeskMCP bundles the pinned standalone `winapp.exe` + `libSkiaSharp.dll` computer-use backend and preserves its MIT notice at `licenses/winappcli/LICENSE.txt`.
 - **VirtualDesktopAccessor** — MIT; DeskMCP builds the pinned source commit recorded in `virtual-desktop-accessor/SOURCE_COMMIT.txt`, preserves the upstream MIT notice at `virtual-desktop-accessor/LICENSE.txt`, and records the shipped DLL checksum in `virtual-desktop-accessor/SHA256SUMS.txt`.
 - **OpenAI tunnel-client v0.0.13** — Apache-2.0; its upstream `LICENSE`, `NOTICE`, third-party licenses text, and SPDX document remain under `tunnel-client/v0.0.13/bin/`.
-- **@wonderwhy-er/desktop-commander 0.2.47** — MIT. Its package-local license remains in the bundled production `node_modules`.
-- **sharp-win32-x64 0.35.4** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.
+- **@wonderwhy-er/desktop-commander 0.2.52** — MIT. DeskMCP ships a provenance-recorded vendor patch; the package-local license remains in bundled production `node_modules`, and patch provenance remains at `gateway/vendor/desktop-commander/DESKMCP_PATCH.md`.
+- **@img/sharp-win32-x64 0.35.5** — package metadata declares Apache-2.0 AND LGPL-3.0-or-later. Its package-local LICENSE and README, including the bundled libvips/native-library license table, remain in the release.
 
 ## Manual license resolution
 
@@ -28,12 +28,12 @@ Evidence:
 The complete machine-generated inventory is `licenses/production-node-packages.csv`. It records package name, version, resolved license expression, package-local license files, and its path inside the target release stage.
 
 Package/license counts for this stage:
-- MIT: 431
-- ISC: 33
-- Apache-2.0: 11
-- BSD-3-Clause: 7
-- BSD-2-Clause: 4
+- MIT: 343
+- ISC: 31
+- Apache-2.0: 10
+- BSD-3-Clause: 5
 - BlueOak-1.0.0: 4
+- BSD-2-Clause: 3
 - MIT/X11: 2
 - (MIT AND Zlib): 2
 - 0BSD: 2
@@ -42,13 +42,12 @@ Package/license counts for this stage:
 - Unlicense: 1
 - MIT (manual resolution): 1
 - (MIT OR GPL-3.0-or-later): 1
-- (WTFPL OR MIT): 1
 - (MIT OR GPL-3.0): 1
 
 For `jszip` and `pizzip`, this distribution elects the MIT option expressly offered by their dual-license files.
 
 License expressions requiring special attention or explicit choice:
-- `@img/sharp-win32-x64@0.35.4` — Apache-2.0 AND LGPL-3.0-or-later; files: LICENSE
+- `@img/sharp-win32-x64@0.35.5` — Apache-2.0 AND LGPL-3.0-or-later; files: LICENSE
 - `buffers@0.1.1` — MIT (manual resolution)
 - `jszip@3.10.1` — (MIT OR GPL-3.0-or-later); files: LICENSE.markdown
 - `pizzip@3.2.0` — (MIT OR GPL-3.0); files: LICENSE.markdown
