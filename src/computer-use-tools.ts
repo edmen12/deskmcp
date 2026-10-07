@@ -116,6 +116,33 @@ function isAgentDesktopSafetyWindow(window: ComputerWindow): boolean {
   return window.title?.startsWith('DeskMCP Agent Desktop') === true;
 }
 
+export async function resolveAgentDesktopWindowLease(
+  agentDesktop: AgentDesktopManager | undefined,
+  hwnd: number,
+  requestedLeaseId?: string
+): Promise<string | undefined> {
+  if (requestedLeaseId) return requestedLeaseId;
+  return agentDesktop ? agentDesktop.activeLeaseForWindow(hwnd) : undefined;
+}
+
+export async function assertUnscopedUserDesktopActionAllowed(
+  agentDesktop: AgentDesktopManager | undefined,
+  effectiveAgentDesktopLeaseId: string | undefined,
+  allowUserDesktop: boolean
+): Promise<void> {
+  if (
+    !effectiveAgentDesktopLeaseId &&
+    agentDesktop &&
+    !allowUserDesktop &&
+    await agentDesktop.hasActiveControls()
+  ) {
+    throw new PolicyDeniedError(
+      'Unscoped user-desktop actions are blocked while Agent Desktop control is active. ' +
+      'Pass allow_user_desktop=true only for intentional control of Desktop 1.'
+    );
+  }
+}
+
 export function agentDesktopSemanticTreeWarning(
   window: ComputerWindow,
   elements: readonly UiElementSummary[]
@@ -321,15 +348,23 @@ export function registerComputerUseTools(
           ? runtime.windows.resolve(window_id, all)
           : selectForegroundOrSingle(candidates);
         if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
-        if (agent_desktop_lease_id) await agentDesktop!.assertWindowOnLease(target.hwnd, agent_desktop_lease_id);
+        const effectiveAgentDesktopLeaseId = await resolveAgentDesktopWindowLease(
+          agentDesktop,
+          target.hwnd,
+          agent_desktop_lease_id
+        );
+        if (effectiveAgentDesktopLeaseId) {
+          if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+          await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+        }
         const snapshot = await snapshotContent(runtime, target, {
           includeTree: include_tree,
           includeScreenshot: include_screenshot,
           interactiveOnly: interactive_only,
           maxElements: max_elements,
-          ...(agent_desktop_lease_id ? { agentDesktopLeaseId: agent_desktop_lease_id } : {})
+          ...(effectiveAgentDesktopLeaseId ? { agentDesktopLeaseId: effectiveAgentDesktopLeaseId } : {})
         });
-        if (agent_desktop_lease_id) await agentDesktop!.assertLease(agent_desktop_lease_id);
+        if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
         return snapshot;
       })
     )
@@ -339,7 +374,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. In Agent Desktop background mode, only UIA/window-targeted actions are allowed: invoke, set_value, semantic scroll, post-message send_keys, and wait. Physical mouse input, SendInput, wheel injection, drag, and hover return requires_foreground_input instead of stealing the user desktop.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Windows on an active Agent Desktop automatically inherit that lease even if the caller omits agent_desktop_lease_id. In Agent Desktop background mode, only UIA/window-targeted actions are allowed: invoke, set_value, semantic scroll, post-message send_keys, and wait. Physical mouse input, SendInput, wheel injection, drag, and hover return requires_foreground_input instead of stealing the user desktop. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -355,6 +390,7 @@ export function registerComputerUseTools(
         transport: z.literal('send-input').optional().describe('Remote callers may request normal SendInput only. DeskMCP may select a restricted window-targeted transport internally for Agent Desktop background mode.'),
         verbatim: z.boolean().optional().default(false),
         allow_system_keys: z.boolean().optional().default(false),
+        allow_user_desktop: z.boolean().optional().default(false).describe('Explicitly allow an unscoped action on the normal user desktop while an Agent Desktop lease is active.'),
         from: z.string().min(1).max(512).optional(),
         drag_to: z.string().min(1).max(512).optional(),
         hold_ms: z.number().int().min(0).max(5000).optional(),
@@ -372,13 +408,23 @@ export function registerComputerUseTools(
       const target = runtime.windows.resolve(input.window_id, liveWindows);
       if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
 
+      const requestedAgentDesktopLeaseId = await resolveAgentDesktopWindowLease(
+        agentDesktop,
+        target.hwnd,
+        input.agent_desktop_lease_id
+      );
       const observationLeaseId = runtime.observations.consume(
         input.computer_observation_id,
         input.window_id,
         Date.now(),
-        input.agent_desktop_lease_id
+        requestedAgentDesktopLeaseId
       );
-      const effectiveAgentDesktopLeaseId = observationLeaseId ?? input.agent_desktop_lease_id;
+      const effectiveAgentDesktopLeaseId = observationLeaseId ?? requestedAgentDesktopLeaseId;
+      await assertUnscopedUserDesktopActionAllowed(
+        agentDesktop,
+        effectiveAgentDesktopLeaseId,
+        input.allow_user_desktop
+      );
       if (input.allow_system_keys && !effectiveAgentDesktopLeaseId && !policy.isFullyUnlocked()) {
         throw new PolicyDeniedError('System-wide key injection requires Fully Unlocked.');
       }

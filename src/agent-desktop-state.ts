@@ -499,6 +499,20 @@ export class AgentDesktopManager {
     return { binding, control };
   }
 
+  async hasActiveControls(): Promise<boolean> {
+    return (await this.readControlDocument()).controls.length > 0;
+  }
+
+  async activeLeaseForWindow(hwnd: number): Promise<string | undefined> {
+    const document = await this.readControlDocument();
+    if (document.controls.length === 0) return undefined;
+    const info = await this.native.windowInfo(hwnd);
+    const desktopId = info.desktopId.toLowerCase();
+    return document.controls.find(control =>
+      control.desktopId?.toLowerCase() === desktopId
+    )?.leaseId;
+  }
+
   async assertWindowOnLease(hwnd: number, leaseId: string): Promise<void> {
     const { binding } = await this.assertLease(leaseId);
     const info = await this.native.windowInfo(hwnd);

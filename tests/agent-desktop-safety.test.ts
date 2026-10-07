@@ -482,3 +482,58 @@ test('Agent Desktop process-tree placement fails closed when no stable owned GUI
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('Agent Desktop resolves a window to its active lease by actual virtual desktop identity', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-window-scope-'));
+  try {
+    const leaseId = randomUUID();
+    const agentDesktopId = randomUUID();
+    const userDesktopId = randomUUID();
+    const now = new Date().toISOString();
+    const native = {
+      async windowInfo(hwnd: number) {
+        return {
+          hwnd: String(hwnd),
+          desktopId: hwnd === 100 ? agentDesktopId : userDesktopId,
+          desktopNumber: hwnd === 100 ? 2 : 1,
+          onCurrentDesktop: hwnd !== 100
+        };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [{ schemaVersion: 1, desktopId: agentDesktopId, desktopNumber: 2, boundAtUtc: now }]
+    });
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 2,
+      generation: 12,
+      controls: [{
+        schemaVersion: 1,
+        generation: 12,
+        active: true,
+        leaseId,
+        desktopId: agentDesktopId,
+        desktopNumber: 2,
+        taskLabel: 'window scope',
+        startedAtUtc: now
+      }]
+    });
+
+    assert.equal(await manager.hasActiveControls(), true);
+    assert.equal(await manager.activeLeaseForWindow(100), leaseId);
+    assert.equal(await manager.activeLeaseForWindow(200), undefined);
+
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 2,
+      generation: 13,
+      controls: []
+    });
+    assert.equal(await manager.hasActiveControls(), false);
+    assert.equal(await manager.activeLeaseForWindow(100), undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

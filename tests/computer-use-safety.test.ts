@@ -13,7 +13,13 @@ import {
 } from '../src/computer-use-backend.js';
 import { ComputerObservationRegistry } from '../src/computer-use-observation.js';
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
-import { agentDesktopSemanticTreeWarning, prepareAgentDesktopAction } from '../src/computer-use-tools.js';
+import {
+  agentDesktopSemanticTreeWarning,
+  assertUnscopedUserDesktopActionAllowed,
+  prepareAgentDesktopAction,
+  resolveAgentDesktopWindowLease
+} from '../src/computer-use-tools.js';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { TEST_AREA } from '../src/paths.js';
 
@@ -331,4 +337,64 @@ test('Agent Desktop background mode rejects physical input instead of stealing t
   for (const action of blocked) {
     assert.throws(() => prepareAgentDesktopAction(action), /requires_foreground_input/i);
   }
+});
+
+test('Agent Desktop target windows inherit lease scope even when the caller omits it', async () => {
+  const leaseId = '11111111-1111-4111-8111-111111111111';
+  let lookupCount = 0;
+  const agentDesktop = {
+    async activeLeaseForWindow(hwnd: number) {
+      lookupCount += 1;
+      assert.equal(hwnd, 100);
+      return leaseId;
+    },
+    async hasActiveControls() {
+      return true;
+    }
+  } as unknown as AgentDesktopManager;
+
+  assert.equal(await resolveAgentDesktopWindowLease(agentDesktop, 100), leaseId);
+  assert.equal(lookupCount, 1);
+  assert.throws(
+    () => prepareAgentDesktopAction({ type: 'click', selector: 'ApplyButton' }),
+    /requires_foreground_input/i
+  );
+
+  assert.equal(
+    await resolveAgentDesktopWindowLease(agentDesktop, 100, leaseId),
+    leaseId
+  );
+  assert.equal(lookupCount, 1);
+});
+
+test('Desktop 1 actions require an explicit escape while Agent Desktop control is active', async () => {
+  const activeAgentDesktop = {
+    async hasActiveControls() {
+      return true;
+    }
+  } as unknown as AgentDesktopManager;
+
+  await assert.rejects(
+    assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, false),
+    /allow_user_desktop=true/i
+  );
+  await assert.doesNotReject(
+    assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, true)
+  );
+  await assert.doesNotReject(
+    assertUnscopedUserDesktopActionAllowed(
+      activeAgentDesktop,
+      '11111111-1111-4111-8111-111111111111',
+      false
+    )
+  );
+
+  const idleAgentDesktop = {
+    async hasActiveControls() {
+      return false;
+    }
+  } as unknown as AgentDesktopManager;
+  await assert.doesNotReject(
+    assertUnscopedUserDesktopActionAllowed(idleAgentDesktop, undefined, false)
+  );
 });
