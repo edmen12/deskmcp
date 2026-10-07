@@ -260,6 +260,11 @@ New-Item -ItemType Directory -Force -Path $gatewayDist | Out-Null
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'dist\src') -Destination $gatewayDist -Recurse -Force
 Require (-not (Test-Path -LiteralPath (Join-Path $gatewayDest 'dist\tests'))) 'Production release stage must not include compiled test files.'
 foreach ($file in @('package.json','package-lock.json','.npmrc')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $file) -Destination $gatewayDest -Force }
+$vendorDesktopCommander = Join-Path $ProjectRoot 'vendor\desktop-commander'
+Require (Test-Path -LiteralPath (Join-Path $vendorDesktopCommander 'package.json')) 'Vendored Desktop Commander package is missing.'
+$gatewayVendorRoot = Join-Path $gatewayDest 'vendor'
+New-Item -ItemType Directory -Force -Path $gatewayVendorRoot | Out-Null
+Copy-Item -LiteralPath $vendorDesktopCommander -Destination $gatewayVendorRoot -Recurse -Force
 Push-Location $gatewayDest
 try {
     Invoke-ProductionNpmCi @('--omit=dev','--ignore-scripts',('--os=' + $TargetConfig.NpmOs),('--cpu=' + $TargetConfig.NpmCpu))

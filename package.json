@@ -1,6 +1,6 @@
 {
   "name": "deskmcp-gateway",
-  "version": "0.9.17",
+  "version": "0.9.18",
   "description": "DeskMCP — open-source local-first desktop bridge for ChatGPT",
   "license": "Apache-2.0",
   "repository": {
@@ -41,11 +41,11 @@
     "node": ">=24 <25"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
-    "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@vscode/ripgrep": "^1.18.0",
-    "@wonderwhy-er/desktop-commander": "0.2.47",
+    "@wonderwhy-er/desktop-commander": "file:vendor/desktop-commander",
     "playwright-core": "1.63.0",
     "unzipper": "0.10.14",
     "yaml": "2.9.0",
@@ -56,7 +56,7 @@
     "typescript": "7.0.2"
   },
   "overrides": {
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "uuid": "11.1.1"
   }
 }
