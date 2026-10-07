@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -78,6 +79,46 @@ internal sealed class AgentDesktopCurrentDesktopDocument
     public int DesktopNumber { get; set; }
     [JsonPropertyName("desktopCount")]
     public int DesktopCount { get; set; }
+}
+
+internal static class AgentDesktopForegroundProbe
+{
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int maxCount);
+
+    public static string Describe()
+    {
+        try
+        {
+            IntPtr hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return "hwnd=0 pid=0 process=? title=";
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            StringBuilder title = new StringBuilder(1024);
+            GetWindowText(hwnd, title, title.Capacity);
+            string processName = "?";
+            try
+            {
+                using Process process = Process.GetProcessById(unchecked((int)pid));
+                processName = process.ProcessName;
+            }
+            catch { }
+            return "hwnd=0x" + hwnd.ToInt64().ToString("X") +
+                " pid=" + pid.ToString() +
+                " process=" + processName +
+                " title=" + title.ToString().Replace("\r", " ").Replace("\n", " ");
+        }
+        catch (Exception error)
+        {
+            return "foreground_probe_error=" + error.GetType().Name + ":" + error.Message.Replace("\r", " ").Replace("\n", " ");
+        }
+    }
 }
 
 internal static class AgentDesktopWindowMover
@@ -517,7 +558,6 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
     private bool desktopHookRegistered;
     private AgentDesktopOverlay overlay;
     private string overlayLeaseId;
-    private int overlayGeneration = -1;
     private DateTime lastHeartbeatUtc = DateTime.MinValue;
     private bool started;
     private bool disposed;
@@ -948,7 +988,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         }
     }
 
-    private async void Tick()
+    private void Tick()
     {
         if (disposed || tickInFlight) return;
         tickInFlight = true;
@@ -1010,48 +1050,26 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
 
             Guid currentDesktopId = desktopClient.CurrentDesktopId();
             currentControl = FindControlByDesktopId(controls, currentDesktopId);
-            if (currentControl == null)
+            if (currentControl != null)
             {
-                if (overlay != null) HideOverlayOnly();
-            }
-            else
-            {
-                Guid boundDesktopId;
-                if (!Guid.TryParse(currentControl.DesktopId, out boundDesktopId) || boundDesktopId == Guid.Empty)
-                    throw new InvalidDataException("Agent Desktop control contains an invalid desktop id.");
-
-                bool replaceOverlay = overlay == null ||
-                    !String.Equals(overlayLeaseId, currentControl.LeaseId, StringComparison.OrdinalIgnoreCase) ||
-                    overlayGeneration != currentControl.Generation ||
-                    !overlay.IsOnDesktop(boundDesktopId);
-                if (replaceOverlay)
+                string evidence = DateTime.UtcNow.ToString("O") +
+                    " leaseId=" + currentControl.LeaseId +
+                    " desktopNumber=" + (currentControl.DesktopNumber.HasValue ? currentControl.DesktopNumber.Value.ToString() : "?") +
+                    " " + AgentDesktopForegroundProbe.Describe();
+                try
                 {
-                    HideOverlayOnly();
-                    string capturedLeaseId = currentControl.LeaseId;
-                    int capturedGeneration = currentControl.Generation;
-                    AgentDesktopOverlay next = new AgentDesktopOverlay(currentControl.TaskLabel, delegate { ExitControl(capturedLeaseId); });
-                    try
-                    {
-                        await next.ShowOnDesktopAsync(boundDesktopId, delegate
-                        {
-                            AgentDesktopControlPoolDocument liveState = ReadControlPoolFile(controlPath);
-                            AgentDesktopControlDocument live = liveState?.Controls?.Find(control =>
-                                control.Generation == capturedGeneration &&
-                                String.Equals(control.LeaseId, capturedLeaseId, StringComparison.OrdinalIgnoreCase));
-                            return live != null;
-                        });
-                        overlay = next;
-                        overlayLeaseId = capturedLeaseId;
-                        overlayGeneration = capturedGeneration;
-                        lastHeartbeatUtc = DateTime.MinValue;
-                    }
-                    catch
-                    {
-                        next.Dispose();
-                        throw;
-                    }
+                    RuntimeReliability.AppendAllTextBounded(
+                        Path.Combine(root, "foreground-invariant.log"),
+                        evidence + Environment.NewLine);
                 }
+                catch { }
+                HideOverlayOnly();
+                desktopClient.GoToDesktopNumber(0);
+                WriteHudHeartbeats(controls, null);
+                lastHeartbeatUtc = DateTime.UtcNow;
+                return;
             }
+            if (overlay != null) HideOverlayOnly();
 
             if (DateTime.UtcNow - lastHeartbeatUtc >= HeartbeatInterval)
             {
@@ -1184,7 +1202,6 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         AgentDesktopOverlay current = overlay;
         overlay = null;
         overlayLeaseId = null;
-        overlayGeneration = -1;
         lastHeartbeatUtc = DateTime.MinValue;
         if (current != null) current.Dispose();
     }
