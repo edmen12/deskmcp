@@ -537,15 +537,50 @@ internal static class Program
         if (!vda.MoveWindowToDesktopNumber(hwnd, desktopNumber))
             throw new InvalidOperationException("VirtualDesktopAccessor could not move the target window.");
 
+        AssertWindowOnDesktop(hwnd, desktopId, desktopNumber, vda, "after the move");
+
+        if (restore)
+        {
+            ShowWindow(hwnd, SwRestore);
+            Thread.Sleep(50);
+            AssertWindowOnDesktop(hwnd, desktopId, desktopNumber, vda, "after restoring the window");
+        }
+        else if (showNoActivate)
+        {
+            ShowWindow(hwnd, SwShowNoActivate);
+            Thread.Sleep(50);
+
+            // Some GUI frameworks (observed with Chrome) can re-associate the window with its
+            // previous virtual desktop while processing ShowWindow. Correct that once, after the
+            // visibility change, and verify the final settled placement instead of returning a
+            // false-positive success from the pre-ShowWindow check.
+            if (!WindowIsOnDesktop(hwnd, desktopId, desktopNumber, vda))
+            {
+                if (!vda.MoveWindowToDesktopNumber(hwnd, desktopNumber))
+                    throw new InvalidOperationException("VirtualDesktopAccessor could not restore the target window to the requested virtual desktop after show-no-activate.");
+                Thread.Sleep(50);
+            }
+
+            AssertWindowOnDesktop(hwnd, desktopId, desktopNumber, vda, "after show-no-activate");
+        }
+    }
+
+    private static bool WindowIsOnDesktop(IntPtr hwnd, Guid desktopId, int desktopNumber, VirtualDesktopAccessor vda)
+    {
+        int? actualNumber = vda.WindowDesktopNumber(hwnd);
+        if (actualNumber.HasValue && actualNumber.Value != desktopNumber) return false;
+        return GetDesktopId(hwnd) == desktopId;
+    }
+
+    private static void AssertWindowOnDesktop(IntPtr hwnd, Guid desktopId, int desktopNumber, VirtualDesktopAccessor vda, string phase)
+    {
         int? actualNumber = vda.WindowDesktopNumber(hwnd);
         if (actualNumber.HasValue && actualNumber.Value != desktopNumber)
-            throw new InvalidOperationException("Windows reported a different virtual desktop number after the move.");
+            throw new InvalidOperationException("Windows reported a different virtual desktop number " + phase + ".");
 
         Guid actual = GetDesktopId(hwnd);
         if (actual != desktopId)
-            throw new InvalidOperationException("Windows reported a different virtual desktop after the move.");
-        if (restore) ShowWindow(hwnd, SwRestore);
-        else if (showNoActivate) ShowWindow(hwnd, SwShowNoActivate);
+            throw new InvalidOperationException("Windows reported a different virtual desktop " + phase + ".");
     }
 
     private static Guid GetDesktopId(IntPtr hwnd)
