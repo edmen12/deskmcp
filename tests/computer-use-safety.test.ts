@@ -305,33 +305,31 @@ test('Agent Desktop warns when Windows Forms semantic UIA collapses to window ch
 });
 
 
-test('Agent Desktop background mode permits only non-injecting UI actions', () => {
+test('Agent Desktop background mode permits only actions fresh-verified not to switch the user desktop', () => {
   assert.deepEqual(
     prepareAgentDesktopAction({ type: 'invoke', selector: 'ApplyButton' }),
     { type: 'invoke', selector: 'ApplyButton' }
-  );
-  assert.deepEqual(
-    prepareAgentDesktopAction({ type: 'set_value', selector: 'AgentInput', value: 'ok' }),
-    { type: 'set_value', selector: 'AgentInput', value: 'ok' }
   );
   assert.deepEqual(
     prepareAgentDesktopAction({ type: 'scroll', selector: 'List', direction: 'down' }),
     { type: 'scroll', selector: 'List', direction: 'down' }
   );
   assert.deepEqual(
-    prepareAgentDesktopAction({ type: 'send_keys', keys: 'enter', transport: 'post-message' }),
-    { type: 'send_keys', keys: 'enter', transport: 'post-message', allowSystemKeys: false }
+    prepareAgentDesktopAction({ type: 'wait', milliseconds: 50 }),
+    { type: 'wait', milliseconds: 50 }
   );
 });
 
-test('Agent Desktop background mode rejects physical input instead of stealing the user desktop', () => {
+test('Agent Desktop background mode rejects actions that can steal or switch the user desktop', () => {
   const blocked = [
+    { type: 'set_value', selector: 'AgentInput', value: 'ok' },
+    { type: 'send_keys', keys: 'hello', transport: 'post-message' },
+    { type: 'send_keys', keys: 'hello', transport: 'send-input' },
+    { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true },
     { type: 'click', selector: 'ApplyButton' },
     { type: 'hover', selector: 'ApplyButton' },
     { type: 'drag', from: 'A', to: 'B' },
-    { type: 'scroll', wheel: 3 },
-    { type: 'send_keys', keys: 'hello', transport: 'send-input' },
-    { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true }
+    { type: 'scroll', wheel: 3 }
   ] as const;
 
   for (const action of blocked) {
