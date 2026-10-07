@@ -23,7 +23,7 @@ import { registerTaskTools } from './task-tools.js';
 import { registerTestTools } from './test-tools.js';
 
 export const SERVER_NAME = 'deskmcp-gateway';
-export const SERVER_VERSION = '0.9.20';
+export const SERVER_VERSION = '0.9.21';
 
 export function createDesktopMcpServer(
   bridge?: DesktopBackendBridge,
