@@ -17,6 +17,7 @@ import {
   agentDesktopSemanticTreeWarning,
   assertUnscopedUserDesktopActionAllowed,
   isolatedDesktopTextTarget,
+  isolatedSemanticClickTarget,
   prepareAgentDesktopAction,
   resolveAgentDesktopWindowLease,
   verifiedLiteralInsertion
@@ -403,12 +404,33 @@ test('isolated post-message readback verifies one exact insertion at any caret p
   assert.equal(verifiedLiteralInsertion('BASE_', 'BASE_ABCABC', 'ABC'), false);
 });
 
+test('isolated semantic click only accepts a uniquely observed UIA-invokable button', () => {
+  const apply: UiElementSummary = {
+    type: 'Button', selector: 'ApplyButton', className: 'Button',
+    isEnabled: true, isOffscreen: false, isInvokable: true
+  };
+  assert.deepEqual(isolatedSemanticClickTarget([apply], 'ApplyButton'), apply);
+  for (const elements of [
+    [],
+    [apply, apply],
+    [{ ...apply, type: 'Edit' }],
+    [{ ...apply, isEnabled: false }],
+    [{ ...apply, isOffscreen: true }],
+    [{ type: 'Button', selector: 'ApplyButton', isEnabled: true, isInvokable: true }],
+    [{ ...apply, isInvokable: false }],
+    [{ ...apply, selector: 'OtherButton' }]
+  ]) {
+    assert.throws(() => isolatedSemanticClickTarget(elements, 'ApplyButton'), /requires_foreground_input/i);
+  }
+});
+
 test('Agent Desktop isolated desktop still rejects unverified global input paths', () => {
   const blocked = [
     { type: 'send_keys', keys: 'hello', transport: 'post-message' },
     { type: 'send_keys', keys: 'hello', transport: 'send-input' },
     { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true },
-    { type: 'click', selector: 'ApplyButton' },
+    { type: 'click', selector: 'ApplyButton', button: 'right' },
+    { type: 'click', selector: 'ApplyButton', double: true },
     { type: 'hover', selector: 'ApplyButton' },
     { type: 'drag', from: 'A', to: 'B' },
     { type: 'scroll', wheel: 3 }
@@ -435,9 +457,9 @@ test('Agent Desktop target windows inherit lease scope even when the caller omit
 
   assert.equal(await resolveAgentDesktopWindowLease(agentDesktop, 100), leaseId);
   assert.equal(lookupCount, 1);
-  assert.throws(
-    () => prepareAgentDesktopAction({ type: 'click', selector: 'ApplyButton' }),
-    /requires_foreground_input/i
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'click', selector: 'ApplyButton' }),
+    { type: 'click', selector: 'ApplyButton' }
   );
 
   assert.equal(

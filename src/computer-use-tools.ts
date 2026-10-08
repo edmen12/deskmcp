@@ -96,7 +96,12 @@ export function prepareAgentDesktopAction(action: UiAction): UiAction {
       }
       return { ...action, transport: 'post-message', allowSystemKeys: false };
     case 'click':
-      throw new RequiresForegroundInputError('physical mouse click is disabled in Agent Desktop isolated-desktop mode. Use invoke when the control exposes an invoke pattern.');
+      if (action.double || action.button === 'right') {
+        throw new RequiresForegroundInputError('isolated semantic click supports only one left-button activation; double and right click still require foreground input.');
+      }
+      // This is NOT synthetic mouse input. A later UIA inspect must prove
+      // exactly one enabled, invokable Button before mapping click to invoke.
+      return action;
     case 'hover':
       throw new RequiresForegroundInputError('physical mouse hover is disabled in Agent Desktop isolated-desktop mode.');
     case 'drag':
@@ -125,6 +130,18 @@ export function isolatedDesktopTextTarget(
     throw new RequiresForegroundInputError(
       'window-targeted typing requires a unique enabled WinForms Edit or WPF TextBox in an isolated Desktop Object.'
     );
+  }
+  return element;
+}
+
+// A semantic 'click' is only an alias to UIA Invoke, not mouse injection.
+// Require a uniquely observed, enabled, visible Button with Invoke support.
+export function isolatedSemanticClickTarget(elements: readonly UiElementSummary[], selector: string): UiElementSummary {
+  const matching = elements.filter(element => element.selector === selector);
+  const element = matching[0];
+  if (matching.length !== 1 || element?.type !== 'Button' || element.isInvokable !== true
+    || element.isEnabled !== true || element.isOffscreen !== false) {
+    throw new RequiresForegroundInputError('isolated semantic click requires one enabled, visible, UIA-invokable Button; other mouse clicks remain disabled.');
   }
   return element;
 }
@@ -425,7 +442,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Physical click, hover, drag, wheel injection, global/system keyboard input and unsupported app controls remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Single left click on a uniquely observed UIA-invokable Button maps to semantic invoke, NOT physical mouse input; unsupported clicks, double/right click, hover, drag, wheel injection and global/system keyboard input remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -490,15 +507,24 @@ export function registerComputerUseTools(
       if (input.allow_system_keys && !effectiveAgentDesktopLeaseId && !policy.isFullyUnlocked()) {
         throw new PolicyDeniedError('System-wide key injection requires Fully Unlocked.');
       }
-      const action = effectiveAgentDesktopLeaseId ? prepareAgentDesktopAction(parsedAction) : parsedAction;
+      let action = effectiveAgentDesktopLeaseId ? prepareAgentDesktopAction(parsedAction) : parsedAction;
       if (effectiveAgentDesktopLeaseId) {
         if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
         if (desktopObjectName) await agentDesktop.assertLease(effectiveAgentDesktopLeaseId);
         else await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
       }
 
-      // Literal text input is the only experimental window-message path.
-      // Never fall back to a legacy virtual desktop or target arbitrary apps.
+      // An isolated left 'click' may use UIA Invoke only after a fresh
+      // semantic inspection proves one valid Button. No mouse is injected.
+      if (effectiveAgentDesktopLeaseId && action.type === 'click') {
+        if (!desktopObjectName) throw new RequiresForegroundInputError('isolated semantic click requires a verified Desktop Object.');
+        const current = await runtime.backend.inspect(target.hwnd, true, 200, desktopObjectName);
+        const button = isolatedSemanticClickTarget(current.elements, action.selector);
+        action = { type: 'invoke', selector: button.selector! };
+      }
+
+      // The only experimental window-message path is bounded literal text.
+      // Never fall back to global input or target arbitrary apps.
       let beforeText: string | undefined;
       if (effectiveAgentDesktopLeaseId && action.type === 'send_keys') {
         if (!desktopObjectName || !action.selector) {
