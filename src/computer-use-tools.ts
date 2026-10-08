@@ -134,6 +134,26 @@ export function isolatedDesktopTextTarget(
   return element;
 }
 
+// UIA can clear WPF TextBox using an empty ValuePattern.SetValue, while
+// bundled WinApp's set-value CLI rejects empty positional arguments.
+// Require a true automationId match; never guess which field to clear.
+export function isolatedWpfClearTarget(
+  window: ComputerWindow,
+  elements: readonly UiElementSummary[],
+  selector: string
+): UiElementSummary {
+  const element = isolatedDesktopTextTarget(window, elements, selector);
+  if (!window.className?.startsWith('HwndWrapper[')
+    || element.className !== 'TextBox'
+    || element.automationId !== selector
+    || element.isOffscreen !== false) {
+    throw new RequiresForegroundInputError(
+      'isolated empty set_value supports only a uniquely identified visible WPF TextBox.'
+    );
+  }
+  return element;
+}
+
 // A semantic 'click' is only an alias to UIA Invoke, not mouse injection.
 // Require a uniquely observed, enabled, visible Button with Invoke support.
 export function isolatedSemanticClickTarget(elements: readonly UiElementSummary[], selector: string): UiElementSummary {
@@ -523,6 +543,14 @@ export function registerComputerUseTools(
         action = { type: 'invoke', selector: button.selector! };
       }
 
+      // WinApp's CLI does not accept empty set-value arguments. Only a WPF
+      // TextBox on an actual Desktop Object can use direct UIA ValuePattern.
+      if (effectiveAgentDesktopLeaseId && action.type === 'set_value' && action.value === '') {
+        if (!desktopObjectName) throw new RequiresForegroundInputError('isolated WPF clear requires a verified Desktop Object.');
+        const current = await runtime.backend.inspect(target.hwnd, true, 200, desktopObjectName);
+        isolatedWpfClearTarget(target, current.elements, action.selector);
+      }
+
       // The only experimental window-message path is bounded literal text.
       // Never fall back to global input or target arbitrary apps.
       let beforeText: string | undefined;
@@ -549,6 +577,14 @@ export function registerComputerUseTools(
         // WinApp post-message is fire-and-forget. Exit 0 alone is NOT delivery.
         if (!verifiedLiteralInsertion(beforeText, afterText, action.keys)) {
           throw new Error('isolated_text_delivery_unverified: target Edit did not confirm an exact literal insertion. Take a fresh snapshot before retrying.');
+        }
+      }
+
+      if (effectiveAgentDesktopLeaseId && action.type === 'set_value' && action.value === '') {
+        const checked = await runtime.backend.inspect(target.hwnd, true, 200, desktopObjectName);
+        const element = isolatedWpfClearTarget(target, checked.elements, action.selector);
+        if ((element.value ?? '') !== '') {
+          throw new Error('isolated_wpf_clear_unverified: expected an empty TextBox; take a fresh snapshot before retrying.');
         }
       }
 

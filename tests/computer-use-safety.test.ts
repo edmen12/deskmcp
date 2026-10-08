@@ -18,6 +18,7 @@ import {
   assertUnscopedUserDesktopActionAllowed,
   isolatedDesktopTextTarget,
   isolatedSemanticClickTarget,
+  isolatedWpfClearTarget,
   prepareAgentDesktopAction,
   resolveAgentDesktopWindowLease,
   verifiedLiteralInsertion
@@ -387,6 +388,28 @@ test('isolated post-message accepts only unique enabled WPF TextBox, not arbitra
     assert.throws(() => isolatedDesktopTextTarget(target.win, [target.el], 'SecondText'), /requires_foreground_input/i);
   }
   assert.throws(() => isolatedDesktopTextTarget(wpfWindow, [second, second], 'SecondText'), /requires_foreground_input/i);
+});
+
+test('isolated WPF clear is tightly scoped to one visible editable TextBox and exact automationId', () => {
+  const window = windowFixture({ className: 'HwndWrapper[DefaultDomain;test]' });
+  const input: UiElementSummary = {
+    type: 'Edit', selector: 'ClearTarget', automationId: 'ClearTarget',
+    className: 'TextBox', isEnabled: true, isOffscreen: false, value: 'TO_CLEAR'
+  };
+  assert.deepEqual(isolatedWpfClearTarget(window, [input], 'ClearTarget'), input);
+  const invalid = [
+    { window, elements: [input, input] },
+    { window, elements: [{ ...input, isEnabled: false }] },
+    { window, elements: [{ ...input, isOffscreen: true }] },
+    { window, elements: [{ type: 'Edit', selector: 'ClearTarget', automationId: 'ClearTarget', className: 'TextBox', isEnabled: true }] },
+    { window, elements: [{ ...input, className: 'PasswordBox' }] },
+    { window, elements: [{ ...input, type: 'Button' }] },
+    { window, elements: [{ ...input, automationId: 'OtherId' }] },
+    { window: windowFixture({ className: 'WindowsForms10.Window.test' }), elements: [input] }
+  ];
+  for (const {window: targetWindow, elements} of invalid) {
+    assert.throws(() => isolatedWpfClearTarget(targetWindow, elements, 'ClearTarget'), /requires_foreground_input/i);
+  }
 });
 
 test('isolated post-message readback verifies one exact insertion at any caret position', () => {

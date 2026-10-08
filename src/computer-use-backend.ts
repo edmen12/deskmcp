@@ -278,10 +278,11 @@ export class WinAppComputerBackend {
   private async run(
     args: readonly string[],
     timeoutMs = 10_000,
-    desktopObjectName?: string
+    desktopObjectName?: string,
+    executableOverride?: string
   ): Promise<string> {
     if (process.platform !== 'win32') throw new Error('Windows computer use is only available on Windows.');
-    const executable = this.executableResolver();
+    const executable = executableOverride ?? this.executableResolver();
     const processHost = process.env.DESKTOP_MCP_PROCESS_HOST?.trim() || DEFAULT_PROCESS_HOST_ENTRY;
     const command = desktopObjectName
       ? `& ${quotePowerShellLiteral(executable)} ${args.map(quotePowerShellLiteral).join(' ')}; exit $LASTEXITCODE`
@@ -366,6 +367,41 @@ export class WinAppComputerBackend {
     desktopObjectName?: string
   ): Promise<T> {
     return extractJson(await this.run([...args, '--json'], timeoutMs, desktopObjectName)) as T;
+  }
+
+  // WinApp v0.5.0 rejects an empty positional set-value argument.
+  // UIA ValuePattern can clear WPF TextBox without keyboard/mouse injection.
+  // Invoke PowerShell strictly inside the existing lease-owned Desktop Object.
+  private async clearIsolatedWpfValue(hwnd: number, selector: string, desktopObjectName: string): Promise<unknown> {
+    const encodedSelector = Buffer.from(selector, 'utf8').toString('base64');
+    const script = [
+      "$ErrorActionPreference='Stop'",
+      'Add-Type -AssemblyName UIAutomationClient',
+      'Add-Type -AssemblyName UIAutomationTypes',
+      `$windowHandle=[IntPtr]${hwnd}`,
+      `$automationId=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedSelector}'))`,
+      '$window=[System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)',
+      "if($null -eq $window){throw 'Target UIA window not found'}",
+      '$condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$automationId)',
+      '$matches=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)',
+      "if($matches.Count -ne 1){throw 'WPF clear target is not unique'}",
+      '$target=$matches.Item(0)',
+      "if($target.Current.ClassName -cne 'TextBox' -or $target.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit){throw 'Not a WPF TextBox'}",
+      "if(-not $target.Current.IsEnabled -or $target.Current.IsOffscreen){throw 'WPF TextBox is unavailable'}",
+      '$pattern=$target.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)',
+      "if($pattern.Current.IsReadOnly){throw 'WPF TextBox is read-only'}",
+      "$pattern.SetValue('')",
+      '$verified=$target.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value',
+      "if($verified -cne ''){throw 'WPF TextBox clear could not be verified'}",
+      '[pscustomobject]@{cleared=$true;selector=$automationId} | ConvertTo-Json -Compress'
+    ].join('\n');
+    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
+    const powerShell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const stdout = await this.run(
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedScript],
+      25_000, desktopObjectName, powerShell
+    );
+    return extractJson(stdout);
   }
 
   async listWindows(app?: string, desktopObjectName?: string): Promise<ComputerWindow[]> {
@@ -458,6 +494,9 @@ export class WinAppComputerBackend {
       case 'invoke':
         return this.runJson(['ui', 'invoke', action.selector, ...target], 10_000, desktopObjectName);
       case 'set_value':
+        if (desktopObjectName && action.value === '') {
+          return this.clearIsolatedWpfValue(hwnd, action.selector, desktopObjectName);
+        }
         return this.runJson(['ui', 'set-value', action.selector, action.value, ...target], 10_000, desktopObjectName);
       case 'click': {
         const args = ['ui', 'click', action.selector, ...target];
