@@ -16,6 +16,7 @@ import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-
 import {
   agentDesktopSemanticTreeWarning,
   assertUnscopedUserDesktopActionAllowed,
+  isolatedWinFormsTextTarget,
   prepareAgentDesktopAction,
   resolveAgentDesktopWindowLease
 } from '../src/computer-use-tools.js';
@@ -326,6 +327,44 @@ test('Agent Desktop isolated desktop permits semantic UIA actions and wait', () 
     prepareAgentDesktopAction({ type: 'wait', milliseconds: 50 }),
     { type: 'wait', milliseconds: 50 }
   );
+});
+
+test('isolated post-message accepts only explicit bounded literal input', () => {
+  assert.deepEqual(prepareAgentDesktopAction({
+    type: 'send_keys', keys: 'AQP 123', selector: 'ProbeEdit', verbatim: true
+  }), {
+    type: 'send_keys', keys: 'AQP 123', selector: 'ProbeEdit', verbatim: true,
+    transport: 'post-message', allowSystemKeys: false
+  });
+  for (const action of [
+    { type: 'send_keys', keys: 'abc', selector: 'ProbeEdit' },
+    { type: 'send_keys', keys: 'abc', verbatim: true },
+    { type: 'send_keys', keys: 'abc', selector: 'ProbeEdit', verbatim: true, transport: 'send-input' },
+    { type: 'send_keys', keys: 'abc', selector: 'ProbeEdit', verbatim: true, allowSystemKeys: true },
+    { type: 'send_keys', keys: 'a\nb', selector: 'ProbeEdit', verbatim: true },
+    { type: 'send_keys', keys: 'x'.repeat(129), selector: 'ProbeEdit', verbatim: true }
+  ] as const) {
+    assert.throws(() => prepareAgentDesktopAction(action), /requires_foreground_input/i);
+  }
+});
+
+test('isolated post-message refuses other apps and non-Edit controls', () => {
+  const winforms = windowFixture({ className: 'WindowsForms10.Window.8.app.0.test' });
+  const input: UiElementSummary = {
+    type: 'Edit', selector: 'ProbeEdit', className: 'WindowsForms10.EDIT.app.0.test',
+    isEnabled: true, isOffscreen: false, value: 'before'
+  };
+  assert.deepEqual(isolatedWinFormsTextTarget(winforms, [input], 'ProbeEdit'), input);
+  for (const item of [
+    {window:windowFixture(), elements:[input]},
+    {window:winforms, elements:[{...input, type:'Button'}]},
+    {window:winforms, elements:[{...input, isEnabled:false}]},
+    {window:winforms, elements:[{...input, isOffscreen:true}]},
+    {window:winforms, elements:[input,input]},
+    {window:winforms, elements:[{...input, className:'HwndWrapper[probe]'}]}
+  ]) {
+    assert.throws(() => isolatedWinFormsTextTarget(item.window, item.elements, 'ProbeEdit'), /requires_foreground_input/i);
+  }
 });
 
 test('Agent Desktop isolated desktop still rejects unverified global input paths', () => {

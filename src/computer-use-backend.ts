@@ -487,7 +487,8 @@ export class WinAppComputerBackend {
         if (action.selector) args.push('--target', action.selector);
         if (action.verbatim) args.push('--verbatim');
         if (action.allowSystemKeys) args.push('--allow-system-keys');
-        return this.runJson(args, 10_000, desktopObjectName);
+        // The isolated CLI starts on a dedicated desktop, incurring COM startup cost.
+        return this.runJson(args, desktopObjectName ? 25_000 : 10_000, desktopObjectName);
       }
       case 'drag': {
         const args = ['ui', 'drag', action.from, action.to, ...target];
