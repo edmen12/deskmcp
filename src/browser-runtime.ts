@@ -641,7 +641,10 @@ export class BrowserRuntime {
   // Explicit staged visible Desktop2 sessions instead reconcile the *actual*
   // native top-level HWNDs, including new Chrome popups, before/after input.
   // A revoked lease never becomes an unscoped Desktop1 browser.
-  private async refreshAgentDesktopPlacement(record: BrowserSessionRecord): Promise<void> {
+  private async refreshAgentDesktopPlacement(
+    record: BrowserSessionRecord,
+    reconcileWindows = true
+  ): Promise<void> {
     const leaseId = record.agentDesktopLeaseId;
     if (!leaseId) {
       // Existing unscoped sessions do not gain permission to touch Desktop 1
@@ -656,7 +659,7 @@ export class BrowserRuntime {
       throw new Error('Agent Desktop browser lease revoked: browser must close instead of escaping isolation.');
     }
     await this.agentDesktop.assertLease(leaseId);
-    if (record.visibleDesktop2) {
+    if (record.visibleDesktop2 && reconcileWindows) {
       const placed = await this.processController.place(
         record.processSessionId,
         leaseId,
@@ -1002,7 +1005,9 @@ export class BrowserRuntime {
   async find(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
     await this.reconcile();
     const record = this.session(sessionId);
-    await this.refreshAgentDesktopPlacement(record);
+    // A DOM read cannot inject host input. Validate the live lease, while
+    // leaving expensive popup/window relocation to mutation guards + reaper.
+    await this.refreshAgentDesktopPlacement(record, false);
     const found = await (await this.driver()).find(record.port, pageId, options);
 
     const browserObservationId = this.issueObservation(record.sessionId, found.page_id, found.state_token);
@@ -1017,7 +1022,9 @@ export class BrowserRuntime {
   async snapshot(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
     await this.reconcile();
     const record = this.session(sessionId);
-    await this.refreshAgentDesktopPlacement(record);
+    // Keep lease validation; reads do not need a redundant native process-tree
+    // move. Reaper and every mutating act still police popup placement.
+    await this.refreshAgentDesktopPlacement(record, false);
     const snapshot = await (await this.driver()).snapshot(record.port, pageId, options);
 
     let screenshot: ArtifactInfo | undefined;

@@ -6,6 +6,7 @@
  */
 import {createServer} from 'node:http';
 import {mkdir, mkdtemp, rm} from 'node:fs/promises';
+import {existsSync, readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,9 +25,16 @@ const temp=await mkdtemp(path.join(os.tmpdir(),'deskmcp-runtime-d2-e2e-'));
 const native=path.join(process.env.LOCALAPPDATA,'Programs','DesktopMCP','DeskMCP.AgentDesktopHost.exe');
 const desktop=()=>JSON.parse(execFileSync(native,['current-desktop'],{encoding:'utf8',timeout:9000,windowsHide:true}).trim());
 const monitor=()=>{const p=desktop();if(p.desktopNumber!==1)throw new Error('USER_ACTIVE_DESKTOP_NOT_1: '+JSON.stringify(p));return p;};
+// This is an event-count observation, not attribution: owner may manually
+// switch desktops at any time. Never read unrelated window titles/secrets.
+const foregroundLog=path.join(process.env.LOCALAPPDATA,'DesktopMCP','agent-desktop','foreground-invariant.log');
+const foregroundCount=()=>existsSync(foregroundLog)
+ ? readFileSync(foregroundLog,'utf8').split(/\r?\n/u).filter(Boolean).length : 0;
+const foregroundBaseline=foregroundCount();
 const pageHtml=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>DeskMCP candidate Desktop2 integration</title></head><body>
 <div id="source">AGENT_RUNTIME_中文</div>
-<input id="entry" aria-label="Test entry" />
+<input id="entry" aria-label="Test entry" oninput="document.querySelector('#echo').textContent='FIELD:'+this.value" />
+<div id="echo">FIELD:EMPTY</div>
 <button id="send" onclick="document.querySelector('#result').textContent='DONE:'+document.querySelector('#entry').value">Submit</button>
 <button id="popup" onclick="window.open('/popup','agent_popup','width=450,height=330')">Open Popup</button>
 <div id="result">PENDING</div>
@@ -37,10 +45,20 @@ let runtime;
 let bridge;
 let stopped=false;
 let initialized=false;
-const snap=async(sid,pid)=>runtime.snapshot(sid,pid,{screenshot:false});
+const timeStats=[];
+const measure=async(label,work)=>{
+ const began=Date.now();
+ try{return await work();}
+ finally{
+  const ms=Date.now()-began;
+  timeStats.push({label,ms});
+  console.log('TIMING='+JSON.stringify({label,ms}));
+ }
+};
+const snap=async(sid,pid)=>measure('snapshot',()=>runtime.snapshot(sid,pid,{screenshot:false}));
 const act=async(sid,pid,action)=>{
  const observation=await snap(sid,pid);
- return runtime.act(sid,pid,observation.browser_observation_id,[action],{screenshot:false});
+ return measure('act:'+action.type,()=>runtime.act(sid,pid,observation.browser_observation_id,[action],{screenshot:false}));
 };
 try{
   console.log('PRE_CURRENT='+JSON.stringify(monitor()));
@@ -60,24 +78,35 @@ try{
     const artifacts=new ArtifactStore(path.join(temp,'artifacts'));await artifacts.init();
     bridge=new DesktopBackendBridge();
     const processRegistry=new ProcessSessionRegistry();
+    const controller=new OwnedBrowserProcessController(bridge,processRegistry,agent);
+    const originalPlace=controller.place.bind(controller);
+    controller.place=async(...args)=>measure('native-place-tree',()=>originalPlace(...args));
     runtime=new BrowserRuntime(
       path.join(temp,'browser'),
-      new OwnedBrowserProcessController(bridge,processRegistry,agent),
+      controller,
       artifacts,undefined,chrome,agent,30000,true
     );
     await runtime.init();initialized=true;
     console.log('RUNTIME_START_HEADFUL_ATTEMPT=true');
-    const browser=await runtime.start({agent_desktop_lease_id:lease,headless:false,
-      url:'http://127.0.0.1:'+port+'/',timeout_ms:25000});
+    const browser=await measure('runtime-start',()=>runtime.start({agent_desktop_lease_id:lease,headless:false,
+      url:'http://127.0.0.1:'+port+'/',timeout_ms:25000}));
     console.log('RUNTIME_STARTED='+JSON.stringify({session:browser.session_id,headless:browser.headless,pages:browser.pages.length}));
     if(browser.headless)throw Error('SOURCE_RUNTIME_FELL_BACK_TO_HEADLESS');
     monitor();
     await act(browser.session_id,browser.page_id,{type:'virtual_copy',selector:'#source'});
     await act(browser.session_id,browser.page_id,{type:'virtual_paste',selector:'#entry'});
     const pasted=await snap(browser.session_id,browser.page_id);
-    if(!pasted.text.includes('AGENT_RUNTIME_中文'))throw Error('BROWSER_SNAPSHOT_CANNOT_READ_INSERTED_TEXT');
+    if(!pasted.text.includes('FIELD:AGENT_RUNTIME_中文'))throw Error('BROWSER_SNAPSHOT_CANNOT_VERIFY_TARGET_INPUT_VALUE: '+JSON.stringify(pasted.text.slice(0,300)));
     await act(browser.session_id,browser.page_id,{type:'click',selector:'#send'});
-    const clicked=await snap(browser.session_id,browser.page_id);
+    let clicked=await snap(browser.session_id,browser.page_id);
+    if(!clicked.text.includes('DONE:AGENT_RUNTIME_中文')){
+      console.log('CLICK_STATE_INITIAL='+JSON.stringify(clicked.text.slice(0,1300)));
+      for(let i=0;i<3&&!clicked.text.includes('DONE:AGENT_RUNTIME_中文');i++){
+        await new Promise(resolve=>setTimeout(resolve,180));
+        clicked=await snap(browser.session_id,browser.page_id);
+        console.log('CLICK_STATE_RECHECK_'+i+'='+JSON.stringify(clicked.text.slice(0,1300)));
+      }
+    }
     if(!clicked.text.includes('DONE:AGENT_RUNTIME_中文'))throw Error('RUNTIME_CLICK_OR_CLIPBOARD_FAILED');
     console.log('RUNTIME_CLIPBOARD_AND_BUTTON_PASS=true');
     monitor();
@@ -86,12 +115,12 @@ try{
     console.log('RUNTIME_POPUP_PAGE_COUNT='+popup.pages.length);
     if(popup.pages.length<2)throw Error('REAL_BROWSER_POPUP_NOT_CAPTURED');
     monitor();
-    const closed=await runtime.close(browser.session_id);
+    const closed=await measure('runtime-close',()=>runtime.close(browser.session_id));
     if(!closed.closed)throw Error('OWNED_BROWSER_NOT_CLOSED');
     console.log('RUNTIME_CLOSE_OWNED_BROWSER_PASS=true');
   } finally {
-    if(runtime)await runtime.closeAll().catch(e=>console.log('CLOSE_ALL_ERROR='+String(e.message)));
-    if(bridge)await bridge.close().catch(e=>console.log('BRIDGE_CLOSE_ERROR='+String(e.message)));
+    if(runtime)await measure('runtime-closeAll',()=>runtime.closeAll()).catch(e=>console.log('CLOSE_ALL_ERROR='+String(e.message)));
+    if(bridge)await measure('bridge-close',()=>bridge.close()).catch(e=>console.log('BRIDGE_CLOSE_ERROR='+String(e.message)));
     if(http.listening)await new Promise(resolve=>http.close(resolve));
   }
   console.log('INTEGRATED_RUNTIME_DESKTOP2_PASS=true');
@@ -109,4 +138,9 @@ try{
  await rm(temp,{recursive:true,force:true,maxRetries:5,retryDelay:100}).catch(()=>{});
  console.log('OWNED_LEASE_STOPPED='+stopped);
  console.log('POST_CURRENT='+JSON.stringify(desktop()));
+ const foregroundDelta=foregroundCount()-foregroundBaseline;
+ console.log('FOREGROUND_EVENT_LOG_DELTA='+foregroundDelta);
+ if(foregroundDelta!==0){
+   console.log('FOREGROUND_EVENT_ATTRIBUTION_REQUIRED=true (possible manual Desktop2 visit vs unapproved Agent focus; not resolved by start/end samples)');
+ }
 }

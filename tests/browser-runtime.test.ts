@@ -1088,8 +1088,12 @@ test('opt-in visible Chrome is moved to owned Desktop2 before CDP input, and pop
   assert.ok(controller.placements.every(p=>p.requirePrivateWindow));
   assert.equal(cdp.actions[0]?.[0]?.type,'goto');
   const observed=await browser.snapshot(started.session_id,started.page_id,{screenshot:false});
+  assert.equal(controller.placements.length,2,'read-only snapshot validates lease but avoids moving already placed Chrome');
   await browser.act(started.session_id,started.page_id,observed.browser_observation_id,[{type:'click',selector:'#link'}],{screenshot:false});
-  assert.ok(controller.placements.length>=5,'reconcile before/after autonomous page input and snapshot');
+  assert.equal(controller.placements.length,4,'mutating action checks owned Desktop2 windows before and after UI input');
+  const reread=await browser.find(started.session_id,started.page_id,{query:'Submit'});
+  assert.ok(reread);
+  assert.equal(controller.placements.length,4,'read-only find does not repeat native process-tree relocation');
   assert.ok(controller.placements.every(p=>p.leaseId===lease && p.requirePrivateWindow));
   await browser.closeAll();
   assert.deepEqual(controller.terminated,['process-1']);

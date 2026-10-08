@@ -43,7 +43,9 @@ test('Agent browser blocks OS clipboard shortcuts but allows ordinary shortcuts'
 test('clipboard implementation has no OS clipboard access or native input commands',async()=>{
   const text=await readFile(path.join(process.cwd(),'src','desktop2-clipboard.ts'),'utf8');
   const play=await readFile(path.join(process.cwd(),'src','browser-playwright.ts'),'utf8');
-  assert.ok(play.includes('keyboard.insertText(text)'));
+  assert.ok(play.includes('locator.fill(expected'));
+  assert.ok(play.includes('locator.inputValue('));
+  assert.ok(play.includes('Agent paste did not reach the target input'));
   assert.ok(play.includes('copyElementText'));
   for(const forbidden of ['OpenClipboard(', 'SetClipboardData(', 'GetClipboardData(', 'Clipboard.SetText(', 'navigator.clipboard.', 'SendInput('])
     assert.equal(text.includes(forbidden),false,forbidden);

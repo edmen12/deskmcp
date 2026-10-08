@@ -752,22 +752,66 @@ export class PlaywrightBrowserDriver implements BrowserCdpDriver {
     }, { timeout: 5000 });
   }
 
-  /** Inserts text through Chromium CDP Input.insertText; never calls Ctrl+V or navigator.clipboard. */
+  /**
+   * Agent-managed paste: target-specific Playwright fill with verified readback
+   * for input/textarea; never sends host Ctrl+V or Windows clipboard data.
+   * CDP page.keyboard.insertText can silently miss an *inactive* Desktop2
+   * Chrome input despite resolving successfully; do not treat it as delivery.
+   */
   async pasteElementText(port: number, pageId: string | undefined, text = '', selector?: string, ref?: string): Promise<void> {
     if (text.length > 4096) throw new Error('Agent clipboard exceeds permitted paste size.');
     const state = await this.state(port);
     const selected = this.page(state, pageId);
     const locator = this.locator(selected.page, selector, ref);
-    const editable = await locator.evaluate(element => {
+    const target = await locator.evaluate(element => {
       if (element instanceof HTMLInputElement) {
-        return !element.disabled && !element.readOnly && element.type !== 'password' && element.type !== 'file';
+        if (element.disabled || element.readOnly || !['text', 'search', 'tel', 'url', 'email'].includes(element.type.toLowerCase())) {
+          return { kind: 'deny' as const };
+        }
+        return { kind: 'field' as const, value: element.value,
+          start: element.selectionStart ?? element.value.length,
+          end: element.selectionEnd ?? element.value.length };
       }
-      if (element instanceof HTMLTextAreaElement) return !element.disabled && !element.readOnly;
-      return element instanceof HTMLElement && element.isContentEditable;
-    });
-    if (!editable) throw new Error('Virtual clipboard paste requires an editable non-password target.');
+      if (element instanceof HTMLTextAreaElement) {
+        if (element.disabled || element.readOnly) return { kind: 'deny' as const };
+        return { kind: 'field' as const, value: element.value,
+          start: element.selectionStart ?? element.value.length,
+          end: element.selectionEnd ?? element.value.length };
+      }
+      if (element instanceof HTMLElement && element.isContentEditable) {
+        return { kind: 'contenteditable' as const, value: element.textContent ?? '' };
+      }
+      return { kind: 'deny' as const };
+    }, { timeout: 5000 });
+    if (target.kind === 'deny') {
+      throw new Error('Virtual clipboard paste requires an editable non-password text field.');
+    }
+    if (target.kind === 'field') {
+      const start = Math.max(0, Math.min(target.start, target.value.length));
+      const end = Math.max(start, Math.min(target.end, target.value.length));
+      const expected = target.value.slice(0, start) + text + target.value.slice(end);
+      // Playwright fill targets this locator directly and dispatches input
+      // events; it has proven reliable on an inactive Windows virtual Desktop2.
+      await locator.fill(expected, { timeout: 5000 });
+      const readback = await locator.inputValue({ timeout: 5000 });
+      if (readback !== expected) {
+        throw new Error('Agent paste did not reach the target input; refusing to claim success.');
+      }
+      await locator.evaluate((element, cursor) => {
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+          element.setSelectionRange(cursor, cursor);
+        }
+      }, start + text.length);
+      return;
+    }
+    // Rich editors have separate selection/event semantics. Do not fake success
+    // if a background CDP text insertion fails to modify the editable element.
     await locator.focus();
-    await selected.page.keyboard.insertText(text);
+    await locator.pressSequentially(text, { timeout: 5000 });
+    const after = await locator.evaluate(element => element.textContent ?? '');
+    if (text.length > 0 && after === target.value) {
+      throw new Error('Agent paste into contenteditable had no observable effect.');
+    }
   }
 
   async act(port: number, pageId: string | undefined, actions: readonly BrowserAction[], timeoutMs = 15_000): Promise<string> {
