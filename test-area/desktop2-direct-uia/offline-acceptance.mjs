@@ -44,7 +44,33 @@ const noInvoke=run(sdk,[dll,'--request',denyInvoke,'--vda',vda],12000);
 assert.equal(noInvoke.status,3,'Unverified invoke must deny with code 3');
 assert.match(noInvoke.stderr,/INVOKE_DISABLED_UNTIL_DESKTOP2_POPUP_ACTIVATION_ACCEPTANCE/);
 console.log('DIRECT_UIA_UNVERIFIED_INVOKE_DENIED_PASS');
+const denyArm=path.join(dir,'deny-arm-missing-observer.json');
+const noArmObserver=run(sdk,[dll,'--arm-target',denyArm,'--vda',vda],12000);
+assert.equal(noArmObserver.status,3,'Arm without observer must fail');
+assert.match(noArmObserver.stderr,/PASSIVE_OBSERVER_NOT_READY/);
+const noArmWithWriteRequest=run(sdk,[dll,'--arm-target',denyMissing,'--vda',vda],12000);
+assert.equal(noArmWithWriteRequest.status,3,'Arm must reject a mutating request');
+assert.match(noArmWithWriteRequest.stderr,/ARM_TARGET_REQUIRES_READONLY_IDENTITY_REQUEST/);
+console.log('DIRECT_UIA_ARM_NEGATIVE_TESTS_PASS');
 const suite=run(process.execPath,['--test',path.join(dir,'contract.test.mjs')],12000);
 assert.equal(suite.status,0,'Static guard suite failed: '+(suite.stdout||'')+' '+(suite.stderr||''));
-console.log('DIRECT_UIA_STATIC_GUARDS_6_OF_6_PASS');
+console.log('DIRECT_UIA_STATIC_GUARDS_9_OF_9_PASS');
+const observerProject=path.join(worktree,'test-area','desktop2-switch-observer','DeskMCP.Desktop2SwitchObserver.csproj');
+const observerDll=path.join(worktree,'test-area','desktop2-switch-observer','bin','Release',
+  'net10.0-windows','DeskMCP.Desktop2SwitchObserver.dll');
+const observerBuild=run(sdk,['build',observerProject,'-c','Release','--nologo','-v:q']);
+assert.equal(observerBuild.status,0,'Observer build failed: '+observerBuild.stdout+' '+observerBuild.stderr);
+const selfTestFile=path.join(dir,'policy-foreground-'+process.pid+'-'+Date.now()+'.json');
+try{
+  const targetPolicy=run(sdk,[observerDll,'--self-test-foreground',selfTestFile],10000);
+  assert.equal(targetPolicy.status,0,'Target foreground policy self-test failed');
+  const outcome=JSON.parse(fs.readFileSync(selfTestFile,'utf8'));
+  assert.deepEqual([
+    outcome.pass,outcome.target,outcome.otherPid,outcome.otherHwnd,
+    outcome.ownerIsDesktop2,outcome.targetNotDesktop2,outcome.stillBlockedAfterReturn
+  ],[true,true,false,false,false,false,true]);
+  console.log('DESKTOP2_EARLY_FOREGROUND_POLICY_PASS');
+}finally{
+  if(fs.existsSync(selfTestFile))fs.unlinkSync(selfTestFile);
+}
 console.log('DIRECT_UIA_OFFLINE_ACCEPTANCE_PASS');

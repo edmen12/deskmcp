@@ -69,3 +69,42 @@ test('legacy WPF+WinApp GUI matrix is quarantined before any GUI process launch'
   assert.ok(block>0 && launch>block);
   assert.match(old.slice(0,launch),/exit 4/);
 });
+
+test('mutating Desktop2 UIA is guarded by verified WS_EX_NOACTIVATE before UIA tree access',()=>{
+  assert.match(source,/GetWindowLongPtrW\(hwnd, GwlExstyle\)/);
+  assert.match(source,/HasNoActivateStyle\(extendedStyle\)/);
+  assert.match(source,/DESKTOP2_TARGET_NOT_PROTECTED_WS_EX_NOACTIVATE/);
+  assert.match(source,/ctx\.VerifyNonActivatingTarget\(hwnd\)/);
+  assert.match(source,/element\.Current\.ProcessId != request\.ProcessId/);
+  const perform=source.slice(source.indexOf('private static object Perform('));
+  const provider=perform.indexOf('FindExactElement(hwnd, request.AutomationId)');
+  const preflight=perform.indexOf('Guard();');
+  assert.ok(preflight>=0 && provider>preflight);
+  // Do NOT change arbitrary third-party window styles.
+  assert.doesNotMatch(source,/\bSetWindowLongPtrW?\s*\(/);
+  assert.doesNotMatch(source,/\bSetWindowLongW?\s*\(/);
+});
+
+test('mutating UIA requires observer early-foreground watch for matching HWND/PID',()=>{
+  assert.match(source,/EARLY_FOREGROUND_WATCH_NOT_ARMED/);
+  assert.match(source,/EARLY_FOREGROUND_WATCH_TARGET_MISMATCH/);
+  assert.match(source,/watched\.Hwnd != hwnd \|\| watched\.ProcessId != processId/);
+  assert.match(source,/ObserverGuard\.AssertWatchedTarget\(request\.ObserverReady,/);
+  assert.match(source,/request\.Hwnd, request\.ProcessId\)/);
+});
+
+test('two-phase arm performs native identity/style/observer verification before atomic manifest publication',()=>{
+  assert.match(source,/--arm-target/);
+  assert.match(source,/ARM_TARGET_REQUIRES_READONLY_IDENTITY_REQUEST/);
+  const arm=source.match(/private static object ArmTarget\(Request request, Native.Context ctx\)([\s\S]*?)\n    private static object Perform/)?.[1];
+  assert.ok(arm);
+  const owner=arm.indexOf('ctx.VerifyTarget(hwnd, request.ProcessId, targetId)');
+  const style=arm.indexOf('ctx.VerifyNonActivatingTarget(hwnd)');
+  const slot=arm.indexOf('ObserverGuard.GetUnarmedTargetSlot(request.ObserverReady)');
+  const publish=arm.indexOf('File.Move(temporary, slot, overwrite: false)');
+  const verify=arm.indexOf('ObserverGuard.AssertWatchedTarget(request.ObserverReady');
+  assert.ok(owner>=0 && style>owner && slot>style && publish>slot && verify>publish);
+  assert.match(source,/EARLY_FOREGROUND_WATCH_SLOT_INVALID_OR_USED/);
+  assert.match(arm,/if \(File.Exists\(temporary\)\) File.Delete\(temporary\)/);
+  assert.doesNotMatch(arm,/SetForegroundWindow|SetWindowLong|SendInput|MoveWindowToDesktop/);
+});

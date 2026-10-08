@@ -98,6 +98,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     private readonly StreamWriter log;
     private readonly string readyFile;
     private readonly string tripwireFile;
+    private readonly string? watchedTargetFile;
     private readonly SwitchPolicy policy;
     private readonly int desktopCount;
     private readonly WinEventProc foregroundCallback;
@@ -116,6 +117,21 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    private sealed class WatchedTarget
+    {
+        public long Hwnd { get; set; }
+        public int ProcessId { get; set; }
+        public int DesktopIndex { get; set; }
+    }
+    internal static bool IsWatchedForeground(long rootHwnd, uint actualPid, int current,
+        long watchedHwnd, int watchedPid, int watchedDesktopIndex) =>
+        current == 0 && watchedDesktopIndex >= 1
+        && rootHwnd > 0 && watchedHwnd == rootHwnd
+        && watchedPid > 0 && actualPid == (uint)watchedPid;
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc callback, uint processId, uint threadId, uint flags);
     [DllImport("user32.dll")]
@@ -133,12 +149,17 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             throw new InvalidOperationException("Synthetic self-notification could not be queued.");
     }
 
-    public DesktopEventListener(string dll, string eventsFile, string ready, string tripwire, int seconds)
+    public DesktopEventListener(string dll, string eventsFile, string ready, string tripwire, int seconds,
+        string? watchFile = null)
     {
         if (seconds is < 5 or > 900) throw new ArgumentOutOfRangeException(nameof(seconds));
+        if (watchFile != null && (!Path.IsPathFullyQualified(watchFile)
+            || File.Exists(watchFile)))
+            throw new InvalidOperationException("Target watch file must be an absolute, not-yet-existing path.");
         durationMs = checked(seconds * 1000);
         readyFile = ready;
         tripwireFile = tripwire;
+        watchedTargetFile = watchFile;
         if (File.Exists(readyFile) || File.Exists(tripwireFile))
             throw new InvalidOperationException("Stale ready/tripwire files must be reviewed and cleared before creating a fresh observer.");
         vda = new NativeVirtualDesktopApi(dll);
@@ -174,6 +195,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                 firstStartUtc = DateTime.UtcNow,
                 eventLog = eventsFile,
                 tripwireFile,
+                watchedTargetFile,
                 hasVirtualDesktopNotifications = true,
                 hasForegroundHook = true
             }));
@@ -202,14 +224,15 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
         }));
     }
 
-    private void Observe(int desktopIndex, string kind, string? detail = null)
+    private void Observe(int desktopIndex, string kind, string? detail = null, bool forceAbort = false)
     {
         bool alreadyAborted = policy.Aborted;
-        policy.Observe(desktopIndex, kind);
+        // Foreground theft can precede a virtual Desktop2 switch. A forced
+        // tripwire preserves the *actual* desktopIndex=0 in the event log.
+        policy.Observe(forceAbort ? -1 : desktopIndex, kind);
         IntPtr front = GetForegroundWindow();
         GetWindowThreadProcessId(front, out uint pid);
         Log(kind, desktopIndex, front.ToInt64(), pid, detail);
-        // A user's own switch also pauses test actions: it is not accused of being agent-caused.
         if (!alreadyAborted && policy.Aborted)
             File.WriteAllText(tripwireFile, JsonSerializer.Serialize(new
             {
@@ -220,6 +243,30 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                 outcome = "PAUSE_ALL_AGENT_INPUT_NO_AUTO_RETURN",
                 attribution = "UNKNOWN_UNTIL_OWNER_CORRELATION"
             }));
+    }
+
+    private void CheckWatchedForeground(IntPtr hwnd, uint pid, int currentIndex)
+    {
+        if (watchedTargetFile == null || policy.Aborted || !File.Exists(watchedTargetFile))
+            return;
+        // The controller must create its manifest ATOMICALLY *after*
+        // independently verifying ownership and real virtual Desktop2.
+        // A malformed or partially written manifest causes fail-close.
+        WatchedTarget? watched = JsonSerializer.Deserialize<WatchedTarget>(
+            File.ReadAllText(watchedTargetFile),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (watched == null || watched.Hwnd <= 0 || watched.ProcessId <= 0
+            || watched.DesktopIndex < 1 || watched.DesktopIndex >= desktopCount)
+            throw new InvalidOperationException("INVALID_WATCHED_DESKTOP2_TARGET");
+        IntPtr foregroundRoot = hwnd == IntPtr.Zero ? IntPtr.Zero : GetAncestor(hwnd, 2);
+        if (IsWatchedForeground(foregroundRoot.ToInt64(), pid, currentIndex,
+            watched.Hwnd, watched.ProcessId, watched.DesktopIndex))
+        {
+            // This is an EARLY focus-steal signal, not an assertion that
+            // Windows already switched virtual desktops. Never auto-return.
+            Observe(currentIndex, "TARGET_FOREGROUND_EARLY_ABORT",
+                "watched_desktop_index=" + watched.DesktopIndex, forceAbort: true);
+        }
     }
 
     protected override void WndProc(ref Message m)
@@ -260,20 +307,20 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             uint pid;
             GetWindowThreadProcessId(hwnd, out pid);
             int current = vda.CurrentIndex();
-            bool already = policy.Aborted;
-            policy.Observe(current, "FOREGROUND_CURRENT_DESKTOP");
+            // Preserve the precise, pre-switch foreground event before
+            // emitting the early-stop tripwire for the watched Desktop2 PID.
             Log("FOREGROUND_CHANGED", current, hwnd.ToInt64(), pid);
-            if (!already && policy.Aborted)
-                File.WriteAllText(tripwireFile, JsonSerializer.Serialize(new
-                {
-                    utc = DateTime.UtcNow.ToString("O"),
-                    outcome = "PAUSE_ALL_AGENT_INPUT_NO_AUTO_RETURN",
-                    expectedDesktopIndex = policy.ExpectedDesktopIndex,
-                    observedDesktopIndex = current,
-                    attribution = "UNKNOWN_UNTIL_OWNER_CORRELATION"
-                }));
+            if (current != policy.ExpectedDesktopIndex)
+                Observe(current, "FOREGROUND_CURRENT_DESKTOP");
+            else
+                CheckWatchedForeground(hwnd, pid, current);
         }
-        catch (Exception ex) { Log("OBSERVER_ERROR", -1, 0, 0, ex.GetType().Name); }
+        catch (Exception ex)
+        {
+            // Missing hooks, invalid manifests and other monitor faults
+            // cannot authorize one more UIA input operation.
+            Observe(-1, "FOREGROUND_MONITOR_FAILED", ex.GetType().Name);
+        }
     }
 
     private void Heartbeat()
@@ -285,6 +332,14 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             {
                 heartbeatChanges++;
                 Observe(current, "POLL_DESKTOP_CHANGE");
+            }
+            if (!policy.Aborted && current == policy.ExpectedDesktopIndex)
+            {
+                // Foreground hook is primary. This is a 25ms fallback when
+                // a callback is late or missed during a focus transition.
+                IntPtr front = GetForegroundWindow();
+                GetWindowThreadProcessId(front, out uint frontPid);
+                CheckWatchedForeground(front, frontPid, current);
             }
             if (clock.ElapsedMilliseconds >= durationMs)
             {
@@ -331,18 +386,42 @@ internal static class Program
                 stillBlockedAfterReturn, invalidFailsClosed}));
             return pass ? 0 : 2;
         }
-        // Idle-only passive smoke test: bounded runtime without any desktop
-        // switch, window placement, GUI creation, automation or injected input.
+        // Pure policy test: NO desktop/window calls, foreground hooks, GUI
+        // processes, input or listener registration.
+        if (args.Length == 2 && args[0] == "--self-test-foreground")
+        {
+            bool target = DesktopEventListener.IsWatchedForeground(100, 42, 0, 100, 42, 1);
+            bool otherPid = DesktopEventListener.IsWatchedForeground(100, 43, 0, 100, 42, 1);
+            bool otherHwnd = DesktopEventListener.IsWatchedForeground(101, 42, 0, 100, 42, 1);
+            bool ownerIsDesktop2 = DesktopEventListener.IsWatchedForeground(100, 42, 1, 100, 42, 1);
+            bool targetNotDesktop2 = DesktopEventListener.IsWatchedForeground(100, 42, 0, 100, 42, 0);
+            SwitchPolicy p = new(0);
+            p.Observe(target ? -1 : 0, "TARGET_FOREGROUND_EARLY_ABORT");
+            bool stillBlockedAfterReturn = !p.Observe(0, "SAFE_AGAIN");
+            bool pass = target && !otherPid && !otherHwnd && !ownerIsDesktop2
+                && !targetNotDesktop2 && p.Aborted && stillBlockedAfterReturn;
+            File.WriteAllText(args[1], JsonSerializer.Serialize(new
+            {
+                pass, target, otherPid, otherHwnd, ownerIsDesktop2,
+                targetNotDesktop2, stillBlockedAfterReturn
+            }));
+            return pass ? 0 : 2;
+        }
+        // The optional TARGET mode watches an atomically published file
+        // containing verified Desktop2 root HWND + PID; early focus theft
+        // latches before the virtual-desktop transition where observable.
+        bool targetMode = args.Length == 6 && args[0] == "--observe-target";
         bool idle = args.Length == 6 && args[0] == "--observe-idle";
         bool synthetic = args.Length == 6 && args[0] == "--self-test-notification";
-        if (!idle && !synthetic && (args.Length != 5 || args[0] != "--observe"))
+        if (!targetMode && !idle && !synthetic && (args.Length != 5 || args[0] != "--observe"))
             return 2;
         int seconds = 90;
         if ((idle || synthetic) && (!int.TryParse(args[5], out seconds) || seconds is < 5 or > 15))
             return 2;
         try
         {
-            using DesktopEventListener observer = new(args[1], args[2], args[3], args[4], seconds);
+            using DesktopEventListener observer = new(args[1], args[2], args[3], args[4],
+                seconds, targetMode ? args[5] : null);
             if (synthetic)
                 observer.PostSyntheticNotificationForSelfTest();
             Application.Run();

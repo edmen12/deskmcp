@@ -57,3 +57,25 @@ test('WPF root and owned popup opt out of activation before DWM uncloak',()=>{
  assert.ok(fixture.indexOf('Native.MakeNonActivating(rootHwnd)') < fixture.indexOf('DwmSetWindowAttribute(rootHwnd'));
  assert.ok(fixture.lastIndexOf('Native.MakeNonActivating(hwnd)') < fixture.indexOf('DwmSetWindowAttribute(hwnd'));
 });
+
+test('target-PID foreground theft causes early latched abort while Desktop1 is still current',()=>{
+  assert.match(observer,/TARGET_FOREGROUND_EARLY_ABORT/);
+  assert.match(observer,/GetAncestor\(hwnd, 2\)/);
+  assert.match(observer,/watched\.Hwnd, watched\.ProcessId, watched\.DesktopIndex/);
+  assert.match(observer,/current == 0 && watchedDesktopIndex >= 1/);
+  assert.match(observer,/forceAbort: true/);
+  assert.match(observer,/policy\.Observe\(forceAbort \? -1 : desktopIndex, kind\)/);
+  assert.match(observer,/CheckWatchedForeground\(hwnd, pid, current\)/);
+  assert.match(observer,/CheckWatchedForeground\(front, frontPid, current\)/);
+  assert.match(observer,/FOREGROUND_MONITOR_FAILED/);
+});
+
+test('observer target watch is opt-in, own-file-only and cannot switch owner desktop',()=>{
+  assert.match(observer,/--observe-target/);
+  assert.match(observer,/watchedTargetFile = watchFile/);
+  assert.match(observer,/Path\.IsPathFullyQualified\(watchFile\)/);
+  assert.match(observer,/--self-test-foreground/);
+  assert.doesNotMatch(observer,/\bSetForegroundWindow\s*\(/);
+  assert.doesNotMatch(observer,/\bGoToDesktopNumber\s*\(/);
+  assert.doesNotMatch(observer,/\bSendInput\s*\(/);
+});

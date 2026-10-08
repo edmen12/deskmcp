@@ -14,7 +14,18 @@
 
 对每次操作校验：真实桌面 GUID，精确 HWND、进程 PID、一致的最顶层 Root，Windows 虚拟 Desktop2 所属，当前 Desktop1，拒绝 pinned/shared 窗口；已就绪、PID 与启动时间一致、仍存活的被动事件观察器以及未触发的 tripwire。控件不唯一或模式不支持，失败关闭。动作前后都复查。**绝不借用 WinApp CLI 控制桌面**，不调用 SetForegroundWindow / SendInput / SetCursorPos / SwitchDesktop / 剪贴板操作。
 
-仍须完成的工作：将观察器真实 Windows Desktop1↔2 通知交付和时序验证通过、将窗口 ownership 与 DeskMCP 的真实 Agent lease 对齐、进行隔离测试以确保第一次输入不会导致切屏。**已有 tripwire 只能阻止后续操作，不能防止第一次切屏。**
+### 2026-10-09 事故复现后的防激活修复（候选）
+
+用户批准的受监控 A/B GUI 测试发现：原版 WPF 没有 `WS_EX_NOACTIVATE` 时，直接运行 `winapp ui set-value`，**目标 WPF HWND/PID 先成为 Desktop1 系统前台，约 118ms 后 Windows 真实切到 Desktop2**。VirtualDesktopAccessor 已捕获真正的切屏通知 `old=0,new=1,current=1`。新版 WPF 具有 `WS_EX_NOACTIVATE` 后，整轮相同操作没有观察到前台激活或切屏。完整证据：`test-area/desktop2-incident-trace/findings-20261009.md`。
+
+本轮实现两阶段候选防护：
+1. **启动被动监听**：使用编译出的 `DeskMCP.Desktop2SwitchObserver.exe --observe-target <VDA DLL> <events> <ready> <tripwire> <absolute watch-file>`，必须在 Desktop1 且 watch-file 尚不存在。注意使用 `.exe` AppHost（以便按进程名称核对监控身份），不能把此流程随意换成 `dotnet observer.dll`。
+2. **监控目标自动登记**：`DeskMCP.Desktop2DirectUia.dll --arm-target <absolute inspect-only request JSON> --vda <VDA DLL>`。核实监控身份与运行状态、Desktop1 当前桌面、目标根窗口 HWND/PID/真实 Desktop2 GUID、非 pinned 目标、现成的 `WS_EX_NOACTIVATE`。再将已验证的 `{hwnd, processId, desktopIndex:1}` 原子写入监控目标文件。**不自动给第三方软件改 WS_EX_NOACTIVATE**。
+3. **受限修改**：`--request` 的 ValuePattern/ScrollPattern 操作在进入 UIA provider **之前**复核全部上述条件及登记 HWND/PID，动作后再次检查；监控监听目标窗口意外成为前台时立即锁存 `TARGET_FOREGROUND_EARLY_ABORT`，25ms 辅助轮询，并继续捕捉 Windows 真实切屏。不会触发系统级键盘、鼠标、剪贴板或自动切回。
+
+**限制：前台激活→桌面切换的 118ms 仅为一次观察，不是恒定时间窗口。** 提前中止也不保证能抢在 Windows 桌面切换之前阻断已排队的 OS 激活。该候选仅允许有明确非激活设计的窗口；其他软件、WinUI/Electron、多窗口弹窗未验收。监控和适配层还没有验证 Agent Desktop lease ownership，**没有接入正式 Computer Use MCP**，发布状态继续 RED。
+
+仍须完成的工作：把每次目标窗口和操作绑定真实 Agent lease，实机验收未破坏的新版防护链及 WinForms/WinUI/Electron 各自控件事件语义。请勿重新启用已封锁的原版诊断入口。
 
 注意：直接操作应用的 UIA provider 也可能产生窗口或焦点副作用。因此，本适配层目前**不会连接到 MCP 工具路由或生产 Gateway**，不声称零干扰已经通过。
 

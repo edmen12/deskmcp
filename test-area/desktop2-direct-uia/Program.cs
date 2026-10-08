@@ -66,8 +66,18 @@ internal static class Native
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    private static extern IntPtr GetWindowLongPtrW(IntPtr hwnd, int index);
 
     private const uint GaRoot = 2;
+    private const int GwlExstyle = -20;
+    private const long WsExNoactivate = 0x08000000L;
+
+    // The original WPF A/B test showed an active-window steal BEFORE
+    // the real virtual desktop transition. Guard the risky provider call,
+    // not merely the after-the-fact virtual desktop index.
+    internal static bool HasNoActivateStyle(long extendedStyle)
+        => (extendedStyle & WsExNoactivate) == WsExNoactivate;
     internal sealed class Context : IDisposable
     {
         private readonly IntPtr dll;
@@ -112,6 +122,19 @@ internal static class Native
             SemanticPolicy.DemandOwnerDesktop(Current());
         }
 
+        // Never retrofit WS_EX_NOACTIVATE onto an unknown third-party window:
+        // modifying its styles can break its interaction model. Only opt-in
+        // app-owned windows that already carry this style may receive mutating
+        // UIA operations in real Windows virtual Desktop2.
+        public void VerifyNonActivatingTarget(IntPtr hwnd)
+        {
+            if (!IsWindow(hwnd))
+                throw new InvalidOperationException("NOACTIVATE_TARGET_NOT_LIVE");
+            long extendedStyle = GetWindowLongPtrW(hwnd, GwlExstyle).ToInt64();
+            if (!HasNoActivateStyle(extendedStyle))
+                throw new InvalidOperationException("DESKTOP2_TARGET_NOT_PROTECTED_WS_EX_NOACTIVATE");
+        }
+
         public void Dispose()
         {
             if (Marshal.IsComObject(desktopManager)) Marshal.FinalReleaseComObject(desktopManager);
@@ -128,8 +151,15 @@ internal static class ObserverGuard
         public int ExpectedDesktopIndex { get; set; }
         public DateTime FirstStartUtc { get; set; }
         public string? TripwireFile { get; set; }
+        public string? WatchedTargetFile { get; set; }
         public bool HasVirtualDesktopNotifications { get; set; }
         public bool HasForegroundHook { get; set; }
+    }
+    private sealed class WatchedTarget
+    {
+        public long Hwnd { get; set; }
+        public int ProcessId { get; set; }
+        public int DesktopIndex { get; set; }
     }
 
     internal static string AssertLive(string readyFile)
@@ -154,6 +184,39 @@ internal static class ObserverGuard
         // This is a liveness gate, NOT evidence that the hook catches every switch.
         if (File.Exists(ready.TripwireFile)) throw new InvalidOperationException("DESKTOP_SWITCH_TRIPWIRE_LATCHED");
         return ready.TripwireFile;
+    }
+
+    internal static string GetUnarmedTargetSlot(string readyFile)
+    {
+        AssertLive(readyFile);
+        Ready ready = JsonSerializer.Deserialize<Ready>(File.ReadAllText(readyFile),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidOperationException("PASSIVE_OBSERVER_INVALID_READY");
+        string? targetFile = ready.WatchedTargetFile;
+        if (String.IsNullOrWhiteSpace(targetFile)
+            || !Path.IsPathFullyQualified(targetFile) || File.Exists(targetFile)
+            || !Directory.Exists(Path.GetDirectoryName(targetFile)))
+            throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_SLOT_INVALID_OR_USED");
+        return targetFile;
+    }
+
+    internal static void AssertWatchedTarget(string readyFile, long hwnd, int processId)
+    {
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        Ready ready = JsonSerializer.Deserialize<Ready>(File.ReadAllText(readyFile), options)
+            ?? throw new InvalidOperationException("PASSIVE_OBSERVER_INVALID_READY");
+        string? watchedFile = ready.WatchedTargetFile;
+        if (String.IsNullOrWhiteSpace(watchedFile)
+            || !Path.IsPathFullyQualified(watchedFile) || !File.Exists(watchedFile))
+            throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_NOT_ARMED");
+        WatchedTarget watched = JsonSerializer.Deserialize<WatchedTarget>(
+            File.ReadAllText(watchedFile), options)
+            ?? throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_INVALID");
+        if (watched.Hwnd != hwnd || watched.ProcessId != processId
+            || watched.DesktopIndex < 1)
+            throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_TARGET_MISMATCH");
+        if (ready.TripwireFile == null || File.Exists(ready.TripwireFile))
+            throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_TRIPWIRE_LATCHED");
     }
 }
 
@@ -203,6 +266,45 @@ internal static class DirectUia
         return element;
     }
 
+    // Explicit two-phase arm. The hidden observer runs FIRST and publishes
+    // its own ready file. Only after verifying root HWND/PID/Desktop2 AND
+    // non-activating style may this process atomically publish that target's
+    // identity for early foreground-theft detection.
+    private static object ArmTarget(Request request, Native.Context ctx)
+    {
+        if (request.Action != "inspect")
+            throw new InvalidOperationException("ARM_TARGET_REQUIRES_READONLY_IDENTITY_REQUEST");
+        IntPtr hwnd = new(request.Hwnd);
+        Guid targetId = Guid.ParseExact(request.DesktopId, "D");
+        ObserverGuard.AssertLive(request.ObserverReady);
+        ctx.VerifyTarget(hwnd, request.ProcessId, targetId);
+        ctx.VerifyNonActivatingTarget(hwnd);
+        string slot = ObserverGuard.GetUnarmedTargetSlot(request.ObserverReady);
+        string temporary = slot + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new
+            {
+                hwnd = request.Hwnd,
+                processId = request.ProcessId,
+                desktopIndex = 1
+            }));
+            // Atomic same-directory rename: observer never sees partial JSON.
+            File.Move(temporary, slot, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+        ObserverGuard.AssertWatchedTarget(request.ObserverReady, request.Hwnd, request.ProcessId);
+        ObserverGuard.AssertLive(request.ObserverReady);
+        ctx.VerifyTarget(hwnd, request.ProcessId, targetId);
+        ctx.VerifyNonActivatingTarget(hwnd);
+        return new { armed = true, hwnd = request.Hwnd, processId = request.ProcessId,
+            desktopIndex = 1, activationGuard = "WS_EX_NOACTIVATE",
+            foregroundTripwire = true, appEventConfirmed = false };
+    }
+
     private static object Perform(Request request, Native.Context ctx)
     {
         IntPtr hwnd = new(request.Hwnd);
@@ -211,10 +313,21 @@ internal static class DirectUia
         {
             ObserverGuard.AssertLive(request.ObserverReady);
             ctx.VerifyTarget(hwnd, request.ProcessId, targetId);
+            // Refuse the known failure case BEFORE querying the UIA provider:
+            // the original, unprotected WPF window stole Desktop1 foreground
+            // during ValuePattern.SetValue in the recorded A/B test.
+            if (request.Action != "inspect")
+            {
+                ctx.VerifyNonActivatingTarget(hwnd);
+                ObserverGuard.AssertWatchedTarget(request.ObserverReady,
+                    request.Hwnd, request.ProcessId);
+            }
             ObserverGuard.AssertLive(request.ObserverReady);
         }
         Guard();
         AutomationElement element = FindExactElement(hwnd, request.AutomationId);
+        if (element.Current.ProcessId != request.ProcessId)
+            throw new InvalidOperationException("UIA_ELEMENT_PROCESS_ID_MISMATCH");
         Guard();
         if (request.Action == "inspect")
         {
@@ -282,10 +395,16 @@ internal static class DirectUia
         try { SemanticPolicy.DemandOwnerDesktop(0); owner0 = true; } catch {}
         try { SemanticPolicy.DemandOwnerDesktop(1); owner1 = true; } catch {}
         try { SemanticPolicy.DemandOwnerDesktop(null); ownerNull = true; } catch {}
-        bool pass = allow.All(x=>x) && deny.All(x=>!x) && owner0 && !owner1 && !ownerNull;
+        bool protectedWindow = Native.HasNoActivateStyle(0x08000000L);
+        bool unprotectedWindow = Native.HasNoActivateStyle(0L);
+        bool unrelatedStyle = Native.HasNoActivateStyle(0x00080000L);
+        bool combinedStyle = Native.HasNoActivateStyle(0x08080000L);
+        bool pass = allow.All(x=>x) && deny.All(x=>!x) && owner0 && !owner1 && !ownerNull
+            && protectedWindow && !unprotectedWindow && !unrelatedStyle && combinedStyle;
         return new { pass, allowedActions = allow.Length, deniedActions = deny.Length,
             desktop1 = owner0, desktop2 = owner1, unreadable = ownerNull,
-            invokeIsDisabled = !SemanticPolicy.Permitted("invoke") };
+            invokeIsDisabled = !SemanticPolicy.Permitted("invoke"),
+            protectedWindow, unprotectedWindow, unrelatedStyle, combinedStyle };
     }
 
     public static int Main(string[] args)
@@ -298,11 +417,15 @@ internal static class DirectUia
                 Console.WriteLine(JsonSerializer.Serialize(result));
                 return (bool)(result.GetType().GetProperty("pass")!.GetValue(result)!) ? 0 : 2;
             }
-            if (args.Length != 4 || args[0] != "--request" || args[2] != "--vda")
+            if (args.Length != 4
+                || (args[0] != "--request" && args[0] != "--arm-target")
+                || args[2] != "--vda")
                 throw new InvalidOperationException("EXPLICIT_LOCAL_REQUEST_AND_VDA_REQUIRED");
             Request request = ParseRequest(args[1]);
             using Native.Context ctx = new(args[3]);
-            object output = Perform(request, ctx);
+            object output = args[0] == "--arm-target"
+                ? ArmTarget(request, ctx)
+                : Perform(request, ctx);
             Console.WriteLine(JsonSerializer.Serialize(output));
             return 0;
         }
