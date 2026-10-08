@@ -1,15 +1,14 @@
 # Desktop 2 clipboard contract (2026-10-09)
 
-## Owner's non-negotiable requirement
-- Local Windows **virtual Desktop 1 user** and **virtual Desktop 2 Agent** must NOT share clipboard **for Agent-operated copy/paste**.
-- Agent operations must **never** overwrite, read, inspect, cache, log, or restore the owner's real Windows clipboard. In particular **do not implement temporary host clipboard swap/restore**; even quick swapping races with user operations and can leak passwords.
-- Agent's copy and paste within its own browser/task should behave normally without requiring a Windows virtual desktop switch.
-- On agent lease stop/revoke/session cleanup, clear the corresponding Agent clipboard; never persist the payload in task docs/audit files/history.
+## Final clarified scope (owner 2026-10-09 01:14 MYT)
+- **Only DeskMCP needs its own Agent copy/paste buffer.** When the Agent chooses to copy, it calls DeskMCP's `virtual_copy` API to save the selected content into the Agent's private buffer. When it pastes, it calls `virtual_paste` to insert that content into the destination.
+- The Agent's **DeskMCP-managed copy/paste** must not overwrite, read, inspect or temporarily swap the user's Windows clipboard. Agent clipboard data is scoped to the relevant lease and cleared on expiry/cleanup.
+- **Do NOT implement a second Windows clipboard, global Ctrl+C/V interception, OS-wide clipboard virtualization, or per-native-app clipboard isolation.** These are explicitly out of scope, not release blockers.
+- Native apps, Windows virtual desktops and user-generated Ctrl+C/V can continue to use Windows' ordinary shared clipboard. If DeskMCP itself initiates a copy/paste operation, it must use the Agent buffer; unsupported transfer paths should report their limitation without manipulating the user clipboard.
 
-## Windows limitation (DO NOT falsely claim solved)
-- Microsoft documents that the **window station**, not each Windows virtual desktop, owns the clipboard; normal Desktop 1/2 workspaces in one login session share the Win32 clipboard.
-- Therefore arbitrary third-party native apps running on Desktop 2, when users click native Copy/Paste or manually press Ctrl+C/V, **can still use the shared system clipboard**. There is no guaranteed second **OS clipboard** just because a window is on Desktop 2.
-- A memory-only **agent-managed virtual clipboard** separates DeskMCP-controlled transfers, NOT all possible app-level clipboard access. Native copy/paste, images/files, rich HTML/RTF, web page scripts using `navigator.clipboard`, context-menu browser-native Copy/Paste and outside-of-DeskMCP user keyboard shortcuts are NOT isolated yet. No native global keyboard interception or VM will be silently introduced.
+## Windows context (non-blocking)
+- Windows virtual desktops normally share the Windows clipboard; this is accepted by the owner. DeskMCP's independent *software buffer* is sufficient for the requested copy/paste workflow.
+- Current candidate implements **text-only browser-managed** `virtual_copy`/`virtual_paste`. Native app adapters for DeskMCP-managed transfers may be developed as needed, but the OS-level clipboard never needs separation.
 
 ## Source-only candidate implementation
 - `src/desktop2-clipboard.ts`: in-memory per-lease plain-text up to 4096 UTF-16 code units, automatic 15-minute expiration, explicit clear on lease/session cleanup. No Windows clipboard API or disk writes. Data remains distinct across simultaneous leases.
@@ -23,10 +22,9 @@
 - Real Windows 11 Desktop2 **visible Chrome** E2E in `test-area/desktop2-chrome-e2e.mjs` confirmed `virtual_copy` of `AGENT_CLIPBOARD_中文` from input selection and `virtual_paste` via Playwright driver, exact input readback. Clipboard sequence number from read-only Win32 `GetClipboardSequenceNumber` remained **1921 -> 1921**, without ever reading owner's clipboard payload. A second lease could not read first lease's content. Chrome stayed on Desktop2, owner desktop remained Desktop1, no forced switching; other prior browser actions still passed.
 - This is browser-specific application-level isolation **not an OS-wide independent clipboard**.
 
-## Release gates still outstanding
-- [ ] User requirement choice and honest UX for unsupported native OS clipboard operations (do not claim universal clipboard isolation).
-- [ ] Real Agent lease integration with visible Chrome Desktop2 BrowserRuntime, full MCP E2E and lease cleanup.
-- [ ] Clipboard protection when untrusted page JS tries `navigator.clipboard.read/write`, native browser context-menu copy/paste, external native programs; either technically contain these or clearly mark unsupported.
-- [ ] Tests with multiple browser pages/apps and rich data types: text/plain only verified; image/HTML/file clipboard not supported.
-- [ ] Normal owner copy on Desktop1 and simultaneous Agent paste on Desktop2 without altering clipboard, monitored without reading real user data.
-- [ ] Full release acceptance and owner authorization before merging/restarting/upgrading installed DeskMCP 0.9.23.
+## Outstanding implementation tasks (no new clipboard architecture required)
+- [x] DeskMCP-managed text copy/paste API already exists as `virtual_copy` / `virtual_paste`; the owner confirmed this is exactly the desired approach. Real Chrome Desktop2 test passed without modifying the Windows clipboard.
+- [ ] Integrate the existing Agent clipboard action into the real Desktop2 BrowserRuntime/MCP lease and apply it to other Computer Use input adapters if an Agent copy/paste action needs them.
+- [ ] Document supported types (currently plain text, not images/HTML/files) without introducing OS-wide interception or new OS clipboard requirements.
+- [ ] Obtain normal full-release acceptance and owner approval before merging/restarting/upgrading installed DeskMCP 0.9.23.
+- [x] Out of scope: isolating arbitrary third-party programs' native Ctrl+C/V, Windows clipboard internals, or webpage-initiated clipboard APIs. These are not blockers for the owner-requested DeskMCP-managed buffer.

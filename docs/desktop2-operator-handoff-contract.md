@@ -5,10 +5,11 @@ Date: 2026-10-09. **Same local Windows session, real Win+Tab Desktop 2.** No VM/
 ## Owner's actual requirement
 The owner DOES NOT require a zero-frame no-flash launch. An Agent-launched app is allowed to appear briefly on Desktop 1 **during startup** and be moved into Desktop 2. The core rule is that **during autonomous Agent operation on Desktop 2**, it must NOT take over Desktop 1, auto-switch the user, steal focus or send mouse/keyboard into the user's current desktop. An occasional transient initial window is explicitly allowed; no continuous distraction or hijack. No VM workaround.
 
-## Clipboard non-sharing requirement (owner 2026-10-09)
+## DeskMCP Agent clipboard (scope corrected 2026-10-09 01:14 MYT)
 
-- **Agent-owned copy/paste must not use or modify Desktop 1 user's Windows clipboard.** Agent has a private, lease-scoped memory clipboard; its contents never leak to the user clipboard or other Agent leases. No clipboard swap/restore trick. Deny system clipboard keyboard shortcuts during autonomous Agent automation.
-- **Limitation:** Windows virtual desktops share one OS clipboard. Plain-text Agent-managed browser copy/paste is supported in candidate, but arbitrary native OS shortcuts/context menus/apps are **not independently isolated**. Do not call the whole-system requirement finished unless genuinely solved or explicitly disclosed as unsupported. Details: `docs/desktop2-clipboard-isolation.md`.
+- The Agent uses **DeskMCP's own software copy/paste API**, not the user's Windows clipboard, whenever DeskMCP carries out a copy or paste operation. Copy = `virtual_copy` into the Agent buffer; paste = `virtual_paste` from that buffer.
+- The owner **does not require an independent Windows clipboard** or interception of clipboard operations performed directly by third-party Windows applications. Those native shortcuts can keep their normal Windows behavior. No Hyper-V, global clipboard virtualization or clipboard swap/restore.
+- Candidate has browser text transfers with lease-scoped in-memory content, without altering the user clipboard. Native DeskMCP-managed copy/paste adapters are a later integration detail; **OS-wide clipboard isolation is not an acceptance gate**. See `docs/desktop2-clipboard-isolation.md`.
 
 ## Two distinct states
 
