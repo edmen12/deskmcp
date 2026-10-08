@@ -154,14 +154,22 @@ export function isolatedWpfClearTarget(
   return element;
 }
 
-// A semantic 'click' is only an alias to UIA Invoke, not mouse injection.
-// Require a uniquely observed, enabled, visible Button with Invoke support.
+// A semantic 'click' maps only to WinApp's UIA invoke helper, never mouse
+// injection. UIA Invoke selects the advertised Invoke/Toggle/SelectionItem/
+// ExpandCollapse pattern. Keep the surface to explicitly verified WPF/Win32
+// control kinds; arbitrary custom controls still require foreground input.
+const ISOLATED_SEMANTIC_ACTIVATION_TYPES = new Set(['Button', 'CheckBox', 'RadioButton', 'ComboBox']);
 export function isolatedSemanticClickTarget(elements: readonly UiElementSummary[], selector: string): UiElementSummary {
   const matching = elements.filter(element => element.selector === selector);
   const element = matching[0];
-  if (matching.length !== 1 || element?.type !== 'Button' || element.isInvokable !== true
+  const isKnownPattern = element?.type === 'Button'
+    || (element?.type === 'CheckBox' && ['on', 'off', 'indeterminate'].includes(element.toggleState ?? ''))
+    || element?.type === 'RadioButton' // WinApp reports invokable, but may omit isSelected.
+    || (element?.type === 'ComboBox' && ['expanded', 'collapsed'].includes(element.expandState ?? ''));
+  if (matching.length !== 1 || !element?.type || !ISOLATED_SEMANTIC_ACTIVATION_TYPES.has(element.type)
+    || !isKnownPattern || element.isInvokable !== true
     || element.isEnabled !== true || element.isOffscreen !== false) {
-    throw new RequiresForegroundInputError('isolated semantic click requires one enabled, visible, UIA-invokable Button; other mouse clicks remain disabled.');
+    throw new RequiresForegroundInputError('isolated semantic click requires one unique enabled, visible and UIA-invokable Button/CheckBox/RadioButton/ComboBox with a verified control pattern; physical clicks remain disabled.');
   }
   return element;
 }
@@ -462,7 +470,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Single left click on a uniquely observed UIA-invokable Button maps to semantic invoke, NOT physical mouse input; unsupported clicks, double/right click, hover, drag, wheel injection and global/system keyboard input remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Single left click on a uniquely observed UIA-invokable Button/CheckBox/RadioButton/ComboBox with a verified semantic control pattern maps to semantic invoke, NOT physical mouse input; unsupported clicks, double/right click, hover, drag, wheel injection and global/system keyboard input remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),

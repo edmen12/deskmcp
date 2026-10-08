@@ -1,0 +1,25 @@
+# Agent Desktop / Computer Use — no-upgrade release gates (2026-10-08)
+
+**Owner requirement:** The Agent gets its own controllable application environment. While the Agent opens apps, types, clicks, drags, and inspects windows, Windows must NOT switch the human's current virtual desktop, steal the human mouse/keyboard focus, or launch Agent UI on Desktop 1. The human may freely switch between Windows virtual desktops; DeskMCP must never redirect the human to Desktop 1. **Do not upgrade the installed 0.9.23 before all required gates below pass and the owner approves installation.**
+
+## Evidence already gathered
+
+- [x] Candidate removes Control Panel `GoToDesktopNumber(0)` from both binding and timer paths; static regression test rejects Control Panel desktop-navigation capability. This is **source-only**, not installed.
+- [x] Scoped Win32 Desktop Object supports isolated WPF/WinForms UIA enumeration and selected semantic interactions without enabling global `SendInput` (prior real MCP probes).
+- [x] WPF TextBox literal insertion and empty-value `set_value` verified with readback; unsupported WinForms empty-value path rejected.
+- [x] Scoped left click maps to `ui invoke` only for uniquely inspected, enabled, on-screen, invokable Button/CheckBox/RadioButton/ComboBox with appropriate inspected patterns. Actual MCP E2E on isolated WPF probe: Button, CheckBox, RadioButton, ComboBox all PASS; invalid target and right click rejected. **No physical mouse click.**
+- [x] During the semantic-action probe, native current Windows desktop remained **Desktop 1** and foreground-invariant log count remained **8**, after the user's four known earlier manual desktop visits. The Agent didn't add new switch evidence during this probe.
+- [x] Source build and sequential test suite **225/225 PASS**; focused suite **37/37 PASS** (before newest full run); previous .NET Control Panel release build **0 warnings / 0 errors** on parent candidate.
+
+## Unresolved: release blockers
+
+- [ ] **Human inspection / takeover architecture:** The isolated Win32 Desktop Object is NOT Windows virtual Desktop 2. A probe window can be enumerated from the Object, but native virtual-desktop `windowInfo(hwnd)` reports it is not a visible top-level window. Simply switching to Desktop 2 does not make that Agent UI inspectable. Supply a genuine, safe spectator/interactive view or a separate interactive Windows session and verify bidirectional control without Desktop 1 interference. The Control Panel WPF overlay/HUD classes exist but its `ShowOnDesktopAsync` currently has no production call site. Do NOT just `Show()` on Desktop 1 and then move the windows; this could flash/steal UI.
+- [ ] **Full pointer and keyboard actions:** A generic click at coordinates, right/double click, mouse hover, drag/drop, wheel scrolling and arbitrary keyboard shortcuts are not supported on a non-current Win32 Desktop Object. Fail-closed is correct but not the user's desired full Computer Use. Find a genuinely independent interactive input channel and prove that all those actions reach only the Agent environment.
+- [ ] **App coverage:** Verify WinForms, WPF, Win32, Electron, WinUI/UWP, file dialogs, popups, mixed processes, text selection, Unicode, edit/clear, menu, form controls, and multiwindow UI; document explicit unsupported cases. Screenshots alone are not successful interaction.
+- [ ] **Human manual navigation:** On a separately staged Control Panel (not the installed production one), prove human manual Desktop 1 ↔ Desktop 2 switching is unrestricted, does not exit the lease, and never auto-returns, including repeated switches while the Agent performs UI actions.
+- [ ] **Foreground safety:** Record user virtual-desktop ID/foreground before/after every UI action and correlate with Agent calls. Exclude user-declared manual navigation, but fail when Agent causes a switch, browser on Desktop 1, or host keyboard/mouse interference.
+- [ ] **HUD and emergency stop:** Provide a visible emergency stop on the Agent's view without transiently displaying Agent UI on Desktop 1, and ensure stale leases/owned child processes are cleaned on exit or failure.
+- [ ] **Isolation platform feasibility:** Windows 11 Pro has Hyper-V and Windows Sandbox enabled and `WindowsSandbox.exe` present, but physical RAM is **15.8 GiB**. No VM/Sandbox has been started. If exploring a VM/session, benchmark cold launch, working set, real background graphics, remote input, reliable screenshot and no host focus theft, under resource budget and user control.
+- [ ] **Production release acceptance:** Build/stage installer, verify package integrity and rollback, run real installed-Gateway MCP E2E and side-by-side desktop observation; obtain owner permission before updating/restarting anything.
+
+**Do not mark blockers passed based on a unit test, an `invoke` alias, or auto-return safety behavior. Current installed version remains 0.9.23, main `94082fc`.**

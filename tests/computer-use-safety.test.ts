@@ -447,6 +447,35 @@ test('isolated semantic click only accepts a uniquely observed UIA-invokable but
   }
 });
 
+test('isolated semantic click supports only strongly verified UIA toggle, selection and expand controls', () => {
+  const base: UiElementSummary = {type:'CheckBox', selector:'ProbeCheck', automationId:'ProbeCheck',
+    toggleState:'off',isEnabled:true,isOffscreen:false,isInvokable:true};
+  const {toggleState:_discardToggle,...withoutToggle} = base;
+  const radio: UiElementSummary = {...withoutToggle,type:'RadioButton',selector:'ProbeRadioA'};
+  const combo: UiElementSummary = {...withoutToggle,type:'ComboBox',selector:'ProbeCombo',expandState:'collapsed'};
+  for(const [selector,el] of [['ProbeCheck',base],['ProbeRadioA',radio],['ProbeCombo',combo]] as const){
+    assert.deepEqual(isolatedSemanticClickTarget([el],selector),el);
+    assert.throws(()=>isolatedSemanticClickTarget([el,el],selector),/requires_foreground_input/);
+    assert.throws(()=>isolatedSemanticClickTarget([{...el,isEnabled:false}],selector),/requires_foreground_input/);
+    assert.throws(()=>isolatedSemanticClickTarget([{...el,isOffscreen:true}],selector),/requires_foreground_input/);
+    assert.throws(()=>isolatedSemanticClickTarget([{...el,isInvokable:false}],selector),/requires_foreground_input/);
+  }
+  const {expandState:_discardExpand,...withoutExpand}=combo;
+  const {isOffscreen:_discardVisibility,...withoutVisibility}=radio;
+  for (const wrong of [
+    {...withoutToggle,type:'CheckBox'},
+    {...base,toggleState:'unexpected'},
+    {...withoutExpand},
+    {...combo,expandState:'unknown'},
+    {...radio,type:'Text'},
+    {...radio,type:'Edit'},
+    {...radio,type:'MenuItem'},
+    {...withoutVisibility}
+  ]) {
+    assert.throws(()=>isolatedSemanticClickTarget([wrong],wrong.selector!),/requires_foreground_input/);
+  }
+});
+
 test('Agent Desktop isolated desktop still rejects unverified global input paths', () => {
   const blocked = [
     { type: 'send_keys', keys: 'hello', transport: 'post-message' },
