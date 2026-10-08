@@ -16,9 +16,10 @@ import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-
 import {
   agentDesktopSemanticTreeWarning,
   assertUnscopedUserDesktopActionAllowed,
-  isolatedWinFormsTextTarget,
+  isolatedDesktopTextTarget,
   prepareAgentDesktopAction,
-  resolveAgentDesktopWindowLease
+  resolveAgentDesktopWindowLease,
+  verifiedLiteralInsertion
 } from '../src/computer-use-tools.js';
 import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
@@ -354,7 +355,7 @@ test('isolated post-message refuses other apps and non-Edit controls', () => {
     type: 'Edit', selector: 'ProbeEdit', className: 'WindowsForms10.EDIT.app.0.test',
     isEnabled: true, isOffscreen: false, value: 'before'
   };
-  assert.deepEqual(isolatedWinFormsTextTarget(winforms, [input], 'ProbeEdit'), input);
+  assert.deepEqual(isolatedDesktopTextTarget(winforms, [input], 'ProbeEdit'), input);
   for (const item of [
     {window:windowFixture(), elements:[input]},
     {window:winforms, elements:[{...input, type:'Button'}]},
@@ -363,8 +364,43 @@ test('isolated post-message refuses other apps and non-Edit controls', () => {
     {window:winforms, elements:[input,input]},
     {window:winforms, elements:[{...input, className:'HwndWrapper[probe]'}]}
   ]) {
-    assert.throws(() => isolatedWinFormsTextTarget(item.window, item.elements, 'ProbeEdit'), /requires_foreground_input/i);
+    assert.throws(() => isolatedDesktopTextTarget(item.window, item.elements, 'ProbeEdit'), /requires_foreground_input/i);
   }
+});
+
+test('isolated post-message accepts only unique enabled WPF TextBox, not arbitrary controls', () => {
+  const wpfWindow = windowFixture({ className: 'HwndWrapper[DefaultDomain;test]' });
+  const first: UiElementSummary = {
+    type: 'Edit', selector: 'FirstText', className: 'TextBox',
+    isEnabled: true, isOffscreen: false, value: 'FIRST_'
+  };
+  const second = { ...first, selector: 'SecondText', value: 'SECOND_' };
+  assert.deepEqual(isolatedDesktopTextTarget(wpfWindow, [first, second], 'SecondText'), second);
+  for (const target of [
+    { win: windowFixture(), el: second },
+    { win: wpfWindow, el: { ...second, className: 'PasswordBox' } },
+    { win: wpfWindow, el: { ...second, type: 'Button' } },
+    { win: wpfWindow, el: { ...second, isEnabled: false } },
+    { win: wpfWindow, el: { ...second, isOffscreen: true } }
+  ]) {
+    assert.throws(() => isolatedDesktopTextTarget(target.win, [target.el], 'SecondText'), /requires_foreground_input/i);
+  }
+  assert.throws(() => isolatedDesktopTextTarget(wpfWindow, [second, second], 'SecondText'), /requires_foreground_input/i);
+});
+
+test('isolated post-message readback verifies one exact insertion at any caret position', () => {
+  assert.equal(verifiedLiteralInsertion(undefined, 'ABC', 'ABC'), true);
+  assert.equal(verifiedLiteralInsertion('', 'ABC', 'ABC'), true);
+  assert.equal(verifiedLiteralInsertion('BASE_', 'ABCBASE_', 'ABC'), true);
+  assert.equal(verifiedLiteralInsertion('BASE_', 'BASE_ABC', 'ABC'), true);
+  assert.equal(verifiedLiteralInsertion('LEFT_RIGHT', 'LEFTABC_RIGHT', 'ABC'), true);
+  assert.equal(verifiedLiteralInsertion('SECOND_', 'SEABC COND_', 'ABC'), false);
+  assert.equal(verifiedLiteralInsertion('SECOND_', 'SEABCCOND_', 'ABC'), true);
+  assert.equal(verifiedLiteralInsertion('BASE_', 'ABC', 'ABC'), false);
+  assert.equal(verifiedLiteralInsertion('BASE_', 'ABCBASE_X', 'ABC'), false);
+  assert.equal(verifiedLiteralInsertion('BASE_', undefined, 'ABC'), false);
+  assert.equal(verifiedLiteralInsertion('BASE_', 'BASE_', 'ABC'), false);
+  assert.equal(verifiedLiteralInsertion('BASE_', 'BASE_ABCABC', 'ABC'), false);
 });
 
 test('Agent Desktop isolated desktop still rejects unverified global input paths', () => {

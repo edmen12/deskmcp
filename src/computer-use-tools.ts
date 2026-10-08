@@ -83,7 +83,7 @@ export function prepareAgentDesktopAction(action: UiAction): UiAction {
     case 'send_keys':
       // Allow only literal, window-targeted typing. WinApp's post-message
       // transport posts WM_CHAR to the resolved HWND; it never uses SendInput.
-      // The caller still must prove this is a WinForms Edit on a real Desktop
+      // The caller must verify a WinForms Edit or WPF TextBox on a real Desktop
       // Object lease before the backend receives the action.
       if (
         !action.verbatim || !action.selector || action.transport === 'send-input'
@@ -91,7 +91,7 @@ export function prepareAgentDesktopAction(action: UiAction): UiAction {
         || !/^[\x20-\x7e]+$/.test(action.keys)
       ) {
         throw new RequiresForegroundInputError(
-          'isolated send_keys supports only up to 128 printable ASCII characters with verbatim=true, a WinForms Edit selector, and no global/system-key transport.'
+          'isolated send_keys supports only up to 128 printable ASCII characters with verbatim=true, a WinForms Edit or WPF TextBox selector, and no global/system-key transport.'
         );
       }
       return { ...action, transport: 'post-message', allowSystemKeys: false };
@@ -104,25 +104,41 @@ export function prepareAgentDesktopAction(action: UiAction): UiAction {
   }
 }
 
-// Do not expose post-message text input to arbitrary desktop windows or
-// controls: only a fresh lease-bound WinForms Edit with a unique selector.
-export function isolatedWinFormsTextTarget(
+// Post-message typing remains limited to verified UIA text controls on a
+// lease-owned desktop object. Inspect must uniquely identify the selector.
+export function isolatedDesktopTextTarget(
   window: ComputerWindow,
   elements: readonly UiElementSummary[],
   selector: string
 ): UiElementSummary {
   const matching = elements.filter(element => element.selector === selector);
+  const element = matching[0];
+  const winFormsEdit = window.className?.startsWith('WindowsForms10.Window.') === true
+    && element?.className?.startsWith('WindowsForms10.EDIT.') === true;
+  const wpfTextBox = window.className?.startsWith('HwndWrapper[') === true
+    && element?.className === 'TextBox';
   if (
-    !window.className?.startsWith('WindowsForms10.Window.')
-    || matching.length !== 1 || matching[0]?.type !== 'Edit'
-    || !matching[0].className?.startsWith('WindowsForms10.EDIT.')
-    || matching[0].isEnabled !== true || matching[0].isOffscreen === true
+    matching.length !== 1 || element?.type !== 'Edit'
+    || (!winFormsEdit && !wpfTextBox)
+    || element.isEnabled !== true || element.isOffscreen === true
   ) {
     throw new RequiresForegroundInputError(
-      'window-targeted typing requires one enabled WinForms Edit control on an isolated Desktop Object; this app/control is not verified for background input.'
+      'window-targeted typing requires a unique enabled WinForms Edit or WPF TextBox in an isolated Desktop Object.'
     );
   }
-  return matching[0];
+  return element;
+}
+
+// WinApp post-message returns success for an accepted message, not guaranteed
+// text delivery. Confirm that exactly one literal insertion occurred while
+// preserving all existing text (caret position may be anywhere in the field).
+export function verifiedLiteralInsertion(beforeText: string | undefined, afterText: string | undefined, keys: string): boolean {
+  const before = beforeText ?? '';
+  if (!keys || afterText === undefined || afterText.length !== before.length + keys.length) return false;
+  for (let offset = afterText.indexOf(keys); offset >= 0; offset = afterText.indexOf(keys, offset + 1)) {
+    if (afterText.slice(0, offset) + afterText.slice(offset + keys.length) === before) return true;
+  }
+  return false;
 }
 
 function usesGlobalDesktopInput(action: UiAction): boolean {
@@ -409,7 +425,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit via post-message, with readback verification) are allowed. Physical click, hover, drag, wheel injection, global/system keyboard input and unsupported app controls remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Physical click, hover, drag, wheel injection, global/system keyboard input and unsupported app controls remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -489,7 +505,7 @@ export function registerComputerUseTools(
           throw new RequiresForegroundInputError('isolated text input requires a verified Desktop Object and an explicit Edit selector.');
         }
         const before = await runtime.backend.inspect(target.hwnd, true, 200, desktopObjectName);
-        beforeText = isolatedWinFormsTextTarget(target, before.elements, action.selector).value;
+        beforeText = isolatedDesktopTextTarget(target, before.elements, action.selector).value;
       }
 
       // Invalidate every sibling observation before attempting the action. Even a
@@ -503,10 +519,10 @@ export function registerComputerUseTools(
       }
       if (effectiveAgentDesktopLeaseId && action.type === 'send_keys') {
         const after = await runtime.backend.inspect(target.hwnd, true, 200, desktopObjectName);
-        const afterText = isolatedWinFormsTextTarget(target, after.elements, action.selector!).value;
+        const afterText = isolatedDesktopTextTarget(target, after.elements, action.selector!).value;
         // WinApp post-message is fire-and-forget. Exit 0 alone is NOT delivery.
-        if (afterText === beforeText || !afterText?.includes(action.keys)) {
-          throw new Error('isolated_text_delivery_unverified: WinForms Edit did not confirm the requested text. Take a fresh snapshot before retrying.');
+        if (!verifiedLiteralInsertion(beforeText, afterText, action.keys)) {
+          throw new Error('isolated_text_delivery_unverified: target Edit did not confirm an exact literal insertion. Take a fresh snapshot before retrying.');
         }
       }
 
