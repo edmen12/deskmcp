@@ -62,3 +62,6 @@ test-area/d2ready.json
 test-area/d2events.log
 test-area/d2release.flag
 test-area/d2preview.png
+
+# Generated dedicated Chrome profiles/screenshots from Desktop2 headful E2E
+test-area/desktop2-chrome-*/

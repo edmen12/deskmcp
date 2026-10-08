@@ -33,3 +33,18 @@ Same local Windows, *real Win+Tab virtual Desktop 2*, no VM/Hyper-V or separate 
 - [ ] Full clean regression, installed-candidate E2E, owner permission before upgrade or restart.
 
 **Outcome: real Desktop2-only window placement + background editable TextBox + button semantic click + wheel/right mouse + screenshot VERIFIED. General-purpose native Computer Use NOT complete.**
+
+## 2026-10-09: HEADFUL Chrome on REAL Windows virtual Desktop2 — full local E2E PASS
+
+The owner confirmed **a brief initial Desktop1 launch is acceptable**; the core constraint is no automatic switch, stolen user keyboard/mouse or foreground changes *during autonomous Desktop2 operation*. Password/OTP/authorization may require a separately requested, explicit human takeover of Desktop2; never force a return to Desktop1.
+
+**Repro:** `node test-area/desktop2-chrome-e2e.mjs` on the test Windows host. This is a test fixture, NOT production BrowserRuntime / MCP integration. It starts a **unique, separate Chrome profile**, discovers the actual Chrome browser root (Chrome's initial launcher may exit zero and hand off), and uses the existing installed native `move-process-tree --show-no-activate` to place the real visible HWND(s) on Desktop2. It validates `GetWindowDesktopId==Desktop2` and `onCurrentDesktop=false` for all owned top-level windows before CDP input. It uses Playwright CDP (not host-global `SendInput`) for GUI interactions; `finally` closes only that unique-profile test browser. No personal Chrome profile, installed Gateway or AQP service modified.
+
+**Observed (repeated real E2E, including 2026-10-09 final expanded run):**
+- Actual **headful** Chrome native window moved to Desktop2 (not a Win32 Desktop Object, not a VM, not headless). User's current virtual desktop was Desktop1 before, during and after.
+- Button `CLICKED:DESKTOP2_AGENT_OK`, input `DESKTOP2_AGENT_OK`, hotkey **Ctrl+A** and literal Unicode text `中文桌面二✓`, right-click `contextmenu`, double-click `DOUBLE_OK`, HTML drag/drop `DRAG_OK`, wheel scrollY=650. All verified by page-state readback.
+- CDP screenshot PNG valid; **separate installed WinApp native window screenshot** succeeded from the inactive Desktop2 Chrome HWND, **946×713 PNG ~20–21 KB**, with **30 distinct colors** sampled in a prior run. Thus not merely a headless browser screenshot. Native user desktop remained Desktop1, invariant log count unchanged at **8**.
+- An independently opened second Chrome popup created a second top-level HWND. Explicit re-run of `move-process-tree` relocated **both windows** to Desktop2; its page-state readback `POPUP_BACKGROUND_AGENT_OK` succeeded. **Popup relocation is an explicit test step, NOT yet an automatic process-watchdog or MCP workflow.** Brief popup appearance on Desktop1 is allowed by user, but sustained Desktop1 interference is not.
+- All observed owned test Chrome process trees were closed/verified absent; personal Chrome processes unaffected. The test used no Hyper-V, no `SendInput`, no Windows virtual desktop switching.
+
+**Still NOT production-ready:** real local Desktop2 source demonstration is now successful for **Chrome**, but `BrowserRuntime` still launches scoped Chrome headless in a hidden Win32 Desktop Object and rejects headful lease launches. A safe owned headful Chrome launcher + placement controller and popup monitor must be integrated and tested inside actual DeskMCP lease, with genuine owner-driven handoff, UI/screenshot and cleanup. Native generic WinForms drag/double-click remain unsupported by the message path; WPF, Electron (outside Chrome CDP), WinUI/UWP and native dialogs remain unproven. Do not merge, install or claim universal native Computer Use.
