@@ -80,3 +80,15 @@ test('agent bridge refuses current-desktop pinned windows and does not expose so
   assert.match(bridge,/Pinned\/shared window is visible on Desktop 1/);
   assert.doesNotMatch(tools,/backgroundWindowMessage\(/);
 });
+
+test('background invoke-button uses only strict Win32/WinForms Button HWND and never physical click',async()=>{
+  assert.deepEqual(buildDesktop2BackgroundInputArgs(hwnd,pid,desktop2,{type:'invoke-button'}),[
+    'background-input','--hwnd',String(hwnd),'--pid',String(pid),'--desktop-id',desktop2,'--action','invoke-button'
+  ]);
+  const cs=await readFile(path.join(process.cwd(),'agent-desktop-host','BackgroundWindowInput.cs'),'utf8');
+  assert.match(cs,/const uint BmClick = 0x00F5/);
+  assert.match(cs,/GetClassNameW\(hwnd/);
+  assert.match(cs,/WindowsForms10\.BUTTON/);
+  assert.match(cs,/hwnd == root \|\| !IsWindowEnabled\(hwnd\)/);
+  assert.match(cs,/Deliver\(hwnd, BmClick, 0, IntPtr.Zero\)/);
+});

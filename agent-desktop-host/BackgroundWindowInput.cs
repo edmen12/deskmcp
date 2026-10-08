@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Text;
 
 namespace DeskMCP.AgentDesktopHost;
 
@@ -23,6 +24,7 @@ internal static class BackgroundWindowInput
     private const uint WmKeyDown = 0x0100;
     private const uint WmKeyUp = 0x0101;
     private const uint WmChar = 0x0102;
+    private const uint BmClick = 0x00F5;
     private const uint MkLButton = 0x0001;
     private const uint MkRButton = 0x0002;
     private const uint GaRoot = 2;
@@ -50,6 +52,11 @@ internal static class BackgroundWindowInput
     private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+    private static extern int GetClassNameW(IntPtr hwnd, StringBuilder value, int maxCount);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll")]
@@ -133,6 +140,16 @@ internal static class BackgroundWindowInput
         }
 
         string kind = action.Trim().ToLowerInvariant();
+        if (kind == "invoke-button")
+        {
+            if (hwnd == root || !IsWindowEnabled(hwnd))
+                throw new InvalidOperationException("Semantic button activation requires an enabled child Button HWND.");
+            StringBuilder className = new(256);
+            if (GetClassNameW(hwnd, className, className.Capacity) <= 0
+                || !(className.ToString().Equals("Button", StringComparison.OrdinalIgnoreCase)
+                || className.ToString().StartsWith("WindowsForms10.BUTTON.", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Semantic button activation refuses non-Button HWNDs.");
+        }
         bool mouse = kind is "move" or "click" or "right-click" or "double-click" or "drag" or "wheel";
         int x = 0, y = 0;
         if (mouse)
@@ -172,7 +189,7 @@ internal static class BackgroundWindowInput
                 if (char.IsControl(c) && c != '\r' && c != '\n' && c != '\t')
                     throw new ArgumentException("Control characters are not allowed.");
         }
-        else if (!mouse)
+        else if (!mouse && kind != "invoke-button")
         {
             throw new ArgumentException("Unsupported window-message input action.");
         }
@@ -180,6 +197,9 @@ internal static class BackgroundWindowInput
         // All validation occurs before ANY window input message is dispatched.
         switch (kind)
         {
+            case "invoke-button":
+                Deliver(hwnd, BmClick, 0, IntPtr.Zero);
+                break;
             case "move":
                 Move(hwnd, x, y);
                 break;

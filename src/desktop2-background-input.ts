@@ -8,7 +8,8 @@ export type Desktop2MessageAction =
   | Readonly<{type:'drag';x:number;y:number;toX:number;toY:number;steps?:number}>
   | Readonly<{type:'wheel';x:number;y:number;delta:number}>
   | Readonly<{type:'key';vk:number}>
-  | Readonly<{type:'text';text:string}>;
+  | Readonly<{type:'text';text:string}>
+  | Readonly<{type:'invoke-button'}>;
 
 export function buildDesktop2BackgroundInputArgs(
   hwnd:number,
@@ -27,6 +28,8 @@ export function buildDesktop2BackgroundInputArgs(
     args.push('--'+key,String(value));
   };
   switch(action.type){
+    case 'invoke-button':
+      break;
     case 'move':
     case 'click':
     case 'right-click':

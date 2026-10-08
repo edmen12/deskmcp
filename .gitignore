@@ -52,3 +52,13 @@ agent-desktop-host/obj/
 *.p12
 *.pvk
 signing-private/
+
+# Desktop 2 E2E local build artifacts (keep the small source fixture)
+agent-desktop-host/test-area/
+test-area/desktop2-gui-probe/out/
+test-area/desktop2-gui-probe/bin/
+test-area/desktop2-gui-probe/obj/
+test-area/d2ready.json
+test-area/d2events.log
+test-area/d2release.flag
+test-area/d2preview.png
