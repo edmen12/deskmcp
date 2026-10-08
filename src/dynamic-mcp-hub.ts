@@ -768,7 +768,7 @@ export class DynamicMcpHub {
       requestInit: { headers: this.requestHeaders(server) },
       onInsufficientScope: 'throw'
     });
-    const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.22' });
+    const client = new Client({ name: 'deskmcp-mcp-hub', version: '0.9.23' });
     let connected = false;
     try {
       await timeoutPromise(client.connect(transport), remaining(`Connect to ${server.name}`), `Connect to ${server.name}`);
