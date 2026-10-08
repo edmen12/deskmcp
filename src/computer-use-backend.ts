@@ -477,7 +477,10 @@ export class WinAppComputerBackend {
         if (action.direction) args.push('--direction', action.direction);
         if (action.to) args.push('--to', action.to);
         if (action.wheel !== undefined) args.push('--wheel', String(action.wheel));
-        return this.runJson(args, 10_000, desktopObjectName);
+        // Isolated WinApp scroll may take close to 10s once the Desktop Object
+        // process-launch/COM startup overhead is included. A 10s deadline
+        // intermittently aborts a successful scroll as a false timeout.
+        return this.runJson(args, desktopObjectName ? 25_000 : 10_000, desktopObjectName);
       }
       case 'send_keys': {
         const args = ['ui', 'send-keys', action.keys, ...target, '--via', action.transport ?? 'send-input'];
