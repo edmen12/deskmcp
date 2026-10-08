@@ -183,9 +183,27 @@ export class AgentDesktopNativeBridge {
     if (!state.virtualDesktopAccessor || state.currentDesktopNumber === undefined || state.currentDesktopNumber === null) {
       throw new Error('Cannot verify the active Windows virtual desktop.');
     }
-    if (state.currentDesktopNumber !== info.desktopNumber && info.onCurrentDesktop === true) {
+    // This bridge is for the REAL Windows virtual Desktop 2, not the
+    // historical private Win32 Desktop Object. The owner must still be on
+    // Desktop 1; entering Desktop 2 is manual human control, not Agent input.
+    if (state.currentDesktopNumber !== 1) {
+      throw new Error('Owner left Desktop 1; pause autonomous Desktop 2 native input.');
+    }
+    if (info.onCurrentDesktop === true) {
       throw new Error('Pinned/shared window is visible on Desktop 1; refusing Agent input.');
     }
-    return this.run(args);
+    const result = await this.run<{
+      readonly acceptedByWindowProcedure: boolean;
+      readonly confirmedAppState: boolean;
+      readonly desktopNumber: number;
+      readonly hostInputWasNotUsed: boolean;
+    }>(args);
+    const after = await this.info();
+    if (!after.virtualDesktopAccessor || after.currentDesktopNumber !== 1) {
+      // This catches a visible switch at post-check. Fast switch/back still
+      // requires the separate continuous event tripwire.
+      throw new Error('Owner desktop changed or could not be checked after background input.');
+    }
+    return result;
   }
 }

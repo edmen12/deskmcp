@@ -13,7 +13,11 @@
 
 ## 验证范围
 
-候选代码静态编译与 `--self-test` 只测试逻辑；**没有**启动实时监听，也没有再运行 WPF GUI。观察器的消息通知、前台事件、UIA 行为仍是 **UNVERIFIED**。
+**新增实际无 GUI 监听验收（2026-10-09）**：`--observe-idle` 在真实用户会话中持续监听 **9 秒**，退出码 `0`，日志有 START/END、`desktopIndex=0`、无 tripwire，退出后 ready 标记已清理。这证明本地 DLL 加载、事件注册和资源销毁能正常运行，但期间没有发生真实桌面切换（notifications=0），不证明真实切换的捕获能力。
+
+**新增消息处理验收**：`--self-test-notification` 通过 `PostMessageW` 向**自己的 HWND_MESSAGE** 发送模拟 `old=0,new=1`，没有调用虚拟桌面切换 API。第二轮修正日志共享方式后 **exit 0**，事件旧/新桌面完整，tripwire 在真实桌面仍为 0 时维持锁存，5 秒后 ready 清理成功。首轮 exit 3 是读取自己未关闭的日志造成文件占用，非真实桌面切换；已修复并重新验收。
+
+**仍未验证**：VirtualDesktopAccessor 在真实 Desktop1↔Desktop2 切换时的事件回调完整性与实时性；GUI 执行期间的因果归因、前台焦点变化。没有再次运行 WPF GUI。
 
 测试前需有独立的被动监听运行安全审查；单独启用观察器不能授权 GUI 测试。只有在验证它确实能记录手动 Desktop 1→2→1 且不会切屏、并把每次测试动作关联到时间线之后，才能考虑重新申请实机 GUI 验收。测试过程中第一条没有得到解释的切换就保持 RED。
 
@@ -26,4 +30,4 @@
 & 'C:\Users\User\Desktop\DeskMCP\runtime\dotnet-sdk\dotnet.exe' .\test-area\desktop2-switch-observer\bin\Release\net10.0-windows\DeskMCP.Desktop2SwitchObserver.dll --self-test .\test-area\desktop2-switch-observer\policy-selftest.json
 ```
 
-`--observe <absolute DLL> <eventLogFile> <readyFile> <tripwireFile>` 是未完成验收的被动监听模式，**没有在当前会话运行**；不要和 WPF GUI 测试联动运行，直到完成单独审核。四次用户报告切屏已记录，不能靠日志里没有新增正式 Agent lease 事件来否认，因为过去的 GUI 测试没有 Agent lease。
+`--observe <absolute DLL> <eventLogFile> <readyFile> <tripwireFile>` 是未完成真实切屏事件验收的长时模式，**本轮未运行该模式**。短时 `--observe-idle ... 9`、模拟 `--self-test-notification ... 5` 已运行并通过各自验收。后者只向自己的隐藏 HWND 发布消息，并不会切换 Windows 桌面。不要把监听器单独运行成功理解为 GUI Computer Use 的零干扰证明。四次用户报告切屏已记录，不能靠正式版 Agent lease 日志未增加来否认，因为原 WPF 测试没有 Agent lease。

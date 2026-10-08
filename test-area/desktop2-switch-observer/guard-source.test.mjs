@@ -45,3 +45,15 @@ test('native HWND message bridge refuses background input while owner is not on 
  assert.match(bridge,/Owner desktop changed during background input/);
  assert.match(bridge,/IsWindowOnCurrentVirtualDesktop\(root\)/);
 });
+
+test('WPF root and owned popup opt out of activation before DWM uncloak',()=>{
+ const fixture=readFileSync(path.join(here,'..','desktop2-wpf-probe','Program.cs'),'utf8');
+ assert.match(fixture,/WsExNoactivate=0x08000000L/);
+ assert.match(fixture,/Native\.MakeNonActivating\(rootHwnd\)/);
+ assert.match(fixture,/Native\.MakeNonActivating\(hwnd\)/);
+ assert.match(fixture,/window\.Owner=this/);
+ assert.match(fixture,/ROOT_WM_/);
+ assert.match(fixture,/POPUP_WM_/);
+ assert.ok(fixture.indexOf('Native.MakeNonActivating(rootHwnd)') < fixture.indexOf('DwmSetWindowAttribute(rootHwnd'));
+ assert.ok(fixture.lastIndexOf('Native.MakeNonActivating(hwnd)') < fixture.indexOf('DwmSetWindowAttribute(hwnd'));
+});

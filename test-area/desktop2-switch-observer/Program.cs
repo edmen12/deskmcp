@@ -121,6 +121,17 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWinEvent(IntPtr hook);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr oldDesktop, IntPtr newDesktop);
+
+    // Dedicated diagnostic only: inject a Windows message into our OWN message-only
+    // listener HWND. Does NOT invoke VDA GoToDesktopNumber or change user desktops.
+    public void PostSyntheticNotificationForSelfTest()
+    {
+        if (!PostMessageW(Handle, NotificationMessage, IntPtr.Zero, new IntPtr(1)))
+            throw new InvalidOperationException("Synthetic self-notification could not be queued.");
+    }
 
     public DesktopEventListener(string dll, string eventsFile, string ready, string tripwire, int seconds)
     {
@@ -222,10 +233,11 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                 // Preserve both notification payload and a fresh VDA read because
                 // the user can switch back before the message is handled.
                 int eventDesktopIndex = unchecked((int)m.LParam.ToInt64());
+                int oldDesktopIndex = unchecked((int)m.WParam.ToInt64());
                 int current = vda.CurrentIndex();
                 if (eventDesktopIndex >= 0 && eventDesktopIndex < desktopCount)
                     Observe(eventDesktopIndex, "VIRTUAL_DESKTOP_NOTIFICATION",
-                        "payload=" + eventDesktopIndex + " current=" + current);
+                        "old=" + oldDesktopIndex + " new=" + eventDesktopIndex + " current=" + current);
                 else
                     Observe(-1, "VIRTUAL_DESKTOP_NOTIFICATION_INVALID_PAYLOAD", "payload=" + eventDesktopIndex);
                 if (current != eventDesktopIndex)
@@ -319,14 +331,41 @@ internal static class Program
                 stillBlockedAfterReturn, invalidFailsClosed}));
             return pass ? 0 : 2;
         }
-        if (args.Length != 5 || args[0] != "--observe")
+        // Idle-only passive smoke test: bounded runtime without any desktop
+        // switch, window placement, GUI creation, automation or injected input.
+        bool idle = args.Length == 6 && args[0] == "--observe-idle";
+        bool synthetic = args.Length == 6 && args[0] == "--self-test-notification";
+        if (!idle && !synthetic && (args.Length != 5 || args[0] != "--observe"))
+            return 2;
+        int seconds = 90;
+        if ((idle || synthetic) && (!int.TryParse(args[5], out seconds) || seconds is < 5 or > 15))
             return 2;
         try
         {
-            using DesktopEventListener observer = new(args[1], args[2], args[3], args[4], 90);
+            using DesktopEventListener observer = new(args[1], args[2], args[3], args[4], seconds);
+            if (synthetic)
+                observer.PostSyntheticNotificationForSelfTest();
             Application.Run();
+            if (synthetic)
+            {
+                // Only the observer's own HWND receives a simulated message;
+                // the real Windows active desktop remains unchanged.
+                bool latched = File.Exists(args[4]);
+                using FileStream stream = new(args[2], FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using StreamReader reader = new(stream);
+                string log = reader.ReadToEnd();
+                bool delivered = log.Contains("VIRTUAL_DESKTOP_NOTIFICATION")
+                    && log.Contains("VIRTUAL_DESKTOP_NOTIFICATION_CURRENT_RECHECK")
+                    && log.Contains("END");
+                return latched && delivered ? 0 : 4;
+            }
             return 0;
         }
-        catch { return 3; }
+        catch (Exception ex)
+        {
+            // The listener has no console: persist startup/ABI failures locally.
+            try { File.WriteAllText(args[2] + ".startup-error.txt", ex.ToString()); } catch { }
+            return 3;
+        }
     }
 }

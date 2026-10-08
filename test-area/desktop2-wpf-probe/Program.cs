@@ -13,6 +13,24 @@ static class Native {
  [DllImport("dwmapi.dll")] internal static extern int DwmSetWindowAttribute(IntPtr h,int a,ref int v,int len);
  [DllImport("dwmapi.dll")] internal static extern int DwmGetWindowAttribute(IntPtr h,int a,out int v,int len);
  [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW",SetLastError=true)]
+ private static extern IntPtr GetWindowLongPtr(IntPtr hwnd,int offset);
+ [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW",SetLastError=true)]
+ private static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int offset,IntPtr value);
+ internal static void MakeNonActivating(IntPtr hwnd){
+  if(hwnd==IntPtr.Zero)throw new ArgumentException("Non-activating HWND is required");
+  const int GwlExstyle=-20;
+  const long WsExNoactivate=0x08000000L;
+  var before=GetWindowLongPtr(hwnd,GwlExstyle);
+  var wanted=before.ToInt64()|WsExNoactivate;
+  if((before.ToInt64()&WsExNoactivate)!=0)return;
+  Marshal.SetLastPInvokeError(0);
+  var previous=SetWindowLongPtr(hwnd,GwlExstyle,new IntPtr(wanted));
+  if(previous==IntPtr.Zero && Marshal.GetLastPInvokeError()!=0)
+    throw new InvalidOperationException("NOACTIVATE_STYLE_FAILED_"+Marshal.GetLastPInvokeError());
+  if((GetWindowLongPtr(hwnd,GwlExstyle).ToInt64()&WsExNoactivate)==0)
+    throw new InvalidOperationException("NOACTIVATE_STYLE_NOT_SET");
+ }
 }
 sealed class Probe: Window {
  readonly string ready,release,events;
@@ -57,9 +75,13 @@ sealed class Probe: Window {
   PreviewMouseWheel+=(_,e)=>Log("APP_WHEEL="+e.Delta);
   PreviewMouseMove+=(_,e)=>{if(e.LeftButton==MouseButtonState.Pressed)Log("APP_DRAG");};
   rootHwnd=new WindowInteropHelper(this).EnsureHandle();
+  // ShowActivated=false is not by itself a verified Win32 activation barrier.
+  // Set WS_EX_NOACTIVATE before the WPF HWND is first shown or uncloaked.
+  Native.MakeNonActivating(rootHwnd);
   var cloak=1;if(Native.DwmSetWindowAttribute(rootHwnd,13,ref cloak,4)!=0)throw new Exception("ROOT_CLOAK_FAILED");
   HwndSource.FromHwnd(rootHwnd).AddHook((IntPtr h,int msg,IntPtr w,IntPtr l,ref bool handled)=>{
-   if(msg==0x200||msg==0x201||msg==0x202||msg==0x203||msg==0x20A||msg==0x102)Log("WM_"+msg.ToString("X"));
+   if(msg==0x200||msg==0x201||msg==0x202||msg==0x203||msg==0x20A||msg==0x102||msg==0x06||msg==0x07||msg==0x08||msg==0x1C)
+    Log("ROOT_WM_"+msg.ToString("X")+" W="+w.ToInt64());
    return IntPtr.Zero;
   });
   Loaded+=(_,_)=> {
@@ -78,8 +100,17 @@ sealed class Probe: Window {
  void ShowCloakedPopup(){
   if(popupStarted)return;popupStarted=true;
   var window=new Window{Title="DeskMCP WPF test popup",Width=340,Height=170,Left=850,Top=250,ShowActivated=false,ShowInTaskbar=true,WindowStartupLocation=WindowStartupLocation.Manual,Content=new TextBlock{Text="POPUP_DESKTOP2",Margin=new Thickness(18)}};
+  // Bind the dialog to its own WPF Desktop2 root instead of an unowned
+  // top-level popup that the shell can independently activate.
+  window.Owner=this;
   var hwnd=new WindowInteropHelper(window).EnsureHandle();
+  Native.MakeNonActivating(hwnd);
   int cloak=1;if(Native.DwmSetWindowAttribute(hwnd,13,ref cloak,4)!=0)throw new Exception("POPUP_CLOAK_FAILED");
+  HwndSource.FromHwnd(hwnd).AddHook((IntPtr h,int msg,IntPtr w,IntPtr l,ref bool handled)=>{
+   if(msg==0x06||msg==0x07||msg==0x08||msg==0x1C)
+    Log("POPUP_WM_"+msg.ToString("X")+" W="+w.ToInt64());
+   return IntPtr.Zero;
+  });
   window.Show();
   Log("APP_POPUP_HWND="+hwnd.ToInt64());
  }

@@ -76,8 +76,11 @@ test('agent bridge refuses current-desktop pinned windows and does not expose so
   const root=process.cwd();
   const bridge=await readFile(path.join(root,'src','agent-desktop-native.ts'),'utf8');
   const tools=await readFile(path.join(root,'src','computer-use-tools.ts'),'utf8');
-  assert.match(bridge,/state\.currentDesktopNumber !== info\.desktopNumber && info\.onCurrentDesktop === true/);
+  assert.match(bridge,/state\.currentDesktopNumber !== 1/);
+  assert.match(bridge,/info\.onCurrentDesktop === true/);
   assert.match(bridge,/Pinned\/shared window is visible on Desktop 1/);
+  assert.match(bridge,/after\.currentDesktopNumber !== 1/);
+  assert.match(bridge,/Owner desktop changed or could not be checked after background input/);
   assert.doesNotMatch(tools,/backgroundWindowMessage\(/);
 });
 
