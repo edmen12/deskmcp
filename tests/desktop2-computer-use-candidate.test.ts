@@ -21,12 +21,16 @@ function fixture() {
   let live: readonly ComputerWindow[] = [window];
   let performed = 0, armed = 0;
   const seen: unknown[] = [];
-  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls'> = {
+  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls'> = {
     async arm(scope) { armed++; seen.push(scope); return {armed:true,desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c'}; },
     async inspectControls() { return [
       {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
       {automationId:'Edit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
       {automationId:'Scroller',controlType:'ControlType.Pane',className:'ScrollViewer',canSetValue:false,canScrollTopBottom:true}
+    ]; },
+    async inspectNativeControls(){ return [
+      {automationId:'native-edit:884020',controlType:'NativeWin32.Edit',
+        className:'Edit',canSetValue:false,canScrollTopBottom:false,canSetNativeValue:true}
     ]; },
     async perform(scope,action) { performed++; seen.push({scope,action}); return {uiaReadbackConfirmed:true,appEventConfirmed:false}; }
   };
@@ -210,5 +214,44 @@ test('protected element observation cannot be replayed with another observer rea
  const request={...t.input('perform',{type:'set_value',automationId:'WpfEdit',value:'cannot-cross'}),
   computerObservationId:snap.computerObservationId,observerReadyFile:'C:\\observer-B\\ready.json'};
  await assert.rejects(t.adapter.dispatch(request),/fresh protected semantic control snapshot/);
+ assert.equal(t.invoked.performed,0);
+});
+
+test('native Edit action only accepts a protected native-only capability, not UIA observations',async()=>{
+ const t=fixture();
+ const observed={windowId:t.windowId,agentDesktopLeaseId:lease,
+   observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const ordinary=await t.adapter.snapshotWindow(observed);
+ await assert.rejects(t.adapter.dispatch({
+   ...t.input('arm'),phase:'perform',computerObservationId:ordinary.computerObservationId,
+   action:{type:'set_native_edit',automationId:'native-edit:884020',
+     expectedPreviousValue:'',value:'hello'}
+ }),/fresh protected semantic control snapshot/);
+ const native=await t.adapter.snapshotNativeWindow(observed);
+ assert.equal(native.controls.length,1);
+ assert.equal(native.controls[0]?.canSetNativeValue,true);
+ const passed=await t.adapter.dispatch({
+   ...t.input('arm'),phase:'perform',computerObservationId:native.computerObservationId,
+   action:{type:'set_native_edit',automationId:'native-edit:884020',
+     expectedPreviousValue:'',value:'hello'}
+ });
+ assert.deepEqual(passed,{uiaReadbackConfirmed:true,appEventConfirmed:false});
+ assert.equal(t.invoked.performed,1);
+});
+
+test('native Edit controls cannot be forged with raw window capabilities or replayed',async()=>{
+ const t=fixture();
+ const observed={windowId:t.windowId,agentDesktopLeaseId:lease,
+   observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const input={...t.input('arm'),phase:'perform' as const,
+   action:{type:'set_native_edit' as const,automationId:'native-edit:884020',
+     expectedPreviousValue:'',value:'hello'}};
+ await assert.rejects(t.adapter.dispatch(input),/fresh protected semantic control snapshot/);
+ const snapshot=await t.adapter.snapshotNativeWindow(observed);
+ const forged={...input,computerObservationId:snapshot.computerObservationId,
+   action:{...input.action,automationId:'native-edit:999999'}};
+ await assert.rejects(t.adapter.dispatch(forged),/fresh protected semantic control snapshot/);
+ await assert.rejects(t.adapter.dispatch({...input,computerObservationId:snapshot.computerObservationId}),
+   /fresh protected semantic control snapshot/);
  assert.equal(t.invoked.performed,0);
 });

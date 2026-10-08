@@ -14,7 +14,8 @@ using System.Windows.Automation;
 internal sealed class SemanticPolicy
 {
     public static bool Permitted(string? action) =>
-        action is "inspect" or "inspect-tree" or "scroll-top" or "scroll-bottom";
+        action is "inspect" or "inspect-tree" or "inspect-native-edits"
+            or "set-native-edit" or "scroll-top" or "scroll-bottom";
 
     public static void Demand(string? action)
     {
@@ -44,6 +45,7 @@ internal sealed class Request
     public string DesktopId { get; set; } = "";
     public string AutomationId { get; set; } = "";
     public string? Value { get; set; }
+    public string? ExpectedPreviousValue { get; set; }
     public string ObserverReady { get; set; } = "";
 }
 
@@ -245,17 +247,20 @@ internal static partial class DirectUia
             throw new InvalidOperationException("INVALID_TARGET_IDENTITY_OR_AUTOMATION_ID");
         if (!Guid.TryParseExact(req.DesktopId, "D", out Guid id) || id == Guid.Empty)
             throw new InvalidOperationException("INVALID_VIRTUAL_DESKTOP_ID");
-        if (req.Action == "set-value" && (req.Value is null || req.Value.Length > 2048))
-            throw new InvalidOperationException("INVALID_VALUE");
-        if (req.Action != "set-value" && req.Value is not null)
-            throw new InvalidOperationException("EXTRA_VALUE_NOT_ALLOWED");
-        if (req.Action is "set-value" or "scroll-top" or "scroll-bottom"
-            && req.AutomationId.Length == 0)
-            throw new InvalidOperationException("AUTOMATION_ID_REQUIRED");
-        if (req.Action == "set-value" && req.Value!.Any(char.IsControl))
-            throw new InvalidOperationException("CONTROL_CHARACTER_NOT_PERMITTED");
+        if (req.Action == "set-native-edit")
+        {
+            if (req.Value == null || req.ExpectedPreviousValue == null
+                || req.Value.Length > 512 || req.ExpectedPreviousValue.Length > 512
+                || req.Value.Any(char.IsControl) || req.ExpectedPreviousValue.Any(char.IsControl)
+                || !req.AutomationId.StartsWith("native-edit:", StringComparison.Ordinal))
+                throw new InvalidOperationException("NATIVE_EDIT_EXACT_VALUE_PRECONDITION_REQUIRED");
+        }
+        else if (req.Value != null || req.ExpectedPreviousValue != null)
+            throw new InvalidOperationException("EXTRA_NATIVE_EDIT_VALUES_NOT_ALLOWED");
         if (req.Action == "inspect-tree" && req.AutomationId != "__tree_snapshot__")
             throw new InvalidOperationException("TREE_SNAPSHOT_SENTINEL_REQUIRED");
+        if (req.Action == "inspect-native-edits" && req.AutomationId != "__native_edit_snapshot__")
+            throw new InvalidOperationException("NATIVE_EDIT_SNAPSHOT_SENTINEL_REQUIRED");
         return req;
     }
 
@@ -332,8 +337,15 @@ internal static partial class DirectUia
             ObserverGuard.AssertLive(request.ObserverReady);
         }
         Guard();
-        // Enumerate bounded, metadata-only eligible controls only AFTER the
-        // observer is armed; no tree traversal in --arm-target.
+        // Win32 HWND child enumeration is completely separate from UIA
+        // providers. Never invoke FindExactElement on the native-only route.
+        if (request.Action == "inspect-native-edits")
+            return NativeEdit.Inspect(hwnd, request.ProcessId, Guard);
+        if (request.Action == "set-native-edit")
+            return NativeEdit.Set(hwnd, request.ProcessId, request.AutomationId,
+                request.Value, request.ExpectedPreviousValue, Guard);
+        // UIA is restricted to guarded read-only metadata and unapproved
+        // candidate ScrollPattern; ValuePattern mutation remains quarantined.
         if (request.Action == "inspect-tree")
             return InspectTree(hwnd, request.ProcessId, Guard);
         AutomationElement element = FindExactElement(hwnd, request.AutomationId);

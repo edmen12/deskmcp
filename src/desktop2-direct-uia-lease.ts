@@ -19,6 +19,7 @@ export interface Desktop2UiaWindow {
 }
 export type Desktop2UiaAction =
   | { readonly type: 'set_value'; readonly automationId: string; readonly value: string }
+  | { readonly type: 'set_native_edit'; readonly automationId: string; readonly value: string; readonly expectedPreviousValue: string }
   | { readonly type: 'scroll'; readonly automationId: string; readonly to: 'top' | 'bottom' };
 export interface Desktop2UiaScope {
   readonly leaseId: string;
@@ -31,15 +32,18 @@ export interface Desktop2SemanticControl {
   readonly className: string;
   readonly canSetValue: boolean;
   readonly canScrollTopBottom: boolean;
+  readonly canSetNativeValue?: boolean;
 }
 export interface Desktop2UiaRequest {
-  readonly action: 'inspect' | 'inspect-tree' | 'set-value' | 'scroll-top' | 'scroll-bottom';
+  readonly action: 'inspect' | 'inspect-tree' | 'inspect-native-edits'
+    | 'set-value' | 'set-native-edit' | 'scroll-top' | 'scroll-bottom';
   readonly hwnd: number;
   readonly processId: number;
   readonly desktopId: string;
   readonly automationId: string;
   readonly observerReady: string;
   readonly value?: string;
+  readonly expectedPreviousValue?: string;
 }
 export interface Desktop2UiaInvoker {
   execute(mode: 'arm-target' | 'request', request: Desktop2UiaRequest): Promise<unknown>;
@@ -113,13 +117,24 @@ export class Desktop2DirectUiaLeaseCoordinator {
     }
     return id;
   }
-  private static nativeAction(action: Desktop2UiaAction): Pick<Desktop2UiaRequest, 'action' | 'automationId' | 'value'> {
+  private static nativeAction(action: Desktop2UiaAction): Pick<Desktop2UiaRequest, 'action' | 'automationId' | 'value' | 'expectedPreviousValue'> {
     const automationId = Desktop2DirectUiaLeaseCoordinator.validateId(action.automationId);
     if (action.type === 'set_value') {
       // A real protected WPF window stole the user's foreground on
       // 2026-10-09 during ValuePattern.SetValue despite WS_EX_NOACTIVATE.
       // Do not invoke this unsafe provider transport again.
       throw new Error('DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT');
+    }
+    if (action.type === 'set_native_edit') {
+      if (!/^native-edit:[1-9][0-9]{0,17}$/u.test(automationId)
+          || !Number.isSafeInteger(Number(automationId.slice('native-edit:'.length)))
+          || action.value.length > 512 || action.expectedPreviousValue.length > 512
+          || /[\x00-\x1f\x7f]/u.test(action.value)
+          || /[\x00-\x1f\x7f]/u.test(action.expectedPreviousValue)) {
+        throw new Error('A bounded native Edit observation and exact prior value are required.');
+      }
+      return { action:'set-native-edit', automationId, value:action.value,
+        expectedPreviousValue:action.expectedPreviousValue };
     }
     if (action.type === 'scroll' && (action.to === 'top' || action.to === 'bottom')) {
       return { action: action.to === 'top' ? 'scroll-top' : 'scroll-bottom', automationId };
@@ -195,10 +210,54 @@ export class Desktop2DirectUiaLeaseCoordinator {
     return controls;
   }
 
+  /**
+   * Native HWND-only inventory. Never enters the UIAutomation provider,
+   * never reads user text, and cannot mint a WPF TextBox write permit.
+   */
+  async inspectNativeControls(scope: Desktop2UiaScope): Promise<readonly Desktop2SemanticControl[]> {
+    const proof=await this.verify(scope);
+    const raw=await this.invoker.execute('request',{
+      action:'inspect-native-edits',hwnd:scope.window.hwnd,
+      processId:scope.window.processId,desktopId:proof.desktopId,
+      automationId:'__native_edit_snapshot__',observerReady:scope.observerReadyFile
+    });
+    await this.verify(scope,proof);
+    if(!raw || typeof raw!=='object' || Array.isArray(raw))
+      throw new Error('Invalid native Edit inventory');
+    const r=raw as Record<string,unknown>;
+    if(r.operation!=='inspect-native-edits' || r.hwnd!==scope.window.hwnd
+       || r.processId!==scope.window.processId
+       || r.uiaReadbackConfirmed!==false || r.appEventConfirmed!==false
+       || !Number.isInteger(r.scannedNodes) || Number(r.scannedNodes)<0
+       || Number(r.scannedNodes)>128 || !Array.isArray(r.controls)
+       || r.controls.length>32 || r.controls.length>Number(r.scannedNodes))
+      throw new Error('Native Edit snapshot does not match target identity');
+    const seen=new Set<string>();
+    return r.controls.map((entry:unknown)=>{
+      if(!entry||typeof entry!=='object'||Array.isArray(entry))
+        throw new Error('Invalid native Edit control');
+      const c=entry as Record<string,unknown>;
+      if(typeof c.automationId!=='string'
+         || !/^native-edit:[1-9][0-9]{0,17}$/u.test(c.automationId)
+         || !Number.isSafeInteger(Number(c.automationId.slice(12)))
+         || seen.has(c.automationId)
+         || c.controlType!=='NativeWin32.Edit'
+         || typeof c.className!=='string'
+         || (c.className.toLowerCase()!=='edit' && !c.className.startsWith('WindowsForms10.EDIT.'))
+         || c.canSetValue!==false || c.canScrollTopBottom!==false
+         || c.canSetNativeValue!==true)
+         throw new Error('Forged or duplicate native HWND edit capability');
+      seen.add(c.automationId);
+      return {automationId:c.automationId,controlType:'NativeWin32.Edit',
+        className:c.className,canSetValue:false,canScrollTopBottom:false,canSetNativeValue:true};
+    });
+  }
+
   async perform(
     scope: Desktop2UiaScope,
     action: Desktop2UiaAction
-  ): Promise<{ readonly uiaReadbackConfirmed: true; readonly appEventConfirmed: false }> {
+  ): Promise<{ readonly uiaReadbackConfirmed: true; readonly appEventConfirmed: false }
+    | { readonly textReadbackConfirmed: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }> {
     const parsed = Desktop2DirectUiaLeaseCoordinator.nativeAction(action);
     const proof = await this.verify(scope);
     const request: Desktop2UiaRequest = {
@@ -209,6 +268,14 @@ export class Desktop2DirectUiaLeaseCoordinator {
     // current Desktop1, protected window style and sticky switch tripwire.
     const result = await this.invoker.execute('request', request);
     await this.verify(scope, proof);
+    if(action.type==='set_native_edit') {
+      const native=result as {operation?:unknown;textReadbackConfirmed?:unknown;appEventConfirmed?:unknown;
+        foregroundSafetyUnproven?:unknown}|null;
+      if(!native || native.operation!=='set-native-edit' || native.textReadbackConfirmed!==true
+          || native.appEventConfirmed!==false || native.foregroundSafetyUnproven!==true)
+        throw new Error('Native HWND Edit write/readback not confirmed.');
+      return {textReadbackConfirmed:true,appEventConfirmed:false,foregroundSafetyUnproven:true};
+    }
     if (!result || typeof result !== 'object'
         || (result as { uiaReadbackConfirmed?: unknown }).uiaReadbackConfirmed !== true
         || (result as { appEventConfirmed?: unknown }).appEventConfirmed !== false) {

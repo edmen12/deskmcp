@@ -239,3 +239,80 @@ test('guarded inspect-tree rejects wrong HWND/PID, duplicates and forged mutable
   await assert.rejects(t.coordinator.inspectControls(scope));
  }
 });
+
+test('native HWND Edit snapshot is separately issued without querying ValuePattern',async()=>{
+ const t=fixture();
+ t.setResult({operation:'inspect-native-edits',hwnd,processId:pid,scannedNodes:1,
+  uiaReadbackConfirmed:false,appEventConfirmed:false,controls:[
+   {automationId:'native-edit:884020',controlType:'NativeWin32.Edit',
+    className:'WindowsForms10.EDIT.app.0.141b42a_r8_ad1',canSetValue:false,
+    canScrollTopBottom:false,canSetNativeValue:true}
+  ]});
+ const result=await t.coordinator.inspectNativeControls(scope);
+ assert.equal(result.length,1);
+ assert.equal(result[0]?.canSetNativeValue,true);
+ assert.deepEqual(t.requests[0],{mode:'request',request:{
+  action:'inspect-native-edits',hwnd,processId:pid,desktopId,
+  automationId:'__native_edit_snapshot__',observerReady:observerReadyFile
+ }});
+});
+
+test('native Edit mutation carries verified child ID and exact previous text, without UIA ValuePattern',async()=>{
+ const t=fixture();
+ t.setResult({operation:'set-native-edit',textReadbackConfirmed:true,
+  appEventConfirmed:false,foregroundSafetyUnproven:true});
+ const result=await t.coordinator.perform(scope,{
+  type:'set_native_edit',automationId:'native-edit:884020',value:'alpha',
+  expectedPreviousValue:'old'
+ });
+ assert.deepEqual(result,{textReadbackConfirmed:true,
+  appEventConfirmed:false,foregroundSafetyUnproven:true});
+ assert.deepEqual(t.requests[0],{mode:'request',request:{
+  action:'set-native-edit',hwnd,processId:pid,desktopId,
+  automationId:'native-edit:884020',value:'alpha',expectedPreviousValue:'old',
+  observerReady:observerReadyFile
+ }});
+});
+
+test('native Edit entrypoint denies guessed IDs, control characters, excess text and false app success before lease/native',async()=>{
+ const cases=[
+  {automationId:'WpfEdit',value:'x',expectedPreviousValue:''},
+  {automationId:'native-edit:0',value:'x',expectedPreviousValue:''},
+  {automationId:'native-edit:9999999999999999999',value:'x',expectedPreviousValue:''},
+  {automationId:'native-edit:123',value:'x'.repeat(513),expectedPreviousValue:''},
+  {automationId:'native-edit:123',value:'x',expectedPreviousValue:'\n'},
+  {automationId:'native-edit:123',value:'\t',expectedPreviousValue:''}
+ ];
+ for(const bad of cases){
+  const t=fixture();
+  await assert.rejects(t.coordinator.perform(scope,{type:'set_native_edit',...bad}));
+  assert.equal(t.requests.length,0);
+  assert.deepEqual(t.calls,[]);
+ }
+ const t=fixture();
+ t.setResult({operation:'set-native-edit',textReadbackConfirmed:true,
+  appEventConfirmed:true,foregroundSafetyUnproven:true});
+ await assert.rejects(t.coordinator.perform(scope,{
+  type:'set_native_edit',automationId:'native-edit:123',value:'x',expectedPreviousValue:''
+ }),/readback/);
+});
+
+test('native HWND Edit enumeration rejects forged PID, wrong classes, duplicate and unbounded controls',async()=>{
+ const good={automationId:'native-edit:123',controlType:'NativeWin32.Edit',
+  className:'Edit',canSetValue:false,canScrollTopBottom:false,canSetNativeValue:true};
+ const base={operation:'inspect-native-edits',hwnd,processId:pid,scannedNodes:1,
+  uiaReadbackConfirmed:false,appEventConfirmed:false};
+ for(const bad of [
+  {hwnd:hwnd+1,controls:[good]},
+  {processId:pid+1,controls:[good]},
+  {controls:[good,good],scannedNodes:2},
+  {controls:[{...good,canSetValue:true}]},
+  {controls:[{...good,className:'Chrome_RenderWidgetHostHWND'}]},
+  {controls:[{...good,automationId:'native-edit:abc'}]},
+  {controls:[{...good,canSetNativeValue:false}]},
+  {controls:[good],scannedNodes:129}
+ ]){
+  const t=fixture();t.setResult({...base,...bad});
+  await assert.rejects(t.coordinator.inspectNativeControls(scope));
+ }
+});

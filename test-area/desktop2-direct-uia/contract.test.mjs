@@ -61,7 +61,7 @@ test('no request value in successful output or event logging',()=>{
   assert.doesNotMatch(source,/appStateConfirmed = true/);
   assert.doesNotMatch(source,/Console\.WriteLine\([^)]*request\.Value/);
   assert.doesNotMatch(source,/Console\.Error\.WriteLine\([^)]*request\.Value/);
-  assert.match(source,/req\.Value\.Length > 2048/);
+  assert.match(source,/req\.Value\.Length > 512/);
 });
 
 test('legacy WPF+WinApp GUI matrix is quarantined before any GUI process launch',()=>{
@@ -143,4 +143,51 @@ test('real live Desktop2 focus-theft reproducer is hard-quarantined before any c
  const perform=source.slice(source.indexOf('private static object Perform('));
  assert.ok(perform.indexOf('if (request.Action == "set-value")') <
    perform.indexOf('AutomationElement element = FindExactElement('));
+});
+
+test('native Edit transport cannot use UIA, global focus, keyboard, clipboard or unbounded SendMessage',()=>{
+ const native=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
+ for(const forbidden of [
+  /\bValuePattern\s*\./,/\bAutomationElement\s*\./,/\bSendInput\s*\(/,
+  /\bSetForegroundWindow\s*\(/,/\bSetFocus\s*\(/,/\bSwitchDesktop\s*\(/,
+  /\bPostMessage\s*\(/,/\bGetClipboardData\s*\(/,/\bOpenClipboard\s*\(/
+ ])assert.doesNotMatch(native,forbidden);
+ for(const required of [
+  'EnumChildWindows(root', 'GetAncestor(child, 2) != root',
+  'rootPid != (uint)processId || childPid != rootPid',
+  'EsMultiLine | EsPassword | EsReadOnly','MaxChildren = 128',
+  'MaxEdits = 32','MaxTextLength = 512',
+  'WmGetTextLength','WmGetText','WmSetText',
+  'NATIVE_EDIT_EXPECTED_PREVIOUS_TEXT_MISMATCH',
+  'NATIVE_EDIT_EXTRA_EDIT_AFTER_SETTEXT',
+  'foregroundSafetyUnproven = true',
+  'Thread.Sleep(80)'
+ ])assert.ok(native.includes(required),required);
+ assert.match(native,/guard\(\);\s*AssertSupportedChild\(root, child, pid\);\s*if \(SendWriteBuffer/);
+ assert.match(native,/Thread.Sleep\(80\);\s*guard\(\);\s*if \(ReadText\(child, guard\) != value\)/);
+});
+
+test('native Edit request dispatch occurs only after Desktop2 observer and root protections, before UIA lookup',()=>{
+ const perform=source.slice(source.indexOf('private static object Perform('));
+ const guard=perform.indexOf('Guard();');
+ const inspect=perform.indexOf('NativeEdit.Inspect(hwnd, request.ProcessId, Guard)');
+ const set=perform.indexOf('NativeEdit.Set(hwnd, request.ProcessId, request.AutomationId');
+ const uia=perform.indexOf('FindExactElement(hwnd, request.AutomationId)');
+ assert.ok(guard>=0 && inspect>guard && set>guard && uia>inspect && uia>set);
+ assert.match(perform,/ctx\.VerifyNonActivatingTarget\(hwnd\)/);
+ assert.match(perform,/ObserverGuard\.AssertWatchedTarget\(request\.ObserverReady,/);
+ assert.match(source,/NATIVE_EDIT_EXACT_VALUE_PRECONDITION_REQUIRED/);
+ assert.match(source,/NATIVE_EDIT_SNAPSHOT_SENTINEL_REQUIRED/);
+ assert.match(source,/req\.ExpectedPreviousValue\.Any\(char\.IsControl\)/);
+});
+
+test('native Edit never aliases UIA set-value and cannot target WPF TextBox by guess',()=>{
+ const native=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
+ assert.match(native,/name\.Equals\("Edit", StringComparison\.OrdinalIgnoreCase\)/);
+ assert.match(native,/name\.StartsWith\("WindowsForms10\.EDIT\."/);
+ assert.doesNotMatch(native,/\bTextBox\b/);
+ assert.match(native,/automationId = "native-edit:" \+ pair\.child\.ToInt64\(\)/);
+ assert.match(native,/!automationId\.StartsWith\("native-edit:"/);
+ assert.match(source,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
+ assert.doesNotMatch(source,/\bpattern\.SetValue\s*\(/);
 });

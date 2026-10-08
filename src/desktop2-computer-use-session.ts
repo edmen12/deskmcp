@@ -7,7 +7,7 @@ import type { Desktop2ObserverLifecycle, Desktop2ObserverSession } from './deskt
 // The requester cannot supply their own observer ready path or lease ID.
 type Passive = Pick<Desktop2WindowInventory,'list'>;
 type Observer = Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>;
-type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'>>;
+type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'|'snapshotNativeWindow'>>;
 type UserAction = Omit<Desktop2ComputerAction,'agentDesktopLeaseId'|'observerReadyFile'>;
 
 export class Desktop2ComputerUseSession {
@@ -89,6 +89,20 @@ export class Desktop2ComputerUseSession {
       });
       await this.checked();
       return observed;
+    });
+  }
+
+  async snapshotNativeWindow(windowId:string):
+    Promise<Awaited<ReturnType<NonNullable<Actions['snapshotNativeWindow']>>>> {
+    return this.withMonitorHeld(async()=>{
+      const guard=await this.checked();
+      if(!this.actions.snapshotNativeWindow)
+        throw new Error('Native Win32 Edit inventory not available');
+      const snapshot=await this.actions.snapshotNativeWindow({
+        windowId,agentDesktopLeaseId:this.leaseId,observerReadyFile:guard.readyFile
+      });
+      await this.checked();
+      return snapshot;
     });
   }
 

@@ -7,7 +7,7 @@ import type { Desktop2DirectUiaLeaseCoordinator, Desktop2UiaAction, Desktop2Sema
 // Live enumeration MUST be passive (do not call WinApp focus/activate paths).
 type RegistryRuntime = Pick<ComputerUseRuntime, 'windows' | 'observations' | 'coordinator'>;
 type LeaseNativeAdapter = Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform'>
-  & Partial<Pick<Desktop2DirectUiaLeaseCoordinator, 'inspectControls'>>;
+  & Partial<Pick<Desktop2DirectUiaLeaseCoordinator, 'inspectControls' | 'inspectNativeControls'>>;
 export interface Desktop2ComputerAction {
   readonly phase: 'arm' | 'perform';
   readonly windowId: string;
@@ -98,6 +98,49 @@ export class Desktop2ComputerUseCandidate {
     });
   }
 
+  /**
+   * Separate capability provenance for REAL Win32 child Edit HWNDs.
+   * No UIAutomation snapshot or synthetic input/keyboard fallback.
+   */
+  async snapshotNativeWindow(input:{
+    windowId:string;agentDesktopLeaseId:string;observerReadyFile:string;
+  }):Promise<{readonly computerObservationId:string;readonly controls:readonly Desktop2SemanticControl[]}> {
+    return this.runtime.coordinator.exclusive(async()=>{
+      if(!this.leaseNative.inspectNativeControls)
+        throw new Error('Native Edit inventory provider unavailable');
+      const target=this.runtime.windows.resolve(input.windowId,await this.listLiveWindowsPassively());
+      if(target.title?.startsWith('DeskMCP Agent Desktop'))
+        throw new Error('Cannot inspect safety HUD');
+      const controls=await this.leaseNative.inspectNativeControls({
+        leaseId:input.agentDesktopLeaseId,window:{hwnd:target.hwnd,processId:target.processId},
+        observerReadyFile:input.observerReadyFile
+      });
+      if(!Array.isArray(controls)||controls.length>32)
+        throw new Error('Unbounded native Edit inventory');
+      const seen=new Set<string>();
+      for(const row of controls){
+        if(!row||typeof row.automationId!=='string'
+          || !/^native-edit:[1-9][0-9]{0,17}$/u.test(row.automationId)
+          || seen.has(row.automationId) || row.controlType!=='NativeWin32.Edit'
+          || row.canSetValue!==false || row.canScrollTopBottom!==false
+          || row.canSetNativeValue!==true)
+          throw new Error('Invalid native HWND capability');
+        seen.add(row.automationId);
+      }
+      const computerObservationId=this.runtime.observations.issue(
+        input.windowId,Date.now(),input.agentDesktopLeaseId);
+      if(this.semanticObservations.size>=128){
+        const oldest=this.semanticObservations.keys().next().value;
+        if(oldest)this.semanticObservations.delete(oldest);
+      }
+      this.semanticObservations.set(computerObservationId,{
+        windowId:input.windowId,leaseId:input.agentDesktopLeaseId.toLowerCase(),
+        observerReadyFile:input.observerReadyFile,controls:controls.map(c=>({...c}))
+      });
+      return {computerObservationId,controls};
+    });
+  }
+
   async dispatch(input: Desktop2ComputerAction): Promise<unknown> {
     return this.runtime.coordinator.exclusive(async () => {
       // Require an explicit lease-bound Computer Use observation, never a bare
@@ -142,7 +185,9 @@ export class Desktop2ComputerUseCandidate {
             || !allowed
             || (action.type === 'set_value' && !allowed.canSetValue)
             || (action.type === 'scroll' && !allowed.canScrollTopBottom)
-            || (action.type !== 'set_value' && action.type !== 'scroll')) {
+            || (action.type === 'set_native_edit' && !allowed.canSetNativeValue)
+            || (action.type !== 'set_value' && action.type !== 'scroll'
+                && action.type !== 'set_native_edit')) {
           throw new Error('Desktop2 action requires a fresh protected semantic control snapshot.');
         }
       }
