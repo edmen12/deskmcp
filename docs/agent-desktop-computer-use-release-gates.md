@@ -2,6 +2,15 @@
 
 **Owner requirement:** The Agent gets its own controllable application environment. While the Agent opens apps, types, clicks, drags, and inspects windows, Windows must NOT switch the human's current virtual desktop, steal the human mouse/keyboard focus, or launch Agent UI on Desktop 1. The human may freely switch between Windows virtual desktops; DeskMCP must never redirect the human to Desktop 1. **Do not upgrade the installed 0.9.23 before all required gates below pass and the owner approves installation.**
 
+## Actual Windows virtual Desktop 2 message-input candidate (source only)
+
+- [x] Windows-native target-window message input source added under `agent/native-desktop2-background-input-20261008`: `BackgroundWindowInput.cs`, `desktop2-background-input.ts`, and native bridge method. No desktop switch/global SendInput/SetForegroundWindow. Window root GUID, HWND process ID, and **pinned/shared-on-current-desktop** checks before dispatch. Candidate **not exposed to MCP**.
+- [x] Existing native host resolves actual Windows Desktop2 GUID while current desktop remains Desktop1. Hidden WinForms HWND move fails. Invisible `Opacity=0` NOACTIVATE toolwindow **moves successfully**, reports Desktop2 GUID/number, **but `onCurrentDesktop=true`** from Desktop1. This is a safety finding: GUID alone is insufficient; pinned/tool windows must be denied.
+- [x] TypeScript candidate builds; new tests **5/5**, computer/browser/Agent Desktop focused regression **70/70** PASS.
+- [ ] **True GUI input outcome NOT confirmed:** attempt to send window messages returned invalid HWND after the time-limited probe exited. No mouse/keyboard effect observed on a genuinely private Desktop2 GUI.
+- [ ] **C# native build NOT verified:** `dotnet.exe` SDK not installed/available; standalone net10.0-windows C# code remains source-only. Do not install software or upgrade runtime without owner approval.
+- [ ] Window bootstrap on real virtual Desktop2 that is **not pinned or visible on Desktop1**, does not activate/flicker/appear in taskbar, and is inspectable when human manually switches. Child windows and popups also need placement validation. See `docs/desktop2-background-input-candidate.md`.
+
 ## Evidence already gathered
 
 - [x] Candidate removes Control Panel `GoToDesktopNumber(0)` from both binding and timer paths; static regression test rejects Control Panel desktop-navigation capability. This is **source-only**, not installed.

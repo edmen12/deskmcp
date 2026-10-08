@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { PROJECT_ROOT } from './paths.js';
+import { buildDesktop2BackgroundInputArgs, type Desktop2MessageAction } from './desktop2-background-input.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT_BYTES = 256 * 1024;
@@ -158,5 +159,33 @@ export class AgentDesktopNativeBridge {
     if (options.restore) args.push('--restore');
     if (options.showNoActivate) args.push('--show-no-activate');
     return this.run<AgentDesktopMoveProcessResult>(args, timeoutMs + 3000);
+  }
+
+  // Candidate only: not exposed through MCP until genuine Desktop 2 GUI,
+  // app-state readback, lease ownership, and no-focus tests are accepted.
+  async backgroundWindowMessage(
+    hwnd: number,
+    expectedProcessId: number,
+    desktopId: string,
+    action: Desktop2MessageAction
+  ): Promise<{
+    readonly acceptedByWindowProcedure: boolean;
+    readonly confirmedAppState: boolean;
+    readonly desktopNumber: number;
+    readonly hostInputWasNotUsed: boolean;
+  }> {
+    const args = buildDesktop2BackgroundInputArgs(hwnd, expectedProcessId, desktopId, action);
+    const info = await this.windowInfo(hwnd);
+    if (info.desktopId.toLowerCase() !== desktopId.toLowerCase() || info.desktopNumber == null || info.desktopNumber < 2) {
+      throw new Error('Target HWND is not assigned to the requested Windows virtual Desktop 2+.');
+    }
+    const state = await this.info();
+    if (!state.virtualDesktopAccessor || state.currentDesktopNumber === undefined || state.currentDesktopNumber === null) {
+      throw new Error('Cannot verify the active Windows virtual desktop.');
+    }
+    if (state.currentDesktopNumber !== info.desktopNumber && info.onCurrentDesktop === true) {
+      throw new Error('Pinned/shared window is visible on Desktop 1; refusing Agent input.');
+    }
+    return this.run(args);
   }
 }
