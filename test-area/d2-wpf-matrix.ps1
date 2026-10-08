@@ -1,4 +1,10 @@
 ﻿$ErrorActionPreference='Stop'
+# QUARANTINE 2026-10-09: 4 user-confirmed unwanted virtual Desktop switches.
+# Legacy WinApp invoke/focus paths are NOT approved for true Windows Desktop2.
+# This deliberately refuses to launch ANY GUI until a replacement matrix using
+# the direct UIA bridge has passed passive real-switch event validation.
+Write-Output 'GUI_MATRIX_QUARANTINED_4_USER_CONFIRMED_DESKTOP_SWITCHES'
+exit 4
 $root=(Get-Location).Path
 $env:DOTNET_ROOT='C:\Users\User\Desktop\DeskMCP\runtime\dotnet-sdk'
 $env:DESKTOP_MCP_VDA_PATH='C:\Users\User\Desktop\DeskMCP\runtime\agent-desktop-runtime\win-x64\virtual-desktop-accessor\VirtualDesktopAccessor.dll'
