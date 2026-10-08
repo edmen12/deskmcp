@@ -48,3 +48,9 @@ node .\test-area\desktop2-direct-uia\offline-acceptance.mjs
 微软 UIA 官方文档：https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-control-patterns-overview 。WinApp CLI 当前说明：https://learn.microsoft.com/en-nz/windows/apps/dev-tools/winapp-cli/ui-automation 。其中 WinApp 的 `invoke` 等操作有“独占桌面”协调语义；该语义不必然等于 Windows 虚拟桌面切换，但绝不可以据此认定在真实 Desktop2 上零干扰。
 
 事件观察器：`test-area/desktop2-switch-observer/`；旧 WPF GUI 测试脚本由于 `invoke` 路径仍不安全，继续标记 **RED / 禁止重跑**。
+
+### 2026-10-09 06:03 MYT 实机发现：`ValuePattern.SetValue` 抢走 Desktop1 前台，已封锁
+
+更晚的受保护 WPF 实测推翻了此前“WS_EX_NOACTIVATE 足以避免直接 UIA 抢焦点”的假设。**窗口枚举、监控登记与只读元数据快照成功**（确认 `WpfEdit` / `WpfScroller`）；但第一次原生 `ValuePattern.SetValue` 使 Desktop2 的 WPF 窗口成为系统 foreground，同时用户仍在虚拟 Desktop1。监控立即锁存 `TARGET_FOREGROUND_EARLY_ABORT`，窗口仍收到激活与焦点消息，且文本被修改两次，其中一次多了意外的前导字符。**本次没有检测到虚拟桌面切换**，但已有实际 Desktop1 输入/焦点干扰。原始报告：`test-area/desktop2-real-acceptance/incident-20261009-direct-uia-focus-steal.md`。
+
+因此，当前候选版的 `set-value` **已在 TS 层与原生 C# policy 层提前拒绝**，C# 可执行程序中的 `pattern.SetValue` 已移除；之前的受监控 WPF live 测试脚本也被无条件封锁。这个结论只针对已确认不安全的直连 UIA 修改传输，**不代表所有 Computer Use 已关闭**。`inspect-tree` 对单个受保护 WPF fixture 的实测只读路径通过；`scroll` 尚未单独验收。任何文本编辑替代方案必须独立证明不抢前台、不碰共享键盘、不产生额外编辑。发布 RED，正式 MCP/安装版不变。

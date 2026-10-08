@@ -40,6 +40,10 @@ const noObserver=run(sdk,[dll,'--request',denyMissing,'--vda',vda],12000);
 assert.equal(noObserver.status,3,'Missing observer must deny with code 3');
 assert.match(noObserver.stderr,/PASSIVE_OBSERVER_NOT_READY/);
 console.log('DIRECT_UIA_NO_OBSERVER_DENIED_PASS');
+const quarantined=run(sdk,[dll,'--request',path.join(dir,'deny-quarantined-value.json'),'--vda',vda],12000);
+assert.equal(quarantined.status,3,'Known foreground-stealing ValuePattern must fail before touching GUI');
+assert.match(quarantined.stderr,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
+console.log('DIRECT_UIA_KNOWN_FOCUS_THEFT_TRANSPORT_QUARANTINED_PASS');
 const noInvoke=run(sdk,[dll,'--request',denyInvoke,'--vda',vda],12000);
 assert.equal(noInvoke.status,3,'Unverified invoke must deny with code 3');
 assert.match(noInvoke.stderr,/INVOKE_DISABLED_UNTIL_DESKTOP2_POPUP_ACTIVATION_ACCEPTANCE/);
@@ -54,7 +58,7 @@ assert.match(noArmWithWriteRequest.stderr,/ARM_TARGET_REQUIRES_READONLY_IDENTITY
 console.log('DIRECT_UIA_ARM_NEGATIVE_TESTS_PASS');
 const suite=run(process.execPath,['--test',path.join(dir,'contract.test.mjs')],12000);
 assert.equal(suite.status,0,'Static guard suite failed: '+(suite.stdout||'')+' '+(suite.stderr||''));
-console.log('DIRECT_UIA_STATIC_GUARDS_10_OF_10_PASS');
+console.log('DIRECT_UIA_STATIC_GUARDS_11_OF_11_PASS');
 const observerProject=path.join(worktree,'test-area','desktop2-switch-observer','DeskMCP.Desktop2SwitchObserver.csproj');
 const observerDll=path.join(worktree,'test-area','desktop2-switch-observer','bin','Release',
   'net10.0-windows','DeskMCP.Desktop2SwitchObserver.dll');

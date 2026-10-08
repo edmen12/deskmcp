@@ -116,11 +116,10 @@ export class Desktop2DirectUiaLeaseCoordinator {
   private static nativeAction(action: Desktop2UiaAction): Pick<Desktop2UiaRequest, 'action' | 'automationId' | 'value'> {
     const automationId = Desktop2DirectUiaLeaseCoordinator.validateId(action.automationId);
     if (action.type === 'set_value') {
-      if (typeof action.value !== 'string' || action.value.length > 2048
-          || /[\x00-\x1f\x7f]/u.test(action.value)) {
-        throw new Error('Desktop2 UIA text is invalid or over 2048 characters.');
-      }
-      return { action: 'set-value', automationId, value: action.value };
+      // A real protected WPF window stole the user's foreground on
+      // 2026-10-09 during ValuePattern.SetValue despite WS_EX_NOACTIVATE.
+      // Do not invoke this unsafe provider transport again.
+      throw new Error('DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT');
     }
     if (action.type === 'scroll' && (action.to === 'top' || action.to === 'bottom')) {
       return { action: action.to === 'top' ? 'scroll-top' : 'scroll-bottom', automationId };

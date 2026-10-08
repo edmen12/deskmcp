@@ -12,9 +12,10 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture() {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
-    pid:7171,readyPidMismatch:false,guardPresent:true};
+    pid:7171,readyPidMismatch:false,guardPresent:true,
+    produceReady:options.ready!==false};
   const launches: string[][]=[];
   const leases:Pick<AgentDesktopManager,'assertLease'>={
     async assertLease(id) {
@@ -34,16 +35,19 @@ function fixture() {
     launches.push([...args]);
     const [, ,events,ready,tripwire,watch]=args;
     assert.ok(events && ready && tripwire && watch);
-    writeFileSync(events,'');
-    writeFileSync(ready,JSON.stringify({
-      processId:state.readyPidMismatch?999:state.pid,
-      expectedDesktopIndex:0,firstStartUtc:new Date().toISOString(),
-      tripwireFile:tripwire,watchedTargetFile:watch,
-      hasVirtualDesktopNotifications:true,hasForegroundHook:true
-    }));
+    if(state.produceReady){
+      writeFileSync(events,'');
+      writeFileSync(ready,JSON.stringify({
+        processId:state.readyPidMismatch?999:state.pid,
+        expectedDesktopIndex:0,firstStartUtc:new Date().toISOString(),
+        tripwireFile:tripwire,watchedTargetFile:watch,
+        hasVirtualDesktopNotifications:true,hasForegroundHook:true
+      }));
+    }
     return child;
   };
-  const supervisor=new Desktop2ObserverLifecycle(leases,native,observerExe,vdaDll,launch);
+  const supervisor=new Desktop2ObserverLifecycle(leases,native,observerExe,vdaDll,launch,
+    options.startupTimeoutMs??15000);
   return {state,supervisor,launches,child};
 }
 async function withSession(run:(t:ReturnType<typeof fixture>,s:Awaited<ReturnType<Desktop2ObserverLifecycle['start']>>)=>Promise<void>) {
@@ -127,4 +131,18 @@ test('native passive window inventory and observer sources never call activation
  assert.match(source,/EnumWindows\(\(hwnd/);
  assert.match(source,/manager\.IsWindowOnCurrentVirtualDesktop\(hwnd\)/);
  assert.match(source,/vda\.CurrentDesktopNumber\(\) != 0/);
+});
+
+test('slow observer readiness is a distinct fail-closed timeout, not a forged PID; child is killed',async()=>{
+ const t=fixture({ready:false,startupTimeoutMs:150});
+ await assert.rejects(t.supervisor.start(leaseId),/PASSIVE_OBSERVER_READY_TIMEOUT_NO_GUI_STARTED/);
+ assert.equal(t.launches.length,1);
+ assert.equal(t.state.killed,true);
+ await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
+});
+
+test('observer startup budget rejects unbounded or unsupported timeout values',()=>{
+ for(const timeout of [0,99,20001,Number.NaN,1.5]){
+   assert.throws(()=>fixture({startupTimeoutMs:timeout}),/startup timeout/);
+ }
 });

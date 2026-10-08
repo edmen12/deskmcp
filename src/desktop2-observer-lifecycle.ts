@@ -51,8 +51,15 @@ export class Desktop2ObserverLifecycle {
       // A missing/broken helper must never raise an unhandled 'error' event.
       child.on('error',()=>{this.reason='Native observer process failed to start.';});
       return child;
-    }
-  ) {}
+    },
+    // Windows under heavy memory pressure can take several seconds to launch
+    // a framework-dependent .NET watcher. This is a readiness deadline,
+    // NEVER permission to send input without a fully trusted observer.
+    private readonly readyTimeoutMs:number=15000
+  ) {
+    if(!Number.isInteger(readyTimeoutMs) || readyTimeoutMs<100 || readyTimeoutMs>20000)
+      throw new Error('Invalid passive observer startup timeout.');
+  }
 
   private validatePaths():void {
     if (process.platform!=='win32') throw new Error('Desktop2 observer requires Windows.');
@@ -95,7 +102,7 @@ export class Desktop2ObserverLifecycle {
       this.child=child;
       this.session=session;
       let ready:Ready|undefined;
-      const deadline=Date.now()+3500;
+      const deadline=Date.now()+this.readyTimeoutMs;
       while(Date.now()<deadline) {
         if (child.exitCode!==null || this.reason) throw new Error('Passive observer exited before ready.');
         try {
@@ -107,7 +114,9 @@ export class Desktop2ObserverLifecycle {
         }
         await new Promise(resolve=>setTimeout(resolve,40));
       }
-      if (!ready || ready.processId!==child.pid || ready.expectedDesktopIndex!==0
+      if (!ready)
+        throw new Error('PASSIVE_OBSERVER_READY_TIMEOUT_NO_GUI_STARTED');
+      if (ready.processId!==child.pid || ready.expectedDesktopIndex!==0
           || ready.tripwireFile!==session.tripwireFile
           || ready.watchedTargetFile!==session.targetFile
           || ready.hasVirtualDesktopNotifications!==true

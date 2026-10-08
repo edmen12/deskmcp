@@ -99,15 +99,15 @@ test('arm binds verified real Desktop2 HWND/PID to valid live Agent lease, not a
   assert.ok(t.calls.filter(x=>x==='lease').length>=4,'lease/HUD must be checked before and after arm');
 });
 
-test('bounded ValuePattern routes to direct helper and retains readback-vs-app-event distinction',async()=>{
+test('confirmed real Desktop2 ValuePattern foreground theft is quarantined BEFORE any native call',async()=>{
   const t=fixture();
   t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:false});
-  const result=await t.coordinator.perform(scope,{type:'set_value',automationId:'WpfEdit',value:'Hello'});
-  assert.deepEqual(result,{uiaReadbackConfirmed:true,appEventConfirmed:false});
-  assert.deepEqual(t.requests[0],{mode:'request',request:{
-    action:'set-value',hwnd,processId:pid,desktopId,automationId:'WpfEdit',
-    observerReady:observerReadyFile,value:'Hello'
-  }});
+  await assert.rejects(
+    t.coordinator.perform(scope,{type:'set_value',automationId:'WpfEdit',value:'Hello'}),
+    /DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/
+  );
+  assert.deepEqual(t.calls,[]);
+  assert.equal(t.requests.length,0);
 });
 
 test('scroll top and bottom use only direct UIA ScrollPattern semantics',async()=>{
@@ -165,7 +165,7 @@ test('lease generation change after UIA action rejects even if UIA readback was 
   const t=fixture();
   t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:false});
   t.onExecute(()=>{t.state.generation=23;});
-  await assert.rejects(t.coordinator.perform(scope,{type:'set_value',automationId:'WpfEdit',value:'Hello'}),
+  await assert.rejects(t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'bottom'}),
     /generation/);
   assert.equal(t.requests.length,1,'native provider side effect cannot be rolled back');
 });
@@ -175,7 +175,7 @@ test('HUD loss or owner desktop switch during native call is detected on post-ch
     const t=fixture();
     t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:false});
     t.onExecute(()=>change(t.state));
-    await assert.rejects(t.coordinator.perform(scope,{type:'set_value',automationId:'WpfEdit',value:'abc'}));
+    await assert.rejects(t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'bottom'}));
     assert.equal(t.requests.length,1);
   }
 });

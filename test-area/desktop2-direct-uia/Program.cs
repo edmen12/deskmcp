@@ -14,10 +14,15 @@ using System.Windows.Automation;
 internal sealed class SemanticPolicy
 {
     public static bool Permitted(string? action) =>
-        action is "inspect" or "inspect-tree" or "set-value" or "scroll-top" or "scroll-bottom";
+        action is "inspect" or "inspect-tree" or "scroll-top" or "scroll-bottom";
 
     public static void Demand(string? action)
     {
+        // Real Windows Desktop2 protected WPF still stole Desktop1 foreground
+        // during ValuePattern.SetValue on 2026-10-09. The tripwire fired
+        // AFTER the irreversible activation and app text mutation.
+        if (action == "set-value")
+            throw new InvalidOperationException("DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT");
         if (action == "invoke")
             throw new InvalidOperationException("INVOKE_DISABLED_UNTIL_DESKTOP2_POPUP_ACTIVATION_ACCEPTANCE");
         if (!Permitted(action))
@@ -310,6 +315,8 @@ internal static partial class DirectUia
 
     private static object Perform(Request request, Native.Context ctx)
     {
+        if (request.Action == "set-value")
+            throw new InvalidOperationException("DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT");
         IntPtr hwnd = new(request.Hwnd);
         Guid targetId = Guid.ParseExact(request.DesktopId, "D");
         void Guard()
@@ -348,26 +355,6 @@ internal static partial class DirectUia
             Guard();
             return snapshot;
         }
-        if (request.Action == "set-value")
-        {
-            if (element.Current.ControlType != ControlType.Edit
-                || (element.Current.ClassName != "TextBox"
-                    && !element.Current.ClassName.StartsWith("WindowsForms10.EDIT.", StringComparison.Ordinal)))
-                throw new InvalidOperationException("ONLY_WPF_OR_WINFORMS_TEXTBOX_VALUEPATTERN");
-            if (!element.TryGetCurrentPattern(ValuePattern.Pattern, out object? raw) || raw is not ValuePattern pattern
-                || pattern.Current.IsReadOnly)
-                throw new InvalidOperationException("VALUEPATTERN_WRITABLE_REQUIRED");
-            Guard();
-            pattern.SetValue(request.Value!);
-            Guard();
-            string after = pattern.Current.Value;
-            Guard();
-            if (after != request.Value)
-                throw new InvalidOperationException("VALUEPATTERN_READBACK_MISMATCH");
-            // UIA readback is NOT proof of an app business-level callback.
-            return new { operation = "set-value", target = request.AutomationId,
-                uiaReadbackConfirmed = true, appEventConfirmed = false };
-        }
         if (request.Action is "scroll-top" or "scroll-bottom")
         {
             if (!element.TryGetCurrentPattern(ScrollPattern.Pattern, out object? raw) || raw is not ScrollPattern pattern
@@ -391,9 +378,9 @@ internal static partial class DirectUia
     // Offline self-test touches no windows, UIA clients, VDA or observer process.
     private static object SelfTest()
     {
-        bool[] allow = new[] {"inspect", "set-value", "scroll-top", "scroll-bottom"}
+        bool[] allow = new[] {"inspect", "inspect-tree", "scroll-top", "scroll-bottom"}
             .Select(SemanticPolicy.Permitted).ToArray();
-        bool[] deny = new[] {"invoke", "click", "drag", "send-keys", "focus", "hover", "wheel", "paste"}
+        bool[] deny = new[] {"set-value", "invoke", "click", "drag", "send-keys", "focus", "hover", "wheel", "paste"}
             .Select(SemanticPolicy.Permitted).ToArray();
         bool owner0 = false, owner1 = false, ownerNull = false;
         try { SemanticPolicy.DemandOwnerDesktop(0); owner0 = true; } catch {}

@@ -32,7 +32,7 @@ test('live observer is mandatory before and after each UIA action',()=>{
   assert.ok(perform);
   assert.match(perform,/ObserverGuard\.AssertLive\(request\.ObserverReady\)/);
   assert.match(perform,/ctx\.VerifyTarget\(hwnd, request\.ProcessId, targetId\)/);
-  assert.match(perform,/Guard\(\);\s*pattern\.SetValue\(request\.Value!\);\s*Guard\(\)/);
+  assert.doesNotMatch(perform,/\bpattern\.SetValue\s*\(/);
   assert.match(perform,/Guard\(\);\s*pattern\.SetScrollPercent\(ScrollPattern\.NoScroll, percent\);\s*Guard\(\)/);
   assert.match(source,/ready\.ProcessId <= 0/);
   assert.match(source,/PASSIVE_OBSERVER_WRONG_PROCESS/);
@@ -40,14 +40,16 @@ test('live observer is mandatory before and after each UIA action',()=>{
   assert.match(source,/DESKTOP_SWITCH_TRIPWIRE_LATCHED/);
 });
 
-test('direct UIA supports only bounded ValuePattern and ScrollPattern; invocation stays closed',()=>{
+test('real-Desktop2 direct UIA ValuePattern mutation is quarantined, read-only metadata and scroll are separate',()=>{
   for(const required of [
-    'ValuePattern.Pattern','pattern.SetValue(request.Value!)','pattern.Current.Value',
-    'ScrollPattern.Pattern','pattern.SetScrollPercent(ScrollPattern.NoScroll, percent)',
+    'ValuePattern.Pattern','ScrollPattern.Pattern',
+    'pattern.SetScrollPercent(ScrollPattern.NoScroll, percent)',
     'pattern.Current.VerticalScrollPercent',
-    'ONLY_WPF_OR_WINFORMS_TEXTBOX_VALUEPATTERN',
+    'DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT',
     'INVOKE_DISABLED_UNTIL_DESKTOP2_POPUP_ACTIVATION_ACCEPTANCE'
   ]) assert.ok(source.includes(required),required);
+  assert.doesNotMatch(source,/\bValuePattern\s+pattern[\s\S]*?\.SetValue\s*\(/);
+  assert.doesNotMatch(source,/\bpattern\.SetValue\s*\(/);
   assert.doesNotMatch(source,/\bInvokePattern\.Invoke\s*\(/);
   assert.doesNotMatch(source,/\bSetKeyboardFocus\s*\(/);
   assert.doesNotMatch(source,/\bLegacyIAccessiblePattern\s*\(/);
@@ -128,4 +130,17 @@ test('readonly UIA inspect and bounded tree are guarded before any provider call
   assert.match(tree,/TreeWalker\.ControlViewWalker/);
   assert.doesNotMatch(tree,/\.Current\.Value\b/);
   assert.doesNotMatch(tree,/\b(SetForegroundWindow|SetFocus|SendInput|SetCursorPos|SwitchDesktop)\s*\(/);
+});
+
+test('real live Desktop2 focus-theft reproducer is hard-quarantined before any child/GUI execution',()=>{
+ const harness=readFileSync(path.join(dir,'..','desktop2-real-acceptance','run-protected-once.mjs'),'utf8');
+ const quarantine=harness.indexOf("throw new Error('DIRECT_UIA_GUI_QUARANTINED_AFTER_CONFIRMED_FOREGROUND_THEFT')");
+ const guiLaunch=harness.indexOf('child=spawn(');
+ assert.ok(quarantine>0 && guiLaunch>quarantine);
+ const firstImport=harness.indexOf("import fs ");
+ assert.ok(quarantine<firstImport);
+ assert.match(source,/if \(action == "set-value"\)[\s\S]*?DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
+ const perform=source.slice(source.indexOf('private static object Perform('));
+ assert.ok(perform.indexOf('if (request.Action == "set-value")') <
+   perform.indexOf('AutomationElement element = FindExactElement('));
 });
