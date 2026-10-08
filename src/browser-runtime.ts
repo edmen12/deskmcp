@@ -312,16 +312,19 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
   }
 
   async start(command: string, agentDesktopLeaseId?: string): Promise<string> {
+    let isolatedDesktopObject: string | undefined;
     if (agentDesktopLeaseId) {
-      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for browser process placement.');
-      await this.agentDesktop.assertLease(agentDesktopLeaseId);
+      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for isolated browser launch.');
+      isolatedDesktopObject = await this.agentDesktop.desktopObjectNameForLease(agentDesktopLeaseId);
     }
     if (this.sessions.atCapacity()) await this.reconcile();
     const reservationId = this.sessions.reserveStart();
     let pid: number | undefined;
     let sessionId: string | undefined;
     try {
-      const result = await this.bridge.startProcess(command, 3000, 'powershell.exe', 'hidden', 'standard', 'job');
+      // Create the browser job on the isolated Win32 Desktop Object from the
+      // first instruction. Never launch on Desktop 1 and relocate later.
+      const result = await this.bridge.startProcess(command, 3000, 'powershell.exe', 'hidden', 'standard', 'job', undefined, undefined, isolatedDesktopObject);
       if (result.isError) throw new Error(`Browser process start failed: ${result.text}`);
       pid = extractStartedPid(result.text);
       sessionId = this.sessions.registerReserved(reservationId, pid, 'hidden');
@@ -607,29 +610,23 @@ export class BrowserRuntime {
     this.invalidateSessionObservations(record.sessionId);
   }
 
-  private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {
-    delete record.agentDesktopLeaseId;
-    record.agentDesktopPlacementFailures = 0;
-    record.lastActivityAt = Date.now();
-  }
-
-  private async refreshAgentDesktopPlacement(record: BrowserSessionRecord, timeoutMs = 250): Promise<void> {
+  // Scoped browsers are created directly on an isolated Win32 Desktop
+  // Object, not moved after launch. Do not detach on lease revocation:
+  // a formerly scoped browser must never become an unscoped Desktop 1 session.
+  private async refreshAgentDesktopPlacement(record: BrowserSessionRecord): Promise<void> {
     const leaseId = record.agentDesktopLeaseId;
-    if (!leaseId) return;
-    if (!this.agentDesktop || !await this.agentDesktop.isLeaseActive(leaseId)) {
-      this.detachAgentDesktopPlacement(record);
+    if (!leaseId) {
+      // Existing unscoped sessions do not gain permission to touch Desktop 1
+      // merely because they were created before an Agent lease began.
+      if (this.agentDesktop && await this.agentDesktop.hasActiveControls()) {
+        throw new Error('An Agent Desktop lease is active: unscoped browser actions are blocked until the lease stops.');
+      }
       return;
     }
-    try {
-      await this.processController.place(record.processSessionId, leaseId, timeoutMs);
-      record.agentDesktopPlacementFailures = 0;
-    } catch (error) {
-      if (!await this.agentDesktop.isLeaseActive(leaseId)) {
-        this.detachAgentDesktopPlacement(record);
-        return;
-      }
-      throw error;
+    if (!this.agentDesktop || !await this.agentDesktop.isLeaseActive(leaseId)) {
+      throw new Error('Agent Desktop browser lease revoked: browser must close instead of escaping isolation.');
     }
+    await this.agentDesktop.assertLease(leaseId);
   }
 
   private async reapSessions(): Promise<void> {
@@ -637,52 +634,29 @@ export class BrowserRuntime {
       const placed = [...this.sessions.values()].filter(record => Boolean(record.agentDesktopLeaseId));
       for (const record of placed) {
         try {
-          await this.refreshAgentDesktopPlacement(record, AGENT_DESKTOP_REAPER_PLACEMENT_TIMEOUT_MS);
+          await this.refreshAgentDesktopPlacement(record);
         } catch (error) {
-          record.agentDesktopPlacementFailures += 1;
-          let processActive = true;
-          try { processActive = await this.processController.active(record.processSessionId); }
-          catch { /* Treat process liveness as unknown; consecutive placement failures remain the fallback. */ }
-          if (!processActive || record.agentDesktopPlacementFailures >= AGENT_DESKTOP_REAPER_MAX_CONSECUTIVE_FAILURES) {
-            const detail = error instanceof Error ? error.message : String(error);
-            process.stderr.write(`[DeskMCP] Agent Desktop browser placement failed ${record.agentDesktopPlacementFailures} consecutive time(s); disposing session ${record.sessionId}: ${detail}\n`);
-            await this.disposeRecord(record);
-          }
+          const detail = error instanceof Error ? error.message : String(error);
+          process.stderr.write(`[DeskMCP] Agent Desktop browser scope failed; closing owned session ${record.sessionId}: ${detail}\n`);
+          await this.disposeRecord(record);
         }
       }
 
-      const now = Date.now();
-      const idleDirectSessions = [...this.sessions.values()].filter(record =>
-        !record.agentDesktopLeaseId && now - record.lastActivityAt >= this.directSessionIdleTimeoutMs
-      );
-      for (const record of idleDirectSessions) {
-        try { await this.disposeRecord(record); }
-        catch { /* Keep ownership if termination fails; retry on the next reaper pass. */ }
+      // A preexisting direct/headful browser may belong to Desktop 1.
+      // Do not close it via automatic idle reaping while an Agent lease exists.
+      // Its original idle expiry resumes after all Agent controls are stopped.
+      const agentControlActive = this.agentDesktop ? await this.agentDesktop.hasActiveControls() : false;
+      if (!agentControlActive) {
+        const now = Date.now();
+        const idleDirectSessions = [...this.sessions.values()].filter(record =>
+          !record.agentDesktopLeaseId && now - record.lastActivityAt >= this.directSessionIdleTimeoutMs
+        );
+        for (const record of idleDirectSessions) {
+          try { await this.disposeRecord(record); }
+          catch { /* Keep ownership if termination fails; retry on the next reaper pass. */ }
+        }
       }
     });
-  }
-
-  private async waitForInitialAgentDesktopWindow(
-    processSessionId: string,
-    leaseId: string,
-    deadline: number
-  ): Promise<void> {
-    while (Date.now() < deadline) {
-      await this.agentDesktop!.assertLease(leaseId);
-      const remaining = deadline - Date.now();
-      const timeoutMs = Math.max(100, Math.min(250, remaining));
-      try {
-        const placed = await this.processController.place(processSessionId, leaseId, timeoutMs, false);
-        if (placed.windows > 0) return;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!/No stable top-level window remained in the requested process tree before timeout\.?/iu.test(message)) {
-          throw error;
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    throw new Error('Agent Desktop browser window did not appear on the requested desktop before timeout.');
   }
 
   private async configuredExecutable(): Promise<string> {
@@ -732,8 +706,14 @@ export class BrowserRuntime {
       const agentDesktopLeaseId = options.agent_desktop_lease_id?.trim();
       const agentDesktop = Boolean(agentDesktopLeaseId);
       if (agentDesktop && !this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+      if (!agentDesktop && this.agentDesktop && await this.agentDesktop.hasActiveControls()) {
+        throw new Error('Agent Desktop is active: browser start requires agent_desktop_lease_id; an unscoped browser may open on Desktop 1.');
+      }
       if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
-      const headless = agentDesktop ? false : options.headless !== false;
+      if (agentDesktop && options.headless === false) {
+        throw new Error('Visible Agent Desktop browser is unavailable: old launch-then-move path could appear on Desktop 1. Use isolated headless browser with CDP screenshots.');
+      }
+      const headless = agentDesktop || options.headless !== false;
       const sessionId = randomUUID();
       const profileDir = path.join(this.root, 'profiles', profile.id);
       await this.ensureProfileDirectory(profile, profileDir);
@@ -748,9 +728,6 @@ export class BrowserRuntime {
           agentDesktopLeaseId
         );
         const readinessDeadline = Date.now() + timeout;
-        if (agentDesktopLeaseId) {
-          await this.waitForInitialAgentDesktopWindow(processSessionId, agentDesktopLeaseId, readinessDeadline);
-        }
         const portTimeout = Math.max(1, readinessDeadline - Date.now());
         const processState = this.processController.diagnostics
           ? {
@@ -1097,6 +1074,7 @@ export class BrowserRuntime {
       const normalized = validateSessionId(sessionId);
       const record = this.sessions.get(normalized);
       if (!record) return { session_id: normalized, closed: false };
+      if (!record.agentDesktopLeaseId) await this.refreshAgentDesktopPlacement(record);
       await this.disposeRecord(record);
       return { session_id: normalized, closed: true };
     });

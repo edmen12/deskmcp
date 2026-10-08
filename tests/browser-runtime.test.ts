@@ -292,6 +292,7 @@ test('owned browser process controller constrains the whole process tree to an A
   } as unknown as DesktopBackendBridge;
   const agentDesktop = {
     async assertLease(id: string) { asserted.push(id); return {}; },
+    async desktopObjectNameForLease(id: string) { asserted.push(id); return 'DeskMCP-Agent-' + id.replaceAll('-', ''); },
     async placeProcessTreeWindows(pid: number, id: string, options: { timeoutMs?: number } = {}) {
       placements.push({ pid, leaseId: id, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}) });
       return { processId: pid, moved: 1, windows: [{ hwnd: '1', desktopId: 'desktop-2' }] };
@@ -303,6 +304,7 @@ test('owned browser process controller constrains the whole process tree to an A
   assert.match(sessionId, /^[0-9a-f-]{36}$/i);
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0]?.[5], 'job');
+  assert.equal(startCalls[0]?.[8], 'DeskMCP-Agent-' + leaseId.replaceAll('-', ''), 'scoped Chrome must launch directly inside the isolated Win32 Desktop Object');
   assert.deepEqual(placements, []);
   const placedDuringStartup = await controller.place(sessionId, leaseId, 250, false);
   assert.deepEqual(placedDuringStartup, { moved: 1, windows: 1 });
@@ -611,7 +613,7 @@ test('idle direct browser sessions are automatically reaped and ephemeral profil
 });
 
 
-test('expired Agent Desktop placement detaches without closing the browser session', async t => {
+test('revoked Agent Desktop lease closes its browser instead of detaching to Desktop 1', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
   const executable = path.join(root, 'configured-browser.exe');
@@ -642,26 +644,24 @@ test('expired Agent Desktop placement detaches without closing the browser sessi
   activeLeases.delete(leaseA);
   const deadline = Date.now() + 3000;
   let sessions = await browser.list();
-  while (sessions.find(session => session.session_id === sessionA.session_id)?.agent_desktop !== false && Date.now() < deadline) {
+  while (sessions.some(session => session.session_id === sessionA.session_id) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
     sessions = await browser.list();
   }
 
-  assert.equal(sessions.length, 2);
-  assert.equal(sessions.find(session => session.session_id === sessionA.session_id)?.agent_desktop, false);
-  assert.equal(sessions.find(session => session.session_id === sessionB.session_id)?.agent_desktop, true);
-  assert.deepEqual(controller.terminated, []);
-
-  const closedA = await browser.close(sessionA.session_id);
-  assert.equal(closedA.closed, true);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0]?.session_id, sessionB.session_id);
+  assert.equal(sessions[0]?.agent_desktop, true);
   assert.deepEqual(controller.terminated, ['process-1']);
-  assert.equal((await browser.list()).length, 1);
+  assert.deepEqual(controller.placements, []);
+  // Revoked sessions must be destroyed, never reclassified as user sessions.
+  assert.deepEqual(await browser.close(sessionA.session_id), { session_id: sessionA.session_id, closed: false });
 
   await browser.closeAll();
 });
 
 
-test('Agent Desktop browser survives a transient placement refresh failure while the lease stays active', async t => {
+test('Agent Desktop browser supports CDP actions without background window relocation', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
   const executable = path.join(root, 'configured-browser.exe');
@@ -680,25 +680,21 @@ test('Agent Desktop browser survives a transient placement refresh failure while
   await browser.init();
 
   const session = await browser.start({ profile_id: 'transient-placement', agent_desktop_lease_id: leaseId });
-  controller.placementErrors.push(new Error('INJECTED_TRANSIENT_AGENT_DESKTOP_PLACEMENT_FAILURE'));
-
-  const deadline = Date.now() + 2500;
-  while (controller.placements.filter(row => row.reconcile).length < 2 && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-
+  assert.equal(session.headless, true);
+  // Browser session CDP must work with zero window-move calls.
+  await browser.newPage(session.session_id);
   const sessions = await browser.list();
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0]?.session_id, session.session_id);
   assert.equal(sessions[0]?.agent_desktop, true);
   assert.deepEqual(controller.terminated, []);
-  assert.ok(controller.placements.some(row => row.reconcile && row.timeoutMs === 500));
+  assert.deepEqual(controller.placements, []);
 
   await browser.closeAll();
 });
 
 
-test('Agent Desktop browser waits until a real window is placed before start succeeds', async t => {
+test('Agent Desktop browser starts headless and CDP-ready without relocating any window', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
   const executable = path.join(root, 'configured-browser.exe');
@@ -723,17 +719,11 @@ test('Agent Desktop browser waits until a real window is placed before start suc
 
   const started = await browser.start({ profile_id: 'delayed-window', agent_desktop_lease_id: leaseId, timeout_ms: 5000 });
   assert.equal(started.active, true);
-  assert.match(controller.starts[0]!, /--do-not-de-elevate/);
-  assert.match(controller.starts[0]!, /--start-minimized/);
-  assert.ok(controller.placements.length >= 3);
-  const startupPlacements = controller.placements.slice(0, 3);
-  assert.deepEqual(startupPlacements.map(row => row.leaseId), [leaseId, leaseId, leaseId]);
-  assert.deepEqual(startupPlacements.map(row => row.reconcile), [false, false, false]);
-  const reconcileCountBeforeNewPage = controller.placements.filter(row => row.reconcile).length;
+  assert.equal(started.headless, true);
+  assert.match(controller.starts[0]!, /--headless=new/);
+  assert.deepEqual(controller.placements, [], 'browser must never be moved after startup');
   await browser.newPage(started.session_id);
-  const reconciledPlacements = controller.placements.filter(row => row.reconcile);
-  assert.ok(reconciledPlacements.length > reconcileCountBeforeNewPage);
-  assert.equal(reconciledPlacements.at(-1)?.leaseId, leaseId);
+  assert.deepEqual(controller.placements, [], 'CDP actions must not move any browser window');
   assert.deepEqual(controller.terminated, []);
   await browser.closeAll();
 });
@@ -762,9 +752,8 @@ test('Agent Desktop placed browser can close independently while its placement l
 
   const session = await browser.start({ profile_id: 'lease-lifetime', agent_desktop_lease_id: leaseId });
   assert.equal((await browser.list())[0]?.agent_desktop, true);
-  const placementsAfterStart = controller.placements.length;
   await new Promise(resolve => setTimeout(resolve, 1100));
-  assert.ok(controller.placements.length > placementsAfterStart);
+  assert.deepEqual(controller.placements, [], 'active leases must not trigger virtual-desktop window moves');
 
   const closed = await browser.close(session.session_id);
   assert.equal(closed.closed, true);
@@ -931,5 +920,68 @@ test('browser select_page changes the active page and invalidates older session 
     browser.act(started.session_id, started.page_id, observed.browser_observation_id, [{ type: 'wait', duration_ms: 0 }], { screenshot: false }),
     /already-consumed|unknown/i
   );
+  await browser.closeAll();
+});
+
+test('active Agent Desktop refuses unscoped browser start and unsafe visible scoped start', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const controller = new FakeProcessController(path.join(root, 'browser'));
+  const leaseId = '55555555-5555-4555-8555-555555555555';
+  const manager = {
+    async hasActiveControls() { return true; },
+    async assertLease(id: string) { assert.equal(id, leaseId); return {}; },
+    async isLeaseActive() { return true; }
+  } as unknown as AgentDesktopManager;
+  const runtime = new BrowserRuntime(path.join(root, 'browser'), controller, artifacts, new FakeCdpDriver(), executable, manager);
+  await runtime.init();
+  await assert.rejects(
+    () => runtime.start({ profile_id: 'no-lease', headless: true }),
+    /requires agent_desktop_lease_id/i,
+    'even a hidden browser must not silently start outside an active Agent lease'
+  );
+  await assert.rejects(
+    () => runtime.start({ profile_id: 'visible-scoped', agent_desktop_lease_id: leaseId, headless: false }),
+    /Visible Agent Desktop browser is unavailable/i,
+    'legacy start-then-move is unsafe, even with a lease'
+  );
+  assert.deepEqual(controller.starts, []);
+  const started = await runtime.start({ profile_id: 'safe-scoped', agent_desktop_lease_id: leaseId });
+  assert.equal(started.headless, true);
+  assert.deepEqual(controller.leaseIds, [leaseId]);
+  assert.match(controller.starts[0]!, /--headless=new/);
+  assert.deepEqual(controller.placements, []);
+  await runtime.closeAll();
+});
+
+test('preexisting unscoped browser is never actionable during an active Agent Desktop lease', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'test browser placeholder', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root, 'artifacts'));
+  await artifacts.init();
+  const controller = new FakeProcessController(path.join(root, 'browser'));
+  let active = false;
+  const manager = { async hasActiveControls() { return active; } } as unknown as AgentDesktopManager;
+  const browser = new BrowserRuntime(path.join(root, 'browser'), controller, artifacts, new FakeCdpDriver(), executable, manager, 1000);
+  await browser.init();
+  const started = await browser.start({profile_id:'prior-user-browser', headless:false});
+  assert.equal(started.headless,false);
+  active = true;
+  await assert.rejects(() => browser.snapshot(started.session_id,started.page_id,{screenshot:false}), /unscoped browser actions are blocked/i);
+  await assert.rejects(() => browser.newPage(started.session_id), /unscoped browser actions are blocked/i);
+  await assert.rejects(() => browser.close(started.session_id), /unscoped browser actions are blocked/i);
+  // Two idle-reaper ticks must not close a headful user browser during control.
+  await new Promise(resolve => setTimeout(resolve, 2150));
+  assert.equal((await browser.list()).some(row => row.session_id === started.session_id), true);
+  assert.deepEqual(controller.terminated, []);
+  active = false;
+  const closed = await browser.close(started.session_id);
+  assert.equal(closed.closed,true);
   await browser.closeAll();
 });
