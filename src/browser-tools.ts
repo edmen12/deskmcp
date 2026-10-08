@@ -45,7 +45,8 @@ const elementSelectorSchema = z.string().min(1).max(4096).optional();
 const elementRefSchema = z.string().regex(/^(?:f[1-9][0-9]{0,6})*e[1-9][0-9]{0,6}$/u).optional();
 const browserActionTypeSchema = z.enum([
   'goto','click','hover','drag','fill','type_text','set_checked','press','wait',
-  'wait_selector','wait_url','wait_text','select','set_files','download','scroll','navigation'
+  'wait_selector','wait_url','wait_text','select','set_files','download','scroll','navigation',
+  'virtual_copy','virtual_paste'
 ]);
 
 function requireActionField(
@@ -102,6 +103,8 @@ const browserActionSchema = z.object({
     case 'click':
     case 'hover':
     case 'download':
+    case 'virtual_copy':
+    case 'virtual_paste':
       oneTarget(`Browser ${action.type} requires exactly one of selector or ref.`);
       break;
     case 'drag':
@@ -193,6 +196,8 @@ function normalizeBrowserAction(action: BrowserActionInput): ResolvedBrowserTool
     case 'type_text': return { type: 'type_text', ...target, text: action.text!, delay_ms: action.delay_ms ?? 0 };
     case 'set_checked': return { type: 'set_checked', ...target, checked: action.checked! };
     case 'press': return { type: 'press', ...target, key: action.key! };
+    case 'virtual_copy': return { type: 'virtual_copy', ...target };
+    case 'virtual_paste': return { type: 'virtual_paste', ...target };
     case 'wait': return { type: 'wait', duration_ms: action.duration_ms! };
     case 'wait_selector':
       return { type: 'wait_selector', ...target, state: action.state ?? 'visible', ...(action.timeout_ms !== undefined ? { timeout_ms: action.timeout_ms } : {}) };

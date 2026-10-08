@@ -7,6 +7,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
+import { PlaywrightBrowserDriver } from '../dist/src/browser-playwright.js';
+import { AgentClipboardStore } from '../dist/src/desktop2-clipboard.js';
 
 const root=process.cwd();
 const chrome='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -129,6 +131,34 @@ try {
  show('CHROME_BUTTON_AND_TEXTBOX',{clickText,textValue});
  if(clickText!=='CLICKED:DESKTOP2_AGENT_OK'||textValue!=='DESKTOP2_AGENT_OK')throw Error('CDP button/textbox readback failed');
  if(host('current-desktop').desktopNumber!==1)throw Error('Desktop switched during click and typing.');
+ const clipboardSequence=()=>{
+   // Read only the clipboard change counter, NEVER read the user's clipboard payload.
+   const ps=`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class DeskMcpClipSeq { [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber(); }'; [Console]::Write([DeskMcpClipSeq]::GetClipboardSequenceNumber())`;
+   return Number(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',ps],{encoding:'utf8',windowsHide:true,timeout:7500}).trim());
+ };
+ const seqBefore=clipboardSequence();
+ const driver=new PlaywrightBrowserDriver();
+ const driverPage=(await driver.listPages(port)).find(item=>item.url.startsWith('file:'));
+ if(!driverPage) throw Error('No clipboard test page in CDP driver');
+ const clip=new AgentClipboardStore();
+ const leaseA='11111111-1111-4111-8111-111111111111';
+ const leaseB='22222222-2222-4222-8222-222222222222';
+ await page.locator('#entry').fill('AGENT_CLIPBOARD_中文');
+ await page.locator('#entry').evaluate(el=>{el.focus();el.setSelectionRange(0,el.value.length)});
+ const copied=await driver.copyElementText(port,driverPage.page_id,'#entry');
+ clip.put(leaseA,copied);
+ try {clip.read(leaseB);throw Error('Clipboard leaked across leases');}
+ catch(e){if(!String(e.message).includes('empty or expired'))throw e;}
+ await page.locator('#entry').fill('');
+ await driver.pasteElementText(port,driverPage.page_id,clip.read(leaseA),'#entry');
+ const pasted=await page.locator('#entry').inputValue();
+ const seqAfter=clipboardSequence();
+ show('AGENT_CLIPBOARD_ISOLATION',{pasted,sequenceBefore:seqBefore,sequenceAfter:seqAfter,secondLeaseBlocked:true});
+ if(pasted!=='AGENT_CLIPBOARD_中文')throw Error('Virtual clipboard paste did not reach the input field');
+ if(seqAfter!==seqBefore)throw Error('Windows system clipboard changed during virtual copy/paste (could also be external user activity)');
+ clip.clearAll();
+ await page.locator('#entry').fill('DESKTOP2_AGENT_OK');
+ if(host('current-desktop').desktopNumber!==1)throw Error('Virtual clipboard changed active Desktop1');
  // Test a real Control+A shortcut + non-ASCII text insertion, routed by CDP.
  // This must not press the human's keyboard or change their active desktop.
  await page.locator('#entry').focus();

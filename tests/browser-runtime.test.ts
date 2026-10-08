@@ -101,6 +101,16 @@ class FakeCdpDriver implements BrowserCdpDriver {
   readonly actions: BrowserAction[][] = [];
   readonly dialogs: Array<{ pageId: string | undefined; accept: boolean; promptText?: string }> = [];
   downloadCalls = 0;
+  copiedText = 'CANDIDATE_CLIPBOARD_TEXT';
+  pasted: string[] = [];
+  async copyElementText(_port: number,_pageId: string | undefined,selector?: string): Promise<string> {
+    assert.equal(selector, '#copy');
+    return this.copiedText;
+  }
+  async pasteElementText(_port: number,_pageId: string | undefined,text?: string,selector?: string): Promise<void> {
+    assert.equal(selector, '#paste');
+    this.pasted.push(text ?? '');
+  }
   stateTokenValue = 'state-1';
   readonly pages: BrowserPageSummary[] = [{
     page_id: 'page-1',
@@ -983,5 +993,59 @@ test('preexisting unscoped browser is never actionable during an active Agent De
   active = false;
   const closed = await browser.close(started.session_id);
   assert.equal(closed.closed,true);
+  await browser.closeAll();
+});
+
+test('Agent virtual copy and paste are lease-scoped and OS clipboard chords are blocked',async t=>{
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'browser.exe');
+  await writeFile(executable,'fixture');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  const cdp=new FakeCdpDriver();
+  const leaseA='11111111-1111-4111-8111-111111111111';
+  const leaseB='22222222-2222-4222-8222-222222222222';
+  const live=new Set([leaseA,leaseB]);
+  const agentDesktop={
+    async assertLease(id:string){if(!live.has(id))throw new Error('Lease revoked');return {};},
+    async isLeaseActive(id:string){return live.has(id);}
+  } as unknown as AgentDesktopManager;
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,cdp,executable,agentDesktop);
+  await browser.init();
+  t.after(()=>browser.closeAll());
+  const a=await browser.start({agent_desktop_lease_id:leaseA,profile_id:'clipboard-a'});
+  const b=await browser.start({agent_desktop_lease_id:leaseB,profile_id:'clipboard-b'});
+  const freshA=await browser.snapshot(a.session_id,a.page_id,{screenshot:false});
+  await browser.act(a.session_id,a.page_id,freshA.browser_observation_id,[{type:'virtual_copy',selector:'#copy'}],{screenshot:false});
+  const freshB=await browser.snapshot(b.session_id,b.page_id,{screenshot:false});
+  await assert.rejects(
+    browser.act(b.session_id,b.page_id,freshB.browser_observation_id,[{type:'virtual_paste',selector:'#paste'}],{screenshot:false}),
+    /empty or expired/
+  );
+  const pasteA=await browser.snapshot(a.session_id,a.page_id,{screenshot:false});
+  await browser.act(a.session_id,a.page_id,pasteA.browser_observation_id,[{type:'virtual_paste',selector:'#paste'}],{screenshot:false});
+  assert.deepEqual(cdp.pasted,['CANDIDATE_CLIPBOARD_TEXT']);
+  const copyB=await browser.snapshot(b.session_id,b.page_id,{screenshot:false});
+  cdp.copiedText='B_DISTINCT';
+  await browser.act(b.session_id,b.page_id,copyB.browser_observation_id,[{type:'virtual_copy',selector:'#copy'}],{screenshot:false});
+  const pasteB=await browser.snapshot(b.session_id,b.page_id,{screenshot:false});
+  await browser.act(b.session_id,b.page_id,pasteB.browser_observation_id,[{type:'virtual_paste',selector:'#paste'}],{screenshot:false});
+  assert.deepEqual(cdp.pasted,['CANDIDATE_CLIPBOARD_TEXT','B_DISTINCT']);
+  for(const key of ['Control+C','Control+V','Control+X','Shift+Insert','ControlOrMeta+V']){
+    const observation=await browser.snapshot(a.session_id,a.page_id,{screenshot:false});
+    await assert.rejects(
+      browser.act(a.session_id,a.page_id,observation.browser_observation_id,[{type:'press',key}],{screenshot:false}),
+      /OS clipboard shortcuts are blocked/
+    );
+  }
+  const normal=await browser.snapshot(a.session_id,a.page_id,{screenshot:false});
+  await browser.act(a.session_id,a.page_id,normal.browser_observation_id,[{type:'press',key:'Control+A'}],{screenshot:false});
+  assert.equal(cdp.actions.at(-1)?.[0]?.type,'press');
+  live.delete(leaseA);
+  const stale=await browser.snapshot(b.session_id,b.page_id,{screenshot:false});
+  await browser.act(b.session_id,b.page_id,stale.browser_observation_id,[{type:'virtual_paste',selector:'#paste'}],{screenshot:false});
+  assert.equal(cdp.pasted.at(-1),'B_DISTINCT');
   await browser.closeAll();
 });

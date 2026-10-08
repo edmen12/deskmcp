@@ -728,6 +728,48 @@ export class PlaywrightBrowserDriver implements BrowserCdpDriver {
     };
   }
 
+  /** Copies text from a single observed DOM element without touching OS clipboard. */
+  async copyElementText(port: number, pageId: string | undefined, selector?: string, ref?: string): Promise<string> {
+    const state = await this.state(port);
+    const chosen = this.page(state, pageId);
+    return await this.locator(chosen.page, selector, ref).evaluate((element) => {
+      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        if (element instanceof HTMLInputElement && element.type.toLowerCase() === 'password') {
+          throw new Error('Agent virtual clipboard refuses password fields.');
+        }
+        const start = element.selectionStart;
+        const end = element.selectionEnd;
+        if (start === null || end === null || end <= start) {
+          throw new Error('Select the exact field text before virtual_copy.');
+        }
+        return element.value.slice(start, end);
+      }
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && element.contains(selection.anchorNode) && element.contains(selection.focusNode)) {
+        return selection.toString();
+      }
+      return (element as HTMLElement).innerText ?? element.textContent ?? '';
+    }, { timeout: 5000 });
+  }
+
+  /** Inserts text through Chromium CDP Input.insertText; never calls Ctrl+V or navigator.clipboard. */
+  async pasteElementText(port: number, pageId: string | undefined, text = '', selector?: string, ref?: string): Promise<void> {
+    if (text.length > 4096) throw new Error('Agent clipboard exceeds permitted paste size.');
+    const state = await this.state(port);
+    const selected = this.page(state, pageId);
+    const locator = this.locator(selected.page, selector, ref);
+    const editable = await locator.evaluate(element => {
+      if (element instanceof HTMLInputElement) {
+        return !element.disabled && !element.readOnly && element.type !== 'password' && element.type !== 'file';
+      }
+      if (element instanceof HTMLTextAreaElement) return !element.disabled && !element.readOnly;
+      return element instanceof HTMLElement && element.isContentEditable;
+    });
+    if (!editable) throw new Error('Virtual clipboard paste requires an editable non-password target.');
+    await locator.focus();
+    await selected.page.keyboard.insertText(text);
+  }
+
   async act(port: number, pageId: string | undefined, actions: readonly BrowserAction[], timeoutMs = 15_000): Promise<string> {
     const timeout = boundedTimeout(timeoutMs, 15_000);
     if (actions.length < 1 || actions.length > 20) throw new Error('Browser actions must contain between 1 and 20 items.');

@@ -24,6 +24,7 @@ import {
 } from './browser-cdp.js';
 import { acquirePidDirectoryLock, inspectPidDirectoryLock, type PidDirectoryLockLease } from './cross-process-lock.js';
 import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
+import { AgentClipboardStore, assertNoSystemClipboardChord } from './desktop2-clipboard.js';
 import {
   extractListedProcessPids,
   extractStartedPid,
@@ -390,6 +391,7 @@ export class BrowserRuntime {
   private readonly sessions = new Map<string, BrowserSessionRecord>();
   private readonly profilesInUse = new Map<string, string>();
   private readonly observations = new Map<string, BrowserObservationRecord>();
+  private readonly agentClipboard = new AgentClipboardStore();
   private cdp: BrowserCdpDriver | undefined;
   private cdpPromise: Promise<BrowserCdpDriver> | undefined;
   private readonly browserEngine: BrowserRuntimeInfo['engine'];
@@ -608,6 +610,9 @@ export class BrowserRuntime {
     this.sessions.delete(record.sessionId);
     this.profilesInUse.delete(record.profileId);
     this.invalidateSessionObservations(record.sessionId);
+    if (record.agentDesktopLeaseId && ![...this.sessions.values()].some(item => item.agentDesktopLeaseId === record.agentDesktopLeaseId)) {
+      this.agentClipboard.clearLease(record.agentDesktopLeaseId);
+    }
   }
 
   // Scoped browsers are created directly on an isolated Win32 Desktop
@@ -624,6 +629,7 @@ export class BrowserRuntime {
       return;
     }
     if (!this.agentDesktop || !await this.agentDesktop.isLeaseActive(leaseId)) {
+      this.agentClipboard.clearLease(leaseId);
       throw new Error('Agent Desktop browser lease revoked: browser must close instead of escaping isolation.');
     }
     await this.agentDesktop.assertLease(leaseId);
@@ -679,6 +685,9 @@ export class BrowserRuntime {
       this.sessions.delete(sessionId);
       this.profilesInUse.delete(record.profileId);
       this.invalidateSessionObservations(sessionId);
+      if (record.agentDesktopLeaseId && ![...this.sessions.values()].some(item => item.agentDesktopLeaseId === record.agentDesktopLeaseId)) {
+        this.agentClipboard.clearLease(record.agentDesktopLeaseId);
+      }
       try {
         await record.profileLock.release();
       } finally {
@@ -1062,7 +1071,32 @@ export class BrowserRuntime {
     if (currentStateToken !== observation.stateToken) {
       throw new Error('STALE browser observation: the page changed after the snapshot. Take a fresh browser snapshot before acting.');
     }
-    const effectivePageId = await (await this.driver()).act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
+    // Agent automation never presses the OS-shared clipboard shortcuts.
+    // Even on Desktop2 those would access the same Windows session clipboard.
+    if (record.agentDesktopLeaseId) {
+      for (const action of actions) {
+        if (action.type === 'press') assertNoSystemClipboardChord(action.key);
+      }
+    }
+    const virtualActions = actions.filter(action => action.type === 'virtual_copy' || action.type === 'virtual_paste');
+    let effectivePageId = observation.pageId;
+    const driver = await this.driver();
+    if (virtualActions.length) {
+      if (!record.agentDesktopLeaseId) throw new Error('Virtual Agent clipboard requires an owned Agent Desktop lease.');
+      if (actions.length !== 1) throw new Error('Virtual Agent clipboard action must be the only action for this browser observation.');
+      const action = virtualActions[0]!;
+      if (action.type === 'virtual_copy') {
+        if (!driver.copyElementText) throw new Error('Browser engine does not support isolated copy.');
+        const text = await driver.copyElementText(record.port, observation.pageId, action.selector, action.ref);
+        this.agentClipboard.put(record.agentDesktopLeaseId, text);
+      } else if (action.type === 'virtual_paste') {
+        if (!driver.pasteElementText) throw new Error('Browser engine does not support isolated paste.');
+        const text = this.agentClipboard.read(record.agentDesktopLeaseId);
+        await driver.pasteElementText(record.port, observation.pageId, text, action.selector, action.ref);
+      }
+    } else {
+      effectivePageId = await driver.act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
+    }
     await this.refreshAgentDesktopPlacement(record);
 
     return this.snapshot(record.sessionId, effectivePageId, options);
@@ -1085,9 +1119,13 @@ export class BrowserRuntime {
       clearInterval(this.sessionReaper);
       this.sessionReaper = undefined;
     }
-    await this.serializeMutation(async () => {
-      const records = [...this.sessions.values()];
-      for (const record of records) await this.disposeRecord(record);
-    });
+    try {
+      await this.serializeMutation(async () => {
+        const records = [...this.sessions.values()];
+        for (const record of records) await this.disposeRecord(record);
+      });
+    } finally {
+      this.agentClipboard.clearAll();
+    }
   }
 }

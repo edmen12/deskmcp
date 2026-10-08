@@ -98,6 +98,8 @@ export type BrowserAction =
   | { readonly type: 'type_text'; readonly selector?: string; readonly ref?: string; readonly text: string; readonly delay_ms?: number }
   | { readonly type: 'set_checked'; readonly selector?: string; readonly ref?: string; readonly checked: boolean }
   | { readonly type: 'press'; readonly selector?: string; readonly ref?: string; readonly key: string }
+  | { readonly type: 'virtual_copy'; readonly selector?: string; readonly ref?: string }
+  | { readonly type: 'virtual_paste'; readonly selector?: string; readonly ref?: string }
   | { readonly type: 'wait'; readonly duration_ms: number }
   | { readonly type: 'wait_selector'; readonly selector?: string; readonly ref?: string; readonly state?: 'visible' | 'hidden' | 'attached' | 'detached'; readonly timeout_ms?: number }
   | { readonly type: 'wait_url'; readonly url: string; readonly timeout_ms?: number }
@@ -159,6 +161,9 @@ export interface BrowserCdpDriver {
   find(port: number, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindData>;
   snapshot(port: number, pageId: string | undefined, options?: BrowserSnapshotOptions): Promise<BrowserSnapshotData>;
   stateToken(port: number, pageId: string | undefined, timeoutMs?: number): Promise<string>;
+  /** CDP-level text transfer: never uses Windows/navigator clipboard. */
+  copyElementText?(port: number, pageId: string | undefined, selector?: string, ref?: string): Promise<string>;
+  pasteElementText?(port: number, pageId: string | undefined, text?: string, selector?: string, ref?: string): Promise<void>;
   act(port: number, pageId: string | undefined, actions: readonly BrowserAction[], timeoutMs?: number): Promise<string>;
 }
 
