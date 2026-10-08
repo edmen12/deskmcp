@@ -3161,7 +3161,7 @@ internal sealed partial class ControlPanelRuntime
             AgentDesktopBindingDocument binding = await agentDesktopControl.BindCurrentDesktopAsync();
             UpdateAgentDesktopUi();
             string label = binding.DesktopNumber.HasValue ? "Desktop " + binding.DesktopNumber.Value : "the current desktop";
-            ShowToast("Agent Desktop bound to " + label + ". Returned to Desktop 1.", false);
+            ShowToast("Agent Desktop bound to " + label + ". You can switch desktops whenever you choose.", false);
         }
         catch (Exception error)
         {

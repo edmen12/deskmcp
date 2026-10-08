@@ -537,3 +537,21 @@ test('Agent Desktop resolves a window to its active lease by actual virtual desk
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('Control Panel never navigates Windows virtual desktops on behalf of Agent Desktop', async () => {
+  const source = await readFile(path.join(process.cwd(), 'control-panel', 'wpf', 'AgentDesktopControl.cs'), 'utf8');
+  const panel = await readFile(path.join(process.cwd(), 'control-panel', 'wpf', 'DeskMCPControlPanel.cs'), 'utf8');
+
+  // The control panel must not own the native desktop-navigation capability.
+  // Windows desktop switches belong to the person, not the background Agent.
+  assert.doesNotMatch(source, /\bGoToDesktopNumber\b/);
+  assert.doesNotMatch(source, /\bSwitchDesktop\s*\(/);
+  assert.doesNotMatch(panel, /Returned to Desktop 1/);
+
+  // Monitoring and lease heartbeats stay in place, even on a desktop the user visits.
+  const tick = source.split('private void Tick()')[1]?.split('private AgentDesktopControlPoolDocument UpdateControlDesktopNumbers')[0];
+  assert.ok(tick, 'Agent Desktop heartbeat Tick must remain available');
+  assert.match(tick, /FindControlByDesktopId\(controls,\s*desktopClient\.CurrentDesktopId\(\)\)/);
+  assert.match(tick, /WriteHudHeartbeats\(controls,\s*null\)/);
+  assert.match(tick, /TryRevokeAfterSafetyFailure/);
+});

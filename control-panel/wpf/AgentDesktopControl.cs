@@ -198,8 +198,6 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GetDesktopNumberByIdDelegate(Guid desktopId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int GoToDesktopNumberDelegate(int desktopNumber);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int RegisterPostMessageHookDelegate(IntPtr listenerHwnd, uint messageId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void UnregisterPostMessageHookDelegate(IntPtr listenerHwnd);
@@ -208,7 +206,6 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
     private readonly GetCurrentDesktopNumberDelegate getCurrentDesktopNumber;
     private readonly GetDesktopIdByNumberDelegate getDesktopIdByNumber;
     private readonly GetDesktopNumberByIdDelegate getDesktopNumberById;
-    private readonly GoToDesktopNumberDelegate goToDesktopNumber;
     private readonly RegisterPostMessageHookDelegate registerPostMessageHook;
     private readonly UnregisterPostMessageHookDelegate unregisterPostMessageHook;
     private bool disposed;
@@ -226,8 +223,6 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
                 NativeLibrary.GetExport(libraryHandle, "GetDesktopIdByNumber"));
             getDesktopNumberById = Marshal.GetDelegateForFunctionPointer<GetDesktopNumberByIdDelegate>(
                 NativeLibrary.GetExport(libraryHandle, "GetDesktopNumberById"));
-            goToDesktopNumber = Marshal.GetDelegateForFunctionPointer<GoToDesktopNumberDelegate>(
-                NativeLibrary.GetExport(libraryHandle, "GoToDesktopNumber"));
             registerPostMessageHook = Marshal.GetDelegateForFunctionPointer<RegisterPostMessageHookDelegate>(
                 NativeLibrary.GetExport(libraryHandle, "RegisterPostMessageHook"));
             unregisterPostMessageHook = Marshal.GetDelegateForFunctionPointer<UnregisterPostMessageHookDelegate>(
@@ -264,14 +259,6 @@ internal sealed class AgentDesktopVirtualDesktopClient : IDisposable
         if (desktopId == Guid.Empty) return null;
         int number = getDesktopNumberById(desktopId);
         return number >= 0 ? number : null;
-    }
-
-    public void GoToDesktopNumber(int desktopNumber)
-    {
-        if (disposed) throw new ObjectDisposedException(nameof(AgentDesktopVirtualDesktopClient));
-        if (desktopNumber < 0) throw new ArgumentOutOfRangeException(nameof(desktopNumber));
-        if (goToDesktopNumber(desktopNumber) != 1)
-            throw new InvalidOperationException("VirtualDesktopAccessor could not switch to the requested virtual desktop.");
     }
 
     public void RegisterDesktopSwitchHook(IntPtr listenerHwnd, uint messageId)
@@ -783,7 +770,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 });
                 WriteBindingsPool(bindings);
             }
-            desktopClient.GoToDesktopNumber(0);
+            // Binding is metadata only. The person decides when to switch desktops.
             RaiseStateChanged();
             return binding;
         });
@@ -1048,32 +1035,16 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 }
             }
 
-            Guid currentDesktopId = desktopClient.CurrentDesktopId();
-            currentControl = FindControlByDesktopId(controls, currentDesktopId);
-            if (currentControl != null)
-            {
-                string evidence = DateTime.UtcNow.ToString("O") +
-                    " leaseId=" + currentControl.LeaseId +
-                    " desktopNumber=" + (currentControl.DesktopNumber.HasValue ? currentControl.DesktopNumber.Value.ToString() : "?") +
-                    " " + AgentDesktopForegroundProbe.Describe();
-                try
-                {
-                    RuntimeReliability.AppendAllTextBounded(
-                        Path.Combine(root, "foreground-invariant.log"),
-                        evidence + Environment.NewLine);
-                }
-                catch { }
-                HideOverlayOnly();
-                desktopClient.GoToDesktopNumber(0);
-                WriteHudHeartbeats(controls, null);
-                lastHeartbeatUtc = DateTime.UtcNow;
-                return;
-            }
+            currentControl = FindControlByDesktopId(controls, desktopClient.CurrentDesktopId());
+            // Visiting a controlled desktop is a user navigation event, not an
+            // Agent input failure. Never issue virtual-desktop navigation here.
+            // Agent input is separately restricted to an owned Desktop Object or
+            // verified semantic UIA targets; global pointer injection stays blocked.
             if (overlay != null) HideOverlayOnly();
 
             if (DateTime.UtcNow - lastHeartbeatUtc >= HeartbeatInterval)
             {
-                WriteHudHeartbeats(controls, currentControl?.LeaseId);
+                WriteHudHeartbeats(controls, null);
                 lastHeartbeatUtc = DateTime.UtcNow;
             }
         }
