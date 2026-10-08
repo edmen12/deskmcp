@@ -502,7 +502,9 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
     let assertedAgentLeaseId: string | undefined;
     let requestedAgentDesktopObjectLeaseId: string | undefined;
     let failAgentIsolation = false;
+    let activeAgentLease = false;
     const fakeAgentDesktop = {
+      async hasActiveControls() { return activeAgentLease; },
       async assertLease(leaseId: string) {
         assertedAgentLeaseId = leaseId;
         return {};
@@ -718,6 +720,17 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       });
       assert.equal(afterTerminate.isError, true);
       assert.match(JSON.stringify(afterTerminate.content), /Unknown or unowned process session/);
+
+      // A simulated active lease must reject even an apparently hidden shell
+      // with no scope: child GUI processes could otherwise open on Desktop 1.
+      activeAgentLease = true;
+      const unscopedWhileControlled = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: { command: 'node -e "process.exit(0)"', timeout_ms: 1000, shell: 'cmd.exe', window_mode: 'hidden' }
+      });
+      assert.equal(unscopedWhileControlled.isError, true);
+      assert.match(JSON.stringify(unscopedWhileControlled.content), /requires its agent_desktop_lease_id/);
+      activeAgentLease = false;
 
       const processAuditText = await readFile(auditPath, 'utf8');
       assert.equal(processAuditText.includes(processCommand), false);

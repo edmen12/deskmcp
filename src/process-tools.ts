@@ -212,6 +212,20 @@ function sanitizeProcessResult(
 
 const sessionSchema = z.string().uuid();
 
+// A live Agent lease is a hard launch boundary. A hidden shell can still
+// spawn visible children, so window_mode='hidden' is not an exemption.
+export async function assertAgentDesktopProcessLaunchScope(
+  agentDesktop: AgentDesktopManager | undefined,
+  leaseId: string | undefined
+): Promise<void> {
+  if (!leaseId && agentDesktop && await agentDesktop.hasActiveControls()) {
+    throw new PolicyDeniedError(
+      'An Agent Desktop lease is active: process launch requires its agent_desktop_lease_id. ' +
+      'Unscoped commands may open windows on Desktop 1 and are blocked until the lease stops.'
+    );
+  }
+}
+
 export function registerProcessTools(
   server: McpServer,
   bridge: DesktopBackendBridge,
@@ -224,7 +238,7 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails. process_lifetime=job is only allowed with Agent Desktop and is intended for GUI launchers whose shell exits while owned descendants remain alive.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When any Agent Desktop control lease is active, agent_desktop_lease_id is mandatory for every process launch (even a hidden shell). DeskMCP creates the process directly inside that isolated Desktop Object and fails closed if the lease is invalid or placement verification fails. process_lifetime=job is only allowed with Agent Desktop and is intended for GUI launchers whose shell exits while owned descendants remain alive.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -263,6 +277,7 @@ export function registerProcessTools(
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        await assertAgentDesktopProcessLaunchScope(agentDesktop, agent_desktop_lease_id);
         if (process_lifetime === 'job' && !agent_desktop_lease_id) {
           throw new PolicyDeniedError('process_lifetime=job is only supported with agent_desktop_lease_id so owned GUI descendants remain scoped to an Agent Desktop lease.');
         }
@@ -270,7 +285,7 @@ export function registerProcessTools(
         if (agent_desktop_lease_id) {
           if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
           if (elevation === 'admin') {
-            throw new PolicyDeniedError('Administrator process launch is not supported inside Agent Desktop background control. Exit Agent Control or launch without agent_desktop_lease_id.');
+            throw new PolicyDeniedError('Administrator process launch is not supported inside Agent Desktop background control. Stop Agent Control before requesting a user-desktop elevation.');
           }
           desktopObjectName = await agentDesktop.desktopObjectNameForLease(agent_desktop_lease_id);
         }

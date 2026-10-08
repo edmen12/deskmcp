@@ -521,7 +521,7 @@ test('Agent Desktop target windows inherit lease scope even when the caller omit
   assert.equal(lookupCount, 1);
 });
 
-test('Desktop 1 actions require an explicit escape while Agent Desktop control is active', async () => {
+test('Desktop 1 actions are blocked throughout an active lease even with an explicit override', async () => {
   const activeAgentDesktop = {
     async hasActiveControls() {
       return true;
@@ -530,10 +530,11 @@ test('Desktop 1 actions require an explicit escape while Agent Desktop control i
 
   await assert.rejects(
     assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, false),
-    /allow_user_desktop=true/i
+    /blocked while an Agent Desktop lease is active/i
   );
-  await assert.doesNotReject(
-    assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, true)
+  await assert.rejects(
+    assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, true),
+    /cannot bypass an active Agent Desktop lease/i
   );
   await assert.doesNotReject(
     assertUnscopedUserDesktopActionAllowed(

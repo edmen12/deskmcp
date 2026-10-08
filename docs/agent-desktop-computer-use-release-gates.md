@@ -9,6 +9,8 @@
 - [x] WPF TextBox literal insertion and empty-value `set_value` verified with readback; unsupported WinForms empty-value path rejected.
 - [x] Scoped left click maps to `ui invoke` only for uniquely inspected, enabled, on-screen, invokable Button/CheckBox/RadioButton/ComboBox with appropriate inspected patterns. Actual MCP E2E on isolated WPF probe: Button, CheckBox, RadioButton, ComboBox all PASS; invalid target and right click rejected. **No physical mouse click.**
 - [x] During the semantic-action probe, native current Windows desktop remained **Desktop 1** and foreground-invariant log count remained **8**, after the user's four known earlier manual desktop visits. The Agent didn't add new switch evidence during this probe.
+- [x] An active Agent Desktop lease now rejects **all unscoped user-desktop actions**, including requests explicitly setting the legacy `allow_user_desktop=true` override. Manual human desktop navigation is unaffected. This closes an avoidable route for the Agent to control Desktop 1.
+- [x] An active lease also blocks **all unscoped `desktop_start_process` calls**, including hidden shells whose children could otherwise show on Desktop 1; process launch must use the active `agent_desktop_lease_id`. A scoped process starts directly inside the Agent Win32 Desktop Object instead of briefly opening on Desktop 1 and then moving.
 - [x] Source build and sequential test suite **225/225 PASS**; focused suite **37/37 PASS** (before newest full run); previous .NET Control Panel release build **0 warnings / 0 errors** on parent candidate.
 
 ## Unresolved: release blockers

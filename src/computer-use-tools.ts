@@ -222,12 +222,15 @@ export async function assertUnscopedUserDesktopActionAllowed(
   if (
     !effectiveAgentDesktopLeaseId &&
     agentDesktop &&
-    !allowUserDesktop &&
     await agentDesktop.hasActiveControls()
   ) {
+    // The human may navigate between desktops; that does not grant the Agent
+    // control of the user's foreground desktop. Do not allow an MCP boolean
+    // to silently escape the Agent Desktop isolation boundary.
     throw new PolicyDeniedError(
-      'Unscoped user-desktop actions are blocked while Agent Desktop control is active. ' +
-      'Pass allow_user_desktop=true only for intentional control of Desktop 1.'
+      allowUserDesktop
+        ? 'allow_user_desktop cannot bypass an active Agent Desktop lease. Stop Agent control before targeting the user desktop.'
+        : 'User-desktop actions are blocked while an Agent Desktop lease is active. Stop Agent control before targeting Desktop 1.'
     );
   }
 }
@@ -470,7 +473,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Single left click on a uniquely observed UIA-invokable Button/CheckBox/RadioButton/ComboBox with a verified semantic control pattern maps to semantic invoke, NOT physical mouse input; unsupported clicks, double/right click, hover, drag, wheel injection and global/system keyboard input remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop process trees run inside a lease-scoped isolated Win32 desktop object, and the observation retains that lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, wait, and a narrowly gated send_keys (verbatim printable ASCII to a uniquely matched WinForms Edit or WPF TextBox via post-message, with readback verification) are allowed. Single left click on a uniquely observed UIA-invokable Button/CheckBox/RadioButton/ComboBox with a verified semantic control pattern maps to semantic invoke, NOT physical mouse input; unsupported clicks, double/right click, hover, drag, wheel injection and global/system keyboard input remain fail-closed. While any Agent Desktop lease is active, unscoped user-desktop actions are blocked even when allow_user_desktop=true; the human may continue to navigate Windows manually.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -486,7 +489,7 @@ export function registerComputerUseTools(
         transport: z.literal('send-input').optional().describe('Remote callers may request normal SendInput only. DeskMCP may select a restricted window-targeted transport internally for Agent Desktop background mode.'),
         verbatim: z.boolean().optional().default(false),
         allow_system_keys: z.boolean().optional().default(false),
-        allow_user_desktop: z.boolean().optional().default(false).describe('Explicitly allow an unscoped action on the normal user desktop while an Agent Desktop lease is active.'),
+        allow_user_desktop: z.boolean().optional().default(false).describe('Legacy flag only. Never bypasses an active Agent Desktop lease; stop Agent control before normal desktop actions.'),
         from: z.string().min(1).max(512).optional(),
         drag_to: z.string().min(1).max(512).optional(),
         hold_ms: z.number().int().min(0).max(5000).optional(),
