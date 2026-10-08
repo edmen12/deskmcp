@@ -36,3 +36,12 @@ test('record action stamps without user text or target values',()=>{
  assert.match(wpf,/Trace-Action 'START' 'winapp-uia' \$params\[0\]/);
  assert.doesNotMatch(wpf,/Trace-Action[^\n]*\$params\[2\]/);
 });
+
+test('native HWND message bridge refuses background input while owner is not on Desktop1',()=>{
+ const bridge=readFileSync(path.join(here,'..','..','agent-desktop-host','BackgroundWindowInput.cs'),'utf8');
+ assert.match(bridge,/if \(current\.Value != 0\)/);
+ assert.match(bridge,/Owner left Desktop 1; autonomous Agent background input is paused/);
+ assert.match(bridge,/if \(currentDesktopNumber\(\) != 0\)/);
+ assert.match(bridge,/Owner desktop changed during background input/);
+ assert.match(bridge,/IsWindowOnCurrentVirtualDesktop\(root\)/);
+});

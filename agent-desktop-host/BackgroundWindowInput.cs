@@ -131,8 +131,12 @@ internal static class BackgroundWindowInput
             int? current = currentDesktopNumber();
             if (!current.HasValue)
                 throw new InvalidOperationException("Cannot verify the current Windows virtual desktop.");
-            if (current.Value != targetDesktop.Value && manager.IsWindowOnCurrentVirtualDesktop(root))
-                throw new InvalidOperationException("Window is also exposed on the user's active desktop; pinned/shared windows cannot receive Agent background input.");
+            // Autonomous background input is valid only while the owner is still
+            // on Desktop 1 (VDA index zero). Owner Desktop 2 visits pause the Agent.
+            if (current.Value != 0)
+                throw new InvalidOperationException("Owner left Desktop 1; autonomous Agent background input is paused.");
+            if (manager.IsWindowOnCurrentVirtualDesktop(root))
+                throw new InvalidOperationException("Window is also exposed on the owner's active Desktop 1; pinned/shared windows cannot receive Agent background input.");
         }
         finally
         {
@@ -251,6 +255,12 @@ internal static class BackgroundWindowInput
                     Deliver(hwnd, WmChar, c, new IntPtr(1));
                 break;
         }
+
+        // A successful WM dispatch is not permission to continue if the owner
+        // changed desktops during the operation. This cannot prevent the first
+        // unexpected switch; the independent tripwire must catch fast round trips.
+        if (currentDesktopNumber() != 0)
+            throw new InvalidOperationException("Owner desktop changed during background input; pause all further Agent actions.");
 
         return new {
             acceptedByWindowProcedure = true,
