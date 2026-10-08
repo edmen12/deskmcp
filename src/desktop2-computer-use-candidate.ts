@@ -1,12 +1,13 @@
 import type { ComputerWindow } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
-import type { Desktop2DirectUiaLeaseCoordinator, Desktop2UiaAction } from './desktop2-direct-uia-lease.js';
+import type { Desktop2DirectUiaLeaseCoordinator, Desktop2UiaAction, Desktop2SemanticControl } from './desktop2-direct-uia-lease.js';
 
 // Candidate handoff from the ACTUAL Computer Use one-time observation/window
 // capability registries. Not registered as a production MCP tool.
 // Live enumeration MUST be passive (do not call WinApp focus/activate paths).
 type RegistryRuntime = Pick<ComputerUseRuntime, 'windows' | 'observations' | 'coordinator'>;
-type LeaseNativeAdapter = Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform'>;
+type LeaseNativeAdapter = Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform'>
+  & Partial<Pick<Desktop2DirectUiaLeaseCoordinator, 'inspectControls'>>;
 export interface Desktop2ComputerAction {
   readonly phase: 'arm' | 'perform';
   readonly windowId: string;
@@ -22,6 +23,80 @@ export class Desktop2ComputerUseCandidate {
     private readonly leaseNative: LeaseNativeAdapter,
     private readonly listLiveWindowsPassively: () => Promise<readonly ComputerWindow[]>
   ) {}
+
+  // Called only through Desktop2ComputerUseSession after observer+lease
+  // checks. Issue window capabilities from native passive enumeration; no
+  // WinApp list/find or UIA provider calls occur in this bootstrap phase.
+  async discoverWindows(agentDesktopLeaseId: string): Promise<readonly {
+    windowId: string; computerObservationId: string; window: ComputerWindow;
+  }[]> {
+    return this.runtime.coordinator.exclusive(async () => {
+      const windows = await this.listLiveWindowsPassively();
+      if (windows.length > 100) throw new Error('Passive Desktop2 window inventory too large.');
+      return windows.map(window => {
+        const windowId = this.runtime.windows.issue(window);
+        const computerObservationId = this.runtime.observations.issue(
+          windowId, Date.now(), agentDesktopLeaseId
+        );
+        return { windowId, computerObservationId, window };
+      });
+    });
+  }
+
+  private readonly semanticObservations = new Map<string, {
+    windowId: string; leaseId: string; observerReadyFile: string; controls: readonly Desktop2SemanticControl[];
+  }>();
+
+  /**
+   * Called only after --arm-target succeeded. Unlike plain window discovery,
+   * this issues an action token ONLY after a guarded, bounded UIA tree read.
+   */
+  async snapshotWindow(input: {
+    windowId: string; agentDesktopLeaseId: string; observerReadyFile: string;
+  }): Promise<{ readonly computerObservationId: string; readonly controls: readonly Desktop2SemanticControl[] }> {
+    return this.runtime.coordinator.exclusive(async () => {
+      if (!this.leaseNative.inspectControls)
+        throw new Error('Protected Desktop2 semantic snapshot provider is unavailable.');
+      const target = this.runtime.windows.resolve(
+        input.windowId, await this.listLiveWindowsPassively()
+      );
+      if (target.title?.startsWith('DeskMCP Agent Desktop'))
+        throw new Error('Cannot inspect Agent safety HUD.');
+      const controls = await this.leaseNative.inspectControls({
+        leaseId: input.agentDesktopLeaseId,
+        window: { hwnd: target.hwnd, processId: target.processId },
+        observerReadyFile: input.observerReadyFile
+      });
+      if (!Array.isArray(controls) || controls.length > 32) {
+        throw new Error('Protected Desktop2 semantic snapshot was not bounded.');
+      }
+      const seen = new Set<string>();
+      for (const item of controls) {
+        if (!item || typeof item.automationId !== 'string'
+            || item.automationId.length < 1 || item.automationId.length > 128
+            || seen.has(item.automationId)
+            || typeof item.canSetValue !== 'boolean'
+            || typeof item.canScrollTopBottom !== 'boolean'
+            || (!item.canSetValue && !item.canScrollTopBottom)) {
+          throw new Error('Protected Desktop2 semantic snapshot is invalid.');
+        }
+        seen.add(item.automationId);
+      }
+      const computerObservationId = this.runtime.observations.issue(
+        input.windowId, Date.now(), input.agentDesktopLeaseId
+      );
+      if (this.semanticObservations.size >= 128) {
+        const oldest = this.semanticObservations.keys().next().value;
+        if (oldest) this.semanticObservations.delete(oldest);
+      }
+      this.semanticObservations.set(computerObservationId, {
+        windowId: input.windowId, leaseId: input.agentDesktopLeaseId.toLowerCase(),
+        observerReadyFile: input.observerReadyFile,
+        controls: controls.map(c => ({ ...c }))
+      });
+      return { computerObservationId, controls };
+    });
+  }
 
   async dispatch(input: Desktop2ComputerAction): Promise<unknown> {
     return this.runtime.coordinator.exclusive(async () => {
@@ -50,6 +125,26 @@ export class Desktop2ComputerUseCandidate {
       );
       if (target.title?.startsWith('DeskMCP Agent Desktop') === true) {
         throw new Error('Agent safety HUD is never a Computer Use target.');
+      }
+
+      if (input.phase === 'perform') {
+        const observed = this.semanticObservations.get(input.computerObservationId);
+        // Burn the snapshot permit even when the selector is untrusted. A
+        // caller cannot re-guess IDs against a real Desktop2 UIA provider.
+        this.semanticObservations.delete(input.computerObservationId);
+        const action = input.action!;
+        const allowed = observed?.controls.find(
+          row => row.automationId === action.automationId
+        );
+        if (!observed || observed.windowId !== input.windowId
+            || observed.leaseId !== input.agentDesktopLeaseId.toLowerCase()
+            || observed.observerReadyFile !== input.observerReadyFile
+            || !allowed
+            || (action.type === 'set_value' && !allowed.canSetValue)
+            || (action.type === 'scroll' && !allowed.canScrollTopBottom)
+            || (action.type !== 'set_value' && action.type !== 'scroll')) {
+          throw new Error('Desktop2 action requires a fresh protected semantic control snapshot.');
+        }
       }
 
       const effectiveLease = this.runtime.observations.consume(

@@ -123,3 +123,58 @@ test('concurrent starts are denied and stop racing startup cannot rearm a revoke
  assert.ok(stops>=1);
  await assert.rejects(session.listWindows(),/not active/);
 });
+
+test('session issues no caller-controlled lease or observer path for protected element snapshots',async()=>{
+ const captured:unknown[]=[];
+ const observer:Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>={
+  async start(){return observerSession;},
+  async assertHealthy(){return observerSession;},
+  async stop(){return {stopped:true};}
+ };
+ const session=new Desktop2ComputerUseSession(lease,
+  {async list(){return [];}},
+  observer,
+  {
+   async discoverWindows(id){captured.push({discoverLease:id});return [];},
+   async snapshotWindow(input){
+    captured.push(input);
+    return {computerObservationId:'internal-new-observation-id',controls:[]};
+   },
+   async dispatch(){return {uiaReadbackConfirmed:true,appEventConfirmed:false};}
+  }
+ );
+ await session.start();
+ assert.deepEqual(await session.discoverWindows(),[]);
+ const snapshot=await session.snapshotWindow('only-current-window-capability');
+ assert.equal(snapshot.computerObservationId,'internal-new-observation-id');
+ assert.deepEqual(captured,[
+  {discoverLease:lease},
+  {windowId:'only-current-window-capability',
+   agentDesktopLeaseId:lease,observerReadyFile:observerSession.readyFile}
+ ]);
+ await session.stop();
+});
+
+test('stop revokes new UIA immediately but keeps observer alive until in-flight native provider exits',async()=>{
+ let started!:()=>void,release!:()=>void,stops=0;
+ const began=new Promise<void>(resolve=>{started=resolve;});
+ const unblock=new Promise<void>(resolve=>{release=resolve;});
+ const observer:Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>={
+  async start(){return observerSession;},
+  async assertHealthy(){return observerSession;},
+  async stop(){stops++;return {stopped:true};}
+ };
+ const session=new Desktop2ComputerUseSession(lease,{async list(){return [];}},
+  observer,{async dispatch(){started();await unblock;return {uiaReadbackConfirmed:true,appEventConfirmed:false};}});
+ await session.start();
+ const inFlight=session.dispatch({phase:'arm',windowId:'window',computerObservationId:'obs'});
+ await began;
+ const stopping=session.stop();
+ await Promise.resolve();
+ assert.equal(stops,0,'observer must keep watching while provider is still running');
+ release();
+ await assert.rejects(inFlight,/revoked|not active/);
+ await stopping;
+ assert.equal(stops,1);
+ await assert.rejects(session.dispatch({phase:'arm',windowId:'window',computerObservationId:'obs'}),/not active/);
+});

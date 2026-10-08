@@ -27,7 +27,7 @@ for(const fixture of [denyMissing,denyInvoke]){
   assert.ok(r.observerReady && !fs.existsSync(r.observerReady),
     'Fixture observer must be a definitely absent file; no live GUI call permitted.');
 }
-const build=run(sdk,['build',project,'-c','Release','--nologo','-v:q']);
+const build=run(sdk,['build',project,'-c','Release','--nologo','-v:q'],90000);
 assert.equal(build.status,0,'Build failed: '+(build.stdout||'')+' '+(build.stderr||''));
 console.log('DIRECT_UIA_BUILD_PASS');
 const policy=run(sdk,[dll,'--self-test'],10000);
@@ -54,7 +54,7 @@ assert.match(noArmWithWriteRequest.stderr,/ARM_TARGET_REQUIRES_READONLY_IDENTITY
 console.log('DIRECT_UIA_ARM_NEGATIVE_TESTS_PASS');
 const suite=run(process.execPath,['--test',path.join(dir,'contract.test.mjs')],12000);
 assert.equal(suite.status,0,'Static guard suite failed: '+(suite.stdout||'')+' '+(suite.stderr||''));
-console.log('DIRECT_UIA_STATIC_GUARDS_9_OF_9_PASS');
+console.log('DIRECT_UIA_STATIC_GUARDS_10_OF_10_PASS');
 const observerProject=path.join(worktree,'test-area','desktop2-switch-observer','DeskMCP.Desktop2SwitchObserver.csproj');
 const observerDll=path.join(worktree,'test-area','desktop2-switch-observer','bin','Release',
   'net10.0-windows','DeskMCP.Desktop2SwitchObserver.dll');

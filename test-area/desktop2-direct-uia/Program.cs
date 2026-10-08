@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -13,7 +14,7 @@ using System.Windows.Automation;
 internal sealed class SemanticPolicy
 {
     public static bool Permitted(string? action) =>
-        action is "inspect" or "set-value" or "scroll-top" or "scroll-bottom";
+        action is "inspect" or "inspect-tree" or "set-value" or "scroll-top" or "scroll-bottom";
 
     public static void Demand(string? action)
     {
@@ -213,14 +214,14 @@ internal static class ObserverGuard
             File.ReadAllText(watchedFile), options)
             ?? throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_INVALID");
         if (watched.Hwnd != hwnd || watched.ProcessId != processId
-            || watched.DesktopIndex < 1)
+            || watched.DesktopIndex != 1)
             throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_TARGET_MISMATCH");
         if (ready.TripwireFile == null || File.Exists(ready.TripwireFile))
             throw new InvalidOperationException("EARLY_FOREGROUND_WATCH_TRIPWIRE_LATCHED");
     }
 }
 
-internal static class DirectUia
+internal static partial class DirectUia
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
@@ -248,6 +249,8 @@ internal static class DirectUia
             throw new InvalidOperationException("AUTOMATION_ID_REQUIRED");
         if (req.Action == "set-value" && req.Value!.Any(char.IsControl))
             throw new InvalidOperationException("CONTROL_CHARACTER_NOT_PERMITTED");
+        if (req.Action == "inspect-tree" && req.AutomationId != "__tree_snapshot__")
+            throw new InvalidOperationException("TREE_SNAPSHOT_SENTINEL_REQUIRED");
         return req;
     }
 
@@ -313,18 +316,19 @@ internal static class DirectUia
         {
             ObserverGuard.AssertLive(request.ObserverReady);
             ctx.VerifyTarget(hwnd, request.ProcessId, targetId);
-            // Refuse the known failure case BEFORE querying the UIA provider:
-            // the original, unprotected WPF window stole Desktop1 foreground
-            // during ValuePattern.SetValue in the recorded A/B test.
-            if (request.Action != "inspect")
-            {
-                ctx.VerifyNonActivatingTarget(hwnd);
-                ObserverGuard.AssertWatchedTarget(request.ObserverReady,
-                    request.Hwnd, request.ProcessId);
-            }
+            // Even read-only UIA pattern/property discovery can invoke a
+            // misbehaving third-party provider. Require the same already-
+            // armed observer and NOACTIVATE root for inspect/inspect-tree too.
+            ctx.VerifyNonActivatingTarget(hwnd);
+            ObserverGuard.AssertWatchedTarget(request.ObserverReady,
+                request.Hwnd, request.ProcessId);
             ObserverGuard.AssertLive(request.ObserverReady);
         }
         Guard();
+        // Enumerate bounded, metadata-only eligible controls only AFTER the
+        // observer is armed; no tree traversal in --arm-target.
+        if (request.Action == "inspect-tree")
+            return InspectTree(hwnd, request.ProcessId, Guard);
         AutomationElement element = FindExactElement(hwnd, request.AutomationId);
         if (element.Current.ProcessId != request.ProcessId)
             throw new InvalidOperationException("UIA_ELEMENT_PROCESS_ID_MISMATCH");

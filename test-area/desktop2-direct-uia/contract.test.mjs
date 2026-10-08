@@ -108,3 +108,24 @@ test('two-phase arm performs native identity/style/observer verification before 
   assert.match(arm,/if \(File.Exists\(temporary\)\) File.Delete\(temporary\)/);
   assert.doesNotMatch(arm,/SetForegroundWindow|SetWindowLong|SendInput|MoveWindowToDesktop/);
 });
+
+test('readonly UIA inspect and bounded tree are guarded before any provider call',()=>{
+  const perform=source.slice(source.indexOf('private static object Perform('));
+  const firstGuard=perform.indexOf('Guard();');
+  const inspectTree=perform.indexOf('InspectTree(hwnd, request.ProcessId, Guard)');
+  const findExact=perform.indexOf('FindExactElement(hwnd, request.AutomationId)');
+  assert.ok(firstGuard>=0 && inspectTree>firstGuard && findExact>inspectTree);
+  assert.match(perform,/ctx\.VerifyNonActivatingTarget\(hwnd\)/);
+  assert.match(perform,/ObserverGuard\.AssertWatchedTarget\(request\.ObserverReady,/);
+  assert.doesNotMatch(perform,/if \(request.Action != "inspect"\)/);
+  assert.match(source,/TREE_SNAPSHOT_SENTINEL_REQUIRED/);
+  const tree=readFileSync(path.join(dir,'DirectUia.SemanticSnapshot.cs'),'utf8');
+  assert.match(tree,/MaxVisitedControls = 128/);
+  assert.match(tree,/MaxReturnedControls = 32/);
+  assert.match(tree,/UIA_SNAPSHOT_DUPLICATE_AUTOMATION_ID/);
+  assert.match(tree,/UIA_SNAPSHOT_NODE_BUDGET_EXCEEDED/);
+  assert.match(tree,/UIA_SNAPSHOT_DEPTH_BUDGET_EXCEEDED/);
+  assert.match(tree,/TreeWalker\.ControlViewWalker/);
+  assert.doesNotMatch(tree,/\.Current\.Value\b/);
+  assert.doesNotMatch(tree,/\b(SetForegroundWindow|SetFocus|SendInput|SetCursorPos|SwitchDesktop)\s*\(/);
+});

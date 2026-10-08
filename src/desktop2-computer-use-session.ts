@@ -7,13 +7,21 @@ import type { Desktop2ObserverLifecycle, Desktop2ObserverSession } from './deskt
 // The requester cannot supply their own observer ready path or lease ID.
 type Passive = Pick<Desktop2WindowInventory,'list'>;
 type Observer = Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>;
-type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'>;
+type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'>>;
 type UserAction = Omit<Desktop2ComputerAction,'agentDesktopLeaseId'|'observerReadyFile'>;
 
 export class Desktop2ComputerUseSession {
   private session:Desktop2ObserverSession|undefined;
   private opening:Promise<void>|undefined;
+  private readonly inFlight=new Set<Promise<unknown>>();
   private epoch=0;
+
+  private async withMonitorHeld<T>(operation:()=>Promise<T>):Promise<T> {
+    const executing=operation();
+    this.inFlight.add(executing);
+    try{return await executing;}
+    finally{this.inFlight.delete(executing);}
+  }
   constructor(
     private readonly leaseId:string,
     private readonly passive:Passive,
@@ -42,11 +50,14 @@ export class Desktop2ComputerUseSession {
   }
 
   private async checked():Promise<Desktop2ObserverSession> {
-    if(!this.session) throw new Error('Desktop2 Computer Use session is not active.');
+    const expected=this.session;
+    if(!expected) throw new Error('Desktop2 Computer Use session is not active.');
     const active=await this.observer.assertHealthy(this.leaseId);
-    if(active.readyFile!==this.session.readyFile
-      || active.targetFile!==this.session.targetFile
-      || active.tripwireFile!==this.session.tripwireFile) {
+    if(this.session!==expected)
+      throw new Error('Desktop2 Computer Use session was revoked during the operation.');
+    if(active.readyFile!==expected.readyFile
+      || active.targetFile!==expected.targetFile
+      || active.tripwireFile!==expected.tripwireFile) {
       throw new Error('Desktop2 observer identity changed during Computer Use.');
     }
     return active;
@@ -59,22 +70,48 @@ export class Desktop2ComputerUseSession {
     return windows;
   }
 
-  async dispatch(input:UserAction):Promise<unknown> {
-    const guarded=await this.checked();
-    const output=await this.actions.dispatch({
-      ...input,agentDesktopLeaseId:this.leaseId,
-      observerReadyFile:guarded.readyFile
-    });
+  async discoverWindows():Promise<Awaited<ReturnType<NonNullable<Actions['discoverWindows']>>>> {
     await this.checked();
-    return output;
+    if(!this.actions.discoverWindows)
+      throw new Error('Passive Desktop2 window capability provider unavailable.');
+    const discovered=await this.actions.discoverWindows(this.leaseId);
+    await this.checked();
+    return discovered;
+  }
+
+  async snapshotWindow(windowId:string):Promise<Awaited<ReturnType<NonNullable<Actions['snapshotWindow']>>>> {
+    return this.withMonitorHeld(async()=>{
+      const guard=await this.checked();
+      if(!this.actions.snapshotWindow)
+        throw new Error('Protected Desktop2 semantic snapshot provider unavailable.');
+      const observed=await this.actions.snapshotWindow({
+        windowId,agentDesktopLeaseId:this.leaseId,observerReadyFile:guard.readyFile
+      });
+      await this.checked();
+      return observed;
+    });
+  }
+
+  async dispatch(input:UserAction):Promise<unknown> {
+    return this.withMonitorHeld(async()=>{
+      const guarded=await this.checked();
+      const output=await this.actions.dispatch({
+        ...input,agentDesktopLeaseId:this.leaseId,
+        observerReadyFile:guarded.readyFile
+      });
+      await this.checked();
+      return output;
+    });
   }
 
   async stop():Promise<void> {
     ++this.epoch;
     this.session=undefined;
-    // Stop the monitor immediately even when a competing start() is waiting
-    // on a ready handshake. The pending start must never rearm after stop.
+    // Immediately revoke ALL new input, but keep the passive observer alive
+    // until any already-running bounded native UIA provider has exited.
+    // Killing the observer first would create an unmonitored focus-steal gap.
     const opening=this.opening;
+    await Promise.allSettled([...this.inFlight]);
     await this.observer.stop();
     if(opening)await opening.catch(()=>undefined);
   }

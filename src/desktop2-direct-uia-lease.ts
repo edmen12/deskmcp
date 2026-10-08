@@ -25,8 +25,15 @@ export interface Desktop2UiaScope {
   readonly window: Desktop2UiaWindow;
   readonly observerReadyFile: string;
 }
+export interface Desktop2SemanticControl {
+  readonly automationId: string;
+  readonly controlType: string;
+  readonly className: string;
+  readonly canSetValue: boolean;
+  readonly canScrollTopBottom: boolean;
+}
 export interface Desktop2UiaRequest {
-  readonly action: 'inspect' | 'set-value' | 'scroll-top' | 'scroll-bottom';
+  readonly action: 'inspect' | 'inspect-tree' | 'set-value' | 'scroll-top' | 'scroll-bottom';
   readonly hwnd: number;
   readonly processId: number;
   readonly desktopId: string;
@@ -135,6 +142,58 @@ export class Desktop2DirectUiaLeaseCoordinator {
       throw new Error('Early foreground observer arm was not confirmed.');
     }
     return { armed: true, desktopId: proof.desktopId };
+  }
+
+  /**
+   * Only the native helper with an ALREADY armed target watch may inspect a
+   * provider. Return capped metadata, never ValuePattern.Value or user text.
+   */
+  async inspectControls(scope: Desktop2UiaScope): Promise<readonly Desktop2SemanticControl[]> {
+    const proof = await this.verify(scope);
+    const request: Desktop2UiaRequest = {
+      action: 'inspect-tree',
+      hwnd: scope.window.hwnd, processId: scope.window.processId,
+      desktopId: proof.desktopId, automationId: '__tree_snapshot__',
+      observerReady: scope.observerReadyFile
+    };
+    const raw = await this.invoker.execute('request', request);
+    await this.verify(scope, proof);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new Error('Untrusted Desktop2 semantic tree response.');
+    const result = raw as Record<string, unknown>;
+    if (result.operation !== 'inspect-tree'
+        || result.hwnd !== scope.window.hwnd || result.processId !== scope.window.processId
+        || result.uiaReadbackConfirmed !== false || result.appEventConfirmed !== false
+        || !Number.isInteger(result.scannedNodes) || Number(result.scannedNodes) < 1
+        || Number(result.scannedNodes) > 128 || !Array.isArray(result.controls)
+        || result.controls.length > 32) {
+      throw new Error('Desktop2 semantic snapshot does not match the verified window.');
+    }
+    const controls: Desktop2SemanticControl[] = [];
+    const seen = new Set<string>();
+    for (const row of result.controls) {
+      if (!row || typeof row !== 'object' || Array.isArray(row))
+        throw new Error('Invalid Desktop2 semantic control.');
+      const c = row as Record<string, unknown>;
+      if (typeof c.automationId !== 'string' || c.automationId.length < 1
+          || c.automationId.length > 128 || c.automationId.includes('\0')
+          || seen.has(c.automationId)
+          || typeof c.controlType !== 'string' || c.controlType.length > 90
+          || typeof c.className !== 'string' || c.className.length > 260
+          || typeof c.canSetValue !== 'boolean' || typeof c.canScrollTopBottom !== 'boolean'
+          || (!c.canSetValue && !c.canScrollTopBottom)
+          || (c.canSetValue && (c.controlType !== 'ControlType.Edit'
+            || (c.className !== 'TextBox'
+              && !c.className.startsWith('WindowsForms10.EDIT.'))))) {
+        throw new Error('Desktop2 semantic snapshot contains duplicate or unauthorized control.');
+      }
+      seen.add(c.automationId);
+      controls.push({
+        automationId: c.automationId, controlType: c.controlType, className: c.className,
+        canSetValue: c.canSetValue, canScrollTopBottom: c.canScrollTopBottom
+      });
+    }
+    return controls;
   }
 
   async perform(

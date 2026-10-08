@@ -201,3 +201,41 @@ test('older valid binding without optional desktopNumber still permits live Desk
   assert.equal(result.armed,true);
   assert.equal(t.requests.length,1);
 });
+
+test('guarded inspect-tree uses sentinel and returns bounded metadata only, never a text value',async()=>{
+ const t=fixture();
+ t.setResult({operation:'inspect-tree',hwnd,processId:pid,scannedNodes:17,
+  uiaReadbackConfirmed:false,appEventConfirmed:false,
+  controls:[
+    {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',
+     canSetValue:true,canScrollTopBottom:false},
+    {automationId:'WpfScroller',controlType:'ControlType.Pane',className:'ScrollViewer',
+     canSetValue:false,canScrollTopBottom:true}
+  ]});
+ const result=await t.coordinator.inspectControls(scope);
+ assert.equal(result.length,2);
+ assert.equal(JSON.stringify(result).includes('password'),false);
+ assert.deepEqual(t.requests[0],{mode:'request',request:{
+  action:'inspect-tree',hwnd,processId:pid,desktopId,
+  automationId:'__tree_snapshot__',observerReady:observerReadyFile
+ }});
+});
+
+test('guarded inspect-tree rejects wrong HWND/PID, duplicates and forged mutable controls',async()=>{
+ const base={operation:'inspect-tree',hwnd,processId:pid,scannedNodes:4,
+  uiaReadbackConfirmed:false,appEventConfirmed:false};
+ const ok={automationId:'Edit',controlType:'ControlType.Edit',className:'TextBox',
+  canSetValue:true,canScrollTopBottom:false};
+ for(const patch of [
+  {hwnd:hwnd+1,controls:[ok]},
+  {processId:pid+1,controls:[ok]},
+  {controls:[ok,ok]},
+  {controls:[{...ok,className:'Button'}]},
+  {controls:[{...ok,canSetValue:false,canScrollTopBottom:false}]},
+  {scannedNodes:129,controls:[ok]},
+  {controls:Array.from({length:33},(_,i)=>({...ok,automationId:'Edit'+i}))}
+ ]){
+  const t=fixture();t.setResult({...base,...patch});
+  await assert.rejects(t.coordinator.inspectControls(scope));
+ }
+});

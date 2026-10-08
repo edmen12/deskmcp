@@ -23,9 +23,11 @@
 2. **监控目标自动登记**：`DeskMCP.Desktop2DirectUia.dll --arm-target <absolute inspect-only request JSON> --vda <VDA DLL>`。核实监控身份与运行状态、Desktop1 当前桌面、目标根窗口 HWND/PID/真实 Desktop2 GUID、非 pinned 目标、现成的 `WS_EX_NOACTIVATE`。再将已验证的 `{hwnd, processId, desktopIndex:1}` 原子写入监控目标文件。**不自动给第三方软件改 WS_EX_NOACTIVATE**。
 3. **受限修改**：`--request` 的 ValuePattern/ScrollPattern 操作在进入 UIA provider **之前**复核全部上述条件及登记 HWND/PID，动作后再次检查；监控监听目标窗口意外成为前台时立即锁存 `TARGET_FOREGROUND_EARLY_ABORT`，25ms 辅助轮询，并继续捕捉 Windows 真实切屏。不会触发系统级键盘、鼠标、剪贴板或自动切回。
 
-**限制：前台激活→桌面切换的 118ms 仅为一次观察，不是恒定时间窗口。** 提前中止也不保证能抢在 Windows 桌面切换之前阻断已排队的 OS 激活。该候选仅允许有明确非激活设计的窗口；其他软件、WinUI/Electron、多窗口弹窗未验收。监控和适配层还没有验证 Agent Desktop lease ownership，**没有接入正式 Computer Use MCP**，发布状态继续 RED。
+**限制：前台激活→桌面切换的 118ms 仅为一次观察，不是恒定时间窗口。** 提前中止也不保证能抢在 Windows 桌面切换之前阻断已排队的 OS 激活。该候选仅允许有明确非激活设计的窗口；其他软件、WinUI/Electron、多窗口弹窗未验收。候选 TypeScript 适配层已接入真实 Agent Desktop lease/HUD 校验和一次性窗口/控件观察凭证，但**没有接入正式 Computer Use MCP**，发布状态继续 RED。
 
-仍须完成的工作：把每次目标窗口和操作绑定真实 Agent lease，实机验收未破坏的新版防护链及 WinForms/WinUI/Electron 各自控件事件语义。请勿重新启用已封锁的原版诊断入口。
+2026-10-09 新增：`--request inspect` 也必须先核实非激活窗口样式及已登记的监控目标，堵住之前的只读 UIA 防护缺口。`--request inspect-tree` 只遍历受限 UIA ControlView：最多 128 节点 / 32 个可操作控件，拒绝重复 AutomationId 和无法完整检查的树，不读取任何文本框内容。候选 `snapshotWindow` 产生绑定租约/窗口/监控就绪文件的**一次性语义授权**，不能凭空传 AutomationId 进行输入。停止租约时如有原生 UIA 调用仍执行，先禁止新操作但继续监听，等它结束后关闭监控。
+
+仍须完成的工作：在真实 Desktop2 的受保护窗口上验证完整快照→动作链，并独立验收 WinForms/WinUI/Electron 的控件事件和焦点语义。请勿重新启用已封锁的原版诊断入口。
 
 注意：直接操作应用的 UIA provider 也可能产生窗口或焦点副作用。因此，本适配层目前**不会连接到 MCP 工具路由或生产 Gateway**，不声称零干扰已经通过。
 

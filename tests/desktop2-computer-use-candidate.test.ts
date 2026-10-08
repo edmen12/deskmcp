@@ -21,8 +21,13 @@ function fixture() {
   let live: readonly ComputerWindow[] = [window];
   let performed = 0, armed = 0;
   const seen: unknown[] = [];
-  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform'> = {
+  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls'> = {
     async arm(scope) { armed++; seen.push(scope); return {armed:true,desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c'}; },
+    async inspectControls() { return [
+      {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
+      {automationId:'Edit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
+      {automationId:'Scroller',controlType:'ControlType.Pane',className:'ScrollViewer',canSetValue:false,canScrollTopBottom:true}
+    ]; },
     async perform(scope,action) { performed++; seen.push({scope,action}); return {uiaReadbackConfirmed:true,appEventConfirmed:false}; }
   };
   const adapter=new Desktop2ComputerUseCandidate(
@@ -55,7 +60,12 @@ test('mutating action requires a NEW lease observation, not the observer arm tok
   const t=fixture();
   const armed=t.input('arm');
   await t.adapter.dispatch(armed);
-  const request=t.input('perform',{type:'set_value',automationId:'WpfEdit',value:'Hello'});
+  const snapshot=await t.adapter.snapshotWindow({
+    windowId:t.windowId,agentDesktopLeaseId:lease,observerReadyFile:'C:\\tmp\\observer.ready.json'
+  });
+  assert.equal(snapshot.controls.length,3);
+  const request={...t.input('perform',{type:'set_value',automationId:'WpfEdit',value:'Hello'}),
+    computerObservationId:snapshot.computerObservationId};
   const result=await t.adapter.dispatch(request);
   assert.deepEqual(result,{uiaReadbackConfirmed:true,appEventConfirmed:false});
   assert.equal(t.invoked.performed,1);
@@ -110,8 +120,14 @@ test('Agent HUD cannot be a Desktop2 Computer Use target even when observation i
 
 test('two observations of same window cannot both mutate after first consume and advance',async()=>{
   const t=fixture();
-  const first=t.input('perform',{type:'set_value',automationId:'Edit',value:'A'});
-  const second=t.input('perform',{type:'set_value',automationId:'Edit',value:'B'});
+  const inspect={windowId:t.windowId,agentDesktopLeaseId:lease,
+    observerReadyFile:'C:\\tmp\\observer.ready.json'};
+  const a=await t.adapter.snapshotWindow(inspect);
+  const b=await t.adapter.snapshotWindow(inspect);
+  const first={...t.input('perform',{type:'set_value',automationId:'Edit',value:'A'}),
+    computerObservationId:a.computerObservationId};
+  const second={...t.input('perform',{type:'set_value',automationId:'Edit',value:'B'}),
+    computerObservationId:b.computerObservationId};
   await t.adapter.dispatch(first);
   await assert.rejects(t.adapter.dispatch(second),/stale/);
   assert.equal(t.invoked.performed,1);
@@ -143,4 +159,56 @@ test('native operation failure consumes capability and does not retry unsafe inp
   await assert.rejects(adapter.dispatch(req),/Native denied/);
   await assert.rejects(adapter.dispatch(req),/observation/);
   assert.equal(tries,1);
+});
+
+test('raw lease-bound observation cannot bypass guarded semantic snapshot',async()=>{
+ const t=fixture();
+ await assert.rejects(t.adapter.dispatch(t.input('perform',{
+  type:'set_value',automationId:'WpfEdit',value:'blind write'
+ })),/fresh protected semantic control snapshot/);
+ assert.equal(t.invoked.performed,0);
+});
+
+test('snapshot binds exact allowed action semantics and burns mismatched permit',async()=>{
+ const t=fixture();
+ const parameters={windowId:t.windowId,agentDesktopLeaseId:lease,
+  observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const snap=await t.adapter.snapshotWindow(parameters);
+ const req={...t.input('perform',{type:'set_value',automationId:'Scroller',value:'invalid'}),
+  computerObservationId:snap.computerObservationId};
+ await assert.rejects(t.adapter.dispatch(req),/fresh protected semantic control snapshot/);
+ await assert.rejects(t.adapter.dispatch({...req,action:{
+   type:'set_value' as const,automationId:'WpfEdit',value:'now allowed?'
+ }}),/fresh protected semantic control snapshot/);
+ assert.equal(t.invoked.performed,0);
+});
+
+test('bounded guarded snapshot cannot mint authority for forged window or user desktop HUD',async()=>{
+ const t=fixture();
+ t.setLive([{...window,processId:window.processId+111}]);
+ await assert.rejects(t.adapter.snapshotWindow({windowId:t.windowId,
+  agentDesktopLeaseId:lease,observerReadyFile:'C:\\tmp\\ready.json'}),/changed or closed/);
+ assert.equal(t.invoked.performed,0);
+});
+
+test('passive discovery issues separate arm tokens bound to window capability and lease',async()=>{
+ const t=fixture();
+ const found=await t.adapter.discoverWindows(lease);
+ assert.equal(found.length,1);
+ assert.equal(found[0]?.windowId,t.windowId);
+ const input={phase:'arm' as const,windowId:found[0]!.windowId,
+  computerObservationId:found[0]!.computerObservationId,
+  agentDesktopLeaseId:lease,observerReadyFile:'C:\\tmp\\ready.json'};
+ await t.adapter.dispatch(input);
+ await assert.rejects(t.adapter.dispatch(input),/observation/);
+});
+
+test('protected element observation cannot be replayed with another observer ready file',async()=>{
+ const t=fixture();
+ const snap=await t.adapter.snapshotWindow({windowId:t.windowId,
+  agentDesktopLeaseId:lease,observerReadyFile:'C:\\observer-A\\ready.json'});
+ const request={...t.input('perform',{type:'set_value',automationId:'WpfEdit',value:'cannot-cross'}),
+  computerObservationId:snap.computerObservationId,observerReadyFile:'C:\\observer-B\\ready.json'};
+ await assert.rejects(t.adapter.dispatch(request),/fresh protected semantic control snapshot/);
+ assert.equal(t.invoked.performed,0);
 });
