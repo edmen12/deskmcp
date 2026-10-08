@@ -1,0 +1,11 @@
+# Keep raw per-run metadata and original risky fixture locally as incident evidence.
+# Neither is committed into the generic DeskMCP source branch.
+/legacy-wpf/
+/*incident-*result.json
+/*incident-*action-timeline.jsonl
+/*incident-*desktop-events.jsonl
+/*incident-*observer.ready.json
+/*incident-*observer.tripwire.json
+/*incident-*wpf.ready.json
+/*incident-*wpf.release.flag
+/*incident-*wpf.events.log
