@@ -31,3 +31,6 @@
 ```
 
 `--observe <absolute DLL> <eventLogFile> <readyFile> <tripwireFile>` 是原始观察模式。2026-10-09 用户批准的真实 A/B 复现中，已证实 VirtualDesktopAccessor 可以把实际桌面切换通知 `old=0,new=1,current=1` 送到观察器。新增 `--observe-target <absolute DLL> <eventLogFile> <readyFile> <tripwireFile> <absolute watchFile>` 模式：启动时 watchFile 不存在，之后仅由通过 HWND/PID、Desktop2 GUID、Desktop1 当前桌面、现有 `WS_EX_NOACTIVATE` 核查的候选 DirectUia `--arm-target` 原子发布。捕捉到该窗口在 Desktop1 仍活跃时成为前台，即锁存 `TARGET_FOREGROUND_EARLY_ABORT`；此外 25ms 心跳也复查目标前台。它只能尝试提前中止，**不是系统级焦点拦截，也不能阻止已经在 Windows 内部排队的切屏**。新模式仅代码编译与纯策略回归通过，未执行新的 GUI 实测。短时 `--observe-idle ... 9`、模拟 `--self-test-notification ... 5` 已运行并通过各自验收。后者只向自己的隐藏 HWND 发布消息，并不会切换 Windows 桌面。不要把监听器单独运行成功理解为 GUI Computer Use 的零干扰证明。四次用户报告切屏已记录，不能靠正式版 Agent lease 日志未增加来否认，因为原 WPF 测试没有 Agent lease。
+
+
+2026-10-09 候选更新：`--observe-target` 的默认寿命上限为 **900 秒（15 分钟）**，到时退出；调用方必须因 ready/进程消失而 fail closed。新增 `src/desktop2-observer-lifecycle.ts` 管理 owned observer + HUD/租约有效性和文件生命周期，`src/desktop2-computer-use-session.ts` 不接受用户自己指定监控 ready 路径或租约。仅通过 **mock 进程的离线测试**，未开展新的 GUI 输入验收。停止时保留实际事故的 events/tripwire，不自动切回 Desktop1。

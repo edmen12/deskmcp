@@ -30,6 +30,27 @@ export interface AgentDesktopWindowInfo {
   readonly onCurrentDesktop?: boolean;
 }
 
+export interface AgentDesktopPassiveWindow {
+  readonly hwnd: number;
+  readonly processId: number;
+  readonly processName: string;
+  readonly title: string;
+  readonly className: string;
+  readonly width: number;
+  readonly height: number;
+  readonly isForeground: false;
+  readonly desktopId: string;
+  readonly desktopNumber: 2;
+  readonly onCurrentDesktop: false;
+}
+
+export interface AgentDesktopPassiveInventory {
+  readonly desktopId: string;
+  readonly desktopNumber: 2;
+  readonly currentDesktopNumber: 1;
+  readonly windows: readonly AgentDesktopPassiveWindow[];
+}
+
 export interface AgentDesktopMoveProcessResult {
   readonly processId: number;
   readonly moved: number;
@@ -104,6 +125,14 @@ export class AgentDesktopNativeBridge {
 
   desktopById(desktopId: string): Promise<AgentDesktopDesktopInfo> {
     return this.run<AgentDesktopDesktopInfo>(['desktop-by-id', '--desktop-id', normalizeDesktopId(desktopId)]);
+  }
+
+  // Non-activating real Windows virtual Desktop2 inventory. The native
+  // command only enumerates windows; never calls WinApp/activation/input.
+  listVirtualWindows(desktopId: string): Promise<AgentDesktopPassiveInventory> {
+    return this.run<AgentDesktopPassiveInventory>([
+      'list-virtual-windows', '--desktop-id', normalizeDesktopId(desktopId)
+    ]);
   }
 
   windowInfo(hwnd: number): Promise<AgentDesktopWindowInfo> {

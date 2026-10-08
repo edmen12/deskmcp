@@ -415,7 +415,7 @@ internal static class Program
         bool synthetic = args.Length == 6 && args[0] == "--self-test-notification";
         if (!targetMode && !idle && !synthetic && (args.Length != 5 || args[0] != "--observe"))
             return 2;
-        int seconds = 90;
+        int seconds = targetMode ? 900 : 90; // 15-minute max; supervisor must fail closed at expiry.
         if ((idle || synthetic) && (!int.TryParse(args[5], out seconds) || seconds is < 5 or > 15))
             return 2;
         try
