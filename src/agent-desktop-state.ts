@@ -558,7 +558,7 @@ export class AgentDesktopManager {
   async placeProcessTreeWindows(
     processId: number,
     leaseId: string,
-    options: { timeoutMs?: number } = {}
+    options: { timeoutMs?: number; requirePrivateWindow?: boolean } = {}
   ): Promise<AgentDesktopMoveProcessResult> {
     const { binding } = await this.assertLease(leaseId);
     const moved = await this.native.moveProcessTreeWindows(processId, binding.desktopId, {
@@ -570,6 +570,29 @@ export class AgentDesktopManager {
     }
     if (moved.windows.some(window => window.desktopId.toLowerCase() !== binding.desktopId.toLowerCase())) {
       throw new Error('Agent Desktop process-tree placement verification failed.');
+    }
+    // Real visible Desktop2 has to exclude pinned/shared windows. A valid
+    // desktop GUID alone did not prove this in live Windows toolwindow tests.
+    if (options.requirePrivateWindow) {
+      const now = await this.native.info();
+      const targetDesktopNumber = binding.desktopNumber;
+      if (!Number.isInteger(now.currentDesktopNumber) || !Number.isInteger(targetDesktopNumber) || targetDesktopNumber! < 2) {
+        throw new Error('Cannot verify live Windows Desktop2 / foreground identity.');
+      }
+      for (const window of moved.windows) {
+        const hwnd = Number(BigInt(window.hwnd));
+        if (!Number.isSafeInteger(hwnd) || hwnd < 1) {
+          throw new Error('Owned Chrome returned an invalid HWND.');
+        }
+        const detail = await this.native.windowInfo(hwnd);
+        if (detail.desktopId.toLowerCase() !== binding.desktopId.toLowerCase()
+          || detail.desktopNumber !== targetDesktopNumber) {
+          throw new Error('Owned Chrome HWND escaped Windows virtual Desktop2.');
+        }
+        if (now.currentDesktopNumber !== targetDesktopNumber && detail.onCurrentDesktop !== false) {
+          throw new Error('Owned Chrome window is shared/pinned on the human current desktop; refusing background operations.');
+        }
+      }
     }
     await this.assertLease(leaseId);
     return moved;

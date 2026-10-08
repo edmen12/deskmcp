@@ -77,10 +77,10 @@ export interface BrowserProcessPlacementResult {
 }
 
 export interface BrowserProcessController {
-  start(command: string, agentDesktopLeaseId?: string): Promise<string>;
+  start(command: string, agentDesktopLeaseId?: string, mode?: 'isolated-object' | 'visible-desktop2'): Promise<string>;
   active(processSessionId: string): Promise<boolean>;
   diagnostics?(processSessionId: string): Promise<string | undefined>;
-  place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs?: number, reconcile?: boolean): Promise<BrowserProcessPlacementResult>;
+  place(processSessionId: string, agentDesktopLeaseId: string, timeoutMs?: number, reconcile?: boolean, requirePrivateWindow?: boolean): Promise<BrowserProcessPlacementResult>;
   terminate(processSessionId: string): Promise<void>;
 }
 
@@ -146,6 +146,7 @@ interface BrowserSessionRecord {
   readonly profileLock: PidDirectoryLockLease;
   readonly persistentProfile: boolean;
   readonly headless: boolean;
+  readonly visibleDesktop2: boolean;
   readonly port: number;
   agentDesktopLeaseId?: string;
   agentDesktopPlacementFailures: number;
@@ -312,11 +313,22 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     this.sessions.reconcileActivePids(extractListedProcessPids(listed.text));
   }
 
-  async start(command: string, agentDesktopLeaseId?: string): Promise<string> {
+  async start(
+    command: string,
+    agentDesktopLeaseId?: string,
+    mode: 'isolated-object' | 'visible-desktop2' = 'isolated-object'
+  ): Promise<string> {
     let isolatedDesktopObject: string | undefined;
+    if (mode === 'visible-desktop2' && !agentDesktopLeaseId) {
+      throw new Error('Visible Desktop 2 browser launch requires an Agent Desktop lease.');
+    }
     if (agentDesktopLeaseId) {
-      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for isolated browser launch.');
-      isolatedDesktopObject = await this.agentDesktop.desktopObjectNameForLease(agentDesktopLeaseId);
+      if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for browser launch.');
+      if (mode === 'isolated-object') {
+        isolatedDesktopObject = await this.agentDesktop.desktopObjectNameForLease(agentDesktopLeaseId);
+      } else {
+        await this.agentDesktop.assertLease(agentDesktopLeaseId);
+      }
     }
     if (this.sessions.atCapacity()) await this.reconcile();
     const reservationId = this.sessions.reserveStart();
@@ -356,7 +368,8 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
     processSessionId: string,
     agentDesktopLeaseId: string,
     timeoutMs = 250,
-    reconcile = true
+    reconcile = true,
+    requirePrivateWindow = false
   ): Promise<BrowserProcessPlacementResult> {
     if (!this.agentDesktop) throw new Error('Agent Desktop runtime is unavailable for browser process placement.');
     await this.agentDesktop.assertLease(agentDesktopLeaseId);
@@ -365,7 +378,7 @@ export class OwnedBrowserProcessController implements BrowserProcessController {
       throw new Error('Owned browser process is no longer active.');
     }
     const pid = this.sessions.resolve(processSessionId);
-    const placed = await this.agentDesktop.placeProcessTreeWindows(pid, agentDesktopLeaseId, { timeoutMs });
+    const placed = await this.agentDesktop.placeProcessTreeWindows(pid, agentDesktopLeaseId, { timeoutMs, requirePrivateWindow });
     await this.agentDesktop.assertLease(agentDesktopLeaseId);
     return { moved: placed.moved, windows: placed.windows.length };
   }
@@ -397,6 +410,7 @@ export class BrowserRuntime {
   private readonly browserEngine: BrowserRuntimeInfo['engine'];
   private mutationChain: Promise<void> = Promise.resolve();
   private sessionReaper: NodeJS.Timeout | undefined;
+  private reaperInFlight = false;
 
   constructor(
     readonly root: string,
@@ -405,7 +419,8 @@ export class BrowserRuntime {
     cdp: BrowserCdpDriver | undefined = undefined,
     private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
     private readonly agentDesktop?: AgentDesktopManager,
-    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS
+    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
+    private readonly enableVisibleDesktop2 = process.env.DESKTOP_MCP_DESKTOP2_VISIBLE_BROWSER_EXPERIMENT === '1'
   ) {
     if (cdp) {
       this.cdp = cdp;
@@ -436,7 +451,14 @@ export class BrowserRuntime {
   private ensureSessionReaper(): void {
     if (this.sessionReaper) return;
     this.sessionReaper = setInterval(() => {
-      void this.reapSessions().catch(() => undefined);
+      // Expensive Desktop2 native placement can exceed the 1s reaper tick.
+      // Never queue another sweep while one is running or pending: an
+      // unbounded mutation queue can starve close()/closeAll().
+      if (this.reaperInFlight) return;
+      this.reaperInFlight = true;
+      void this.reapSessions()
+        .catch(() => undefined)
+        .finally(() => { this.reaperInFlight = false; });
     }, SESSION_REAPER_INTERVAL_MS);
     this.sessionReaper.unref();
   }
@@ -615,9 +637,10 @@ export class BrowserRuntime {
     }
   }
 
-  // Scoped browsers are created directly on an isolated Win32 Desktop
-  // Object, not moved after launch. Do not detach on lease revocation:
-  // a formerly scoped browser must never become an unscoped Desktop 1 session.
+  // Default scoped browser remains on its isolated Win32 Desktop Object.
+  // Explicit staged visible Desktop2 sessions instead reconcile the *actual*
+  // native top-level HWNDs, including new Chrome popups, before/after input.
+  // A revoked lease never becomes an unscoped Desktop1 browser.
   private async refreshAgentDesktopPlacement(record: BrowserSessionRecord): Promise<void> {
     const leaseId = record.agentDesktopLeaseId;
     if (!leaseId) {
@@ -633,6 +656,17 @@ export class BrowserRuntime {
       throw new Error('Agent Desktop browser lease revoked: browser must close instead of escaping isolation.');
     }
     await this.agentDesktop.assertLease(leaseId);
+    if (record.visibleDesktop2) {
+      const placed = await this.processController.place(
+        record.processSessionId,
+        leaseId,
+        3000,
+        true,
+        true
+      );
+      if (placed.windows < 1) throw new Error('No private real Desktop2 Chrome window remains.');
+      await this.agentDesktop.assertLease(leaseId);
+    }
   }
 
   private async reapSessions(): Promise<void> {
@@ -719,10 +753,11 @@ export class BrowserRuntime {
         throw new Error('Agent Desktop is active: browser start requires agent_desktop_lease_id; an unscoped browser may open on Desktop 1.');
       }
       if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
-      if (agentDesktop && options.headless === false) {
-        throw new Error('Visible Agent Desktop browser is unavailable: old launch-then-move path could appear on Desktop 1. Use isolated headless browser with CDP screenshots.');
+      const visibleDesktop2 = agentDesktop && options.headless === false;
+      if (visibleDesktop2 && !this.enableVisibleDesktop2) {
+        throw new Error('Visible Agent Desktop browser is unavailable by default: real Desktop 2 Chrome is experimental. Set DESKTOP_MCP_DESKTOP2_VISIBLE_BROWSER_EXPERIMENT=1 only on a staged candidate.');
       }
-      const headless = agentDesktop || options.headless !== false;
+      const headless = !visibleDesktop2 && (agentDesktop || options.headless !== false);
       const sessionId = randomUUID();
       const profileDir = path.join(this.root, 'profiles', profile.id);
       await this.ensureProfileDirectory(profile, profileDir);
@@ -734,7 +769,8 @@ export class BrowserRuntime {
       try {
         processSessionId = await this.processController.start(
           browserLaunchCommand(executable, profileDir, headless, viewport, agentDesktop),
-          agentDesktopLeaseId
+          agentDesktopLeaseId,
+          visibleDesktop2 ? 'visible-desktop2' : 'isolated-object'
         );
         const readinessDeadline = Date.now() + timeout;
         const portTimeout = Math.max(1, readinessDeadline - Date.now());
@@ -752,9 +788,20 @@ export class BrowserRuntime {
         const cdp = await this.driver();
         const pages = await waitForCdpPages(cdp, port, readinessTimeout);
         const first = pages[0]!;
+        if (visibleDesktop2) {
+          // Place the actual visible Chrome HWND before executing any page
+          // navigation or automated GUI input. Failure terminates the owned
+          // browser in the surrounding start() catch block.
+          if (!agentDesktopLeaseId) throw new Error('Missing visible Desktop2 lease.');
+          const placed = await this.processController.place(processSessionId, agentDesktopLeaseId, Math.min(timeout, 15000), true, true);
+          if (placed.windows < 1) throw new Error('Visible Chrome has no safely owned Desktop2 window.');
+        }
         if (initialUrl) {
           if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
           await cdp.act(port, first.page_id, [{ type: 'goto', url: initialUrl, wait_until: 'domcontentloaded', timeout_ms: timeout }], timeout);
+        }
+        if (visibleDesktop2) {
+          await this.processController.place(processSessionId, agentDesktopLeaseId!, Math.min(timeout, 12000), true, true);
         }
         const currentPages = await cdp.listPages(port, Math.min(timeout, 10000));
         const selected = currentPages.find(page => page.page_id === first.page_id) ?? currentPages[0]!;
@@ -766,6 +813,7 @@ export class BrowserRuntime {
           profileLock,
           persistentProfile: profile.persistent,
           headless,
+          visibleDesktop2,
           port,
           ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {}),
           agentDesktopPlacementFailures: 0,

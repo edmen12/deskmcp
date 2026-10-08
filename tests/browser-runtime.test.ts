@@ -30,9 +30,10 @@ async function tempRoot(): Promise<string> {
 class FakeProcessController implements BrowserProcessController {
   readonly starts: string[] = [];
   readonly leaseIds: Array<string | undefined> = [];
+  readonly launchModes: Array<'isolated-object' | 'visible-desktop2' | undefined> = [];
   readonly terminated: string[] = [];
   readonly activeIds = new Set<string>();
-  readonly placements: Array<{ processSessionId: string; leaseId: string; timeoutMs: number; reconcile: boolean }> = [];
+  readonly placements: Array<{ processSessionId: string; leaseId: string; timeoutMs: number; reconcile: boolean; requirePrivateWindow: boolean }> = [];
   placementWindows: number[] = [];
   placementErrors: Array<Error | undefined> = [];
   failTerminate = false;
@@ -40,9 +41,10 @@ class FakeProcessController implements BrowserProcessController {
 
   constructor(private readonly runtimeRoot: string) {}
 
-  async start(command: string, agentDesktopLeaseId?: string): Promise<string> {
+  async start(command: string, agentDesktopLeaseId?: string, mode?: 'isolated-object' | 'visible-desktop2'): Promise<string> {
     this.starts.push(command);
     this.leaseIds.push(agentDesktopLeaseId);
+    this.launchModes.push(mode);
     const match = command.match(/'"--user-data-dir=([^"]+)"'/u);
     if (!match?.[1]) throw new Error('Test browser command did not contain a user-data-dir.');
     const profileDir = match[1].replaceAll("''", "'");
@@ -58,8 +60,8 @@ class FakeProcessController implements BrowserProcessController {
     return this.activeIds.has(processSessionId);
   }
 
-  async place(processSessionId: string, leaseId: string, timeoutMs = 250, reconcile = true) {
-    this.placements.push({ processSessionId, leaseId, timeoutMs, reconcile });
+  async place(processSessionId: string, leaseId: string, timeoutMs = 250, reconcile = true, requirePrivateWindow = false) {
+    this.placements.push({ processSessionId, leaseId, timeoutMs, reconcile, requirePrivateWindow });
     const placementError = this.placementErrors.length > 0 ? this.placementErrors.shift() : undefined;
     if (placementError) throw placementError;
     const windows = this.placementWindows.length > 0 ? this.placementWindows.shift()! : 1;
@@ -1048,4 +1050,99 @@ test('Agent virtual copy and paste are lease-scoped and OS clipboard chords are 
   await browser.act(b.session_id,b.page_id,stale.browser_observation_id,[{type:'virtual_paste',selector:'#paste'}],{screenshot:false});
   assert.equal(cdp.pasted.at(-1),'B_DISTINCT');
   await browser.closeAll();
+});
+
+test('real Desktop2 visible Chrome is opt-in and cannot silently use the old isolated-object launch', async t=>{
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const exe=path.join(root,'browser.exe');await writeFile(exe,'fixture');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  const lease='11111111-1111-4111-8111-111111111111';
+  const agent={async assertLease(){return {binding:{desktopNumber:2,desktopId:'22222222-2222-4222-8222-222222222222'}};},
+    async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent);
+  await browser.init();
+  await assert.rejects(browser.start({agent_desktop_lease_id:lease,headless:false,profile_id:'must-deny'}),/experimental/);
+  assert.deepEqual(controller.starts,[],'default visible path must never launch anything');
+  await browser.closeAll();
+});
+
+test('opt-in visible Chrome is moved to owned Desktop2 before CDP input, and popups are reconciled afterwards',async t=>{
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const exe=path.join(root,'browser.exe');await writeFile(exe,'fixture');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  const cdp=new FakeCdpDriver();
+  const lease='11111111-1111-4111-8111-111111111111';
+  const agent={async assertLease(){return {binding:{desktopNumber:2,desktopId:'22222222-2222-4222-8222-222222222222'}};},
+    async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,cdp,exe,agent,30000,true);
+  await browser.init();
+  const started=await browser.start({agent_desktop_lease_id:lease,headless:false,url:'https://example.com/',profile_id:'visible-agent'});
+  assert.equal(started.headless,false);
+  assert.equal(controller.launchModes[0],'visible-desktop2');
+  assert.doesNotMatch(controller.starts[0]! ,/--headless=new/);
+  assert.equal(controller.placements.length,2,'placement must precede and follow first page navigation');
+  assert.ok(controller.placements.every(p=>p.requirePrivateWindow));
+  assert.equal(cdp.actions[0]?.[0]?.type,'goto');
+  const observed=await browser.snapshot(started.session_id,started.page_id,{screenshot:false});
+  await browser.act(started.session_id,started.page_id,observed.browser_observation_id,[{type:'click',selector:'#link'}],{screenshot:false});
+  assert.ok(controller.placements.length>=5,'reconcile before/after autonomous page input and snapshot');
+  assert.ok(controller.placements.every(p=>p.leaseId===lease && p.requirePrivateWindow));
+  await browser.closeAll();
+  assert.deepEqual(controller.terminated,['process-1']);
+});
+
+test('visible Chrome placement failure tears down only the owned browser and does not turn into Desktop1 session',async t=>{
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const exe=path.join(root,'browser.exe');await writeFile(exe,'fixture');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  controller.placementErrors.push(new Error('PINNED_SHARED_WINDOW_DESKTOP1'));
+  const lease='11111111-1111-4111-8111-111111111111';
+  const agent={async assertLease(){return {binding:{desktopNumber:2,desktopId:'22222222-2222-4222-8222-222222222222'}};},
+    async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent,30000,true);
+  await browser.init();
+  await assert.rejects(browser.start({agent_desktop_lease_id:lease,headless:false,profile_id:'fail-closed'}),/PINNED_SHARED_WINDOW_DESKTOP1/);
+  assert.equal(controller.launchModes[0],'visible-desktop2');
+  assert.deepEqual(controller.terminated,['process-1']);
+  assert.deepEqual(await browser.list(),[]);
+  await browser.closeAll();
+});
+
+test('slow visible Desktop2 reaper cannot starve an explicit browser close behind repeated sweeps',async t=>{
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const exe=path.join(root,'browser.exe');await writeFile(exe,'fixture');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  const original=controller.place.bind(controller);
+  let placements=0;
+  controller.place=async(...args:Parameters<typeof original>)=>{
+    placements++;
+    await new Promise(resolve=>setTimeout(resolve,1250));
+    return original(...args);
+  };
+  const lease='11111111-1111-4111-8111-111111111111';
+  const agent={async assertLease(){return {binding:{desktopNumber:2}};},
+    async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent,30000,true);
+  await browser.init();
+  const started=await browser.start({headless:false,agent_desktop_lease_id:lease,profile_id:'reaper-fairness'});
+  assert.equal(started.headless,false);
+  await new Promise(resolve=>setTimeout(resolve,1200));
+  const before=Date.now();
+  const closed=await Promise.race([
+    browser.close(started.session_id),
+    new Promise<never>((_r,reject)=>setTimeout(()=>reject(new Error('visible Desktop2 close starved behind reapers')),6500))
+  ]);
+  assert.equal(closed.closed,true);
+  assert.ok(Date.now()-before<6500);
+  assert.equal(placements>=3,true);
+  await browser.closeAll();
+  assert.deepEqual(controller.terminated,['process-1']);
 });

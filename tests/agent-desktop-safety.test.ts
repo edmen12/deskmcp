@@ -555,3 +555,39 @@ test('Control Panel never navigates Windows virtual desktops on behalf of Agent 
   assert.match(tick, /WriteHudHeartbeats\(controls,\s*null\)/);
   assert.match(tick, /TryRevokeAfterSafetyFailure/);
 });
+
+test('real visible Desktop2 placement refuses pinned HWND on Desktop1 and verifies each owned window',async()=>{
+  const desktopId='22222222-2222-4222-8222-222222222222';
+  const leaseId='11111111-1111-4111-8111-111111111111';
+  let currentDesktop=1;
+  let pin=true;
+  let checked=0;
+  const native={
+    async moveProcessTreeWindows(pid:number,id:string){
+      assert.equal(pid,1234);assert.equal(id,desktopId);
+      return {processId:pid,moved:2,windows:[
+        {hwnd:'0x00000101',desktopId:id,desktopNumber:2},
+        {hwnd:'0x00000102',desktopId:id,desktopNumber:2}
+      ]};
+    },
+    async info(){return {officialApi:true,virtualDesktopAccessor:true,currentDesktopNumber:currentDesktop,desktopCount:2};},
+    async windowInfo(hwnd:number){
+      checked++;
+      return {hwnd:String(hwnd),desktopId,desktopNumber:2,onCurrentDesktop:pin};
+    }
+  } as unknown as AgentDesktopNativeBridge;
+  const manager=new AgentDesktopManager(path.join(os.tmpdir(),'desktop2-pinned-fixture'),native);
+  (manager as unknown as {assertLease:(id:string)=>Promise<unknown>}).assertLease=async(id:string)=>{
+    assert.equal(id,leaseId);
+    return {binding:{desktopId,desktopNumber:2}};
+  };
+  await assert.rejects(manager.placeProcessTreeWindows(1234,leaseId,{requirePrivateWindow:true}),/shared\/pinned/);
+  assert.equal(checked,1,'stop after first pinned window');
+  pin=false;checked=0;
+  const moved=await manager.placeProcessTreeWindows(1234,leaseId,{requirePrivateWindow:true});
+  assert.equal(moved.windows.length,2);
+  assert.equal(checked,2);
+  currentDesktop=2;pin=true;
+  assert.equal((await manager.placeProcessTreeWindows(1234,leaseId,{requirePrivateWindow:true})).windows.length,2,
+    'user may manually visit Desktop2: current-desktop visibility there is valid');
+});
