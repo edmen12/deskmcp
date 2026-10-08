@@ -46,4 +46,24 @@
 - [ ] **Remaining performance / release feasibility:** native cold-start/process-tree placement still varies from subsecond to >10s, need latency profiling, sustained browser use, manual login handoff, native-app coverage and foreground/HWND lifecycle monitoring. Opt-in source only, NOT installed; no VM/Hyper-V.
 - [ ] **Production release acceptance:** Build/stage installer, verify package integrity and rollback, run real installed-Gateway MCP E2E and side-by-side desktop observation; obtain owner permission before updating/restarting anything.
 
+## 2026-10-09 WPF / WinForms live GUI extension — test-only, release still blocked
+
+- [x] Re-run *real Desktop2* WinForms native-host matrix: HWND membership, actual TextBox change, actual Button click, app-level right-button + wheel event, inactive-window PNG, owner Desktop1 at check end. **No app double-click/drag event** despite WM message acceptance.
+- [x] Real Desktop2 WPF fixture: root cloaked before move, UIA text exact readback + app `TextChanged`, UIA Button Invoke confirmed via app `APP_CLICK=1`, ScrollPattern top/bottom confirmed through nonzero app `ScrollChanged`. These were direct test-only WinApp/native-host invocations, **not native-app MCP/tool-route acceptance**.
+- [ ] Generic WPF/WinForms drag, double-click, window-targeted WPF raw input: **unverified or FAILED at app level**; do not promote a native message-return success to user action success.
+- [ ] WPF secondary-window placement and zero-interference: during popup verification `desktopNumber=2` and `onCurrentDesktop=true`, but final current desktop was **2**, subsequent fresh check **1**. Without continuous correlation/manual-handoff attribution, pinned/shared-window hypothesis and agent-induced switch are both **unproven**. Latest guarded harness requires Desktop1 immediately before and after popup, not yet rerun.
+- [ ] Continuous switch/foreground/action attribution: attempt to start a separate diagnostic monitor was **blocked by tool safety checks**, so the WPF matrix **exit 2** remains an unresolved release blocker. Human manual navigation is allowed, but never equate a manual switch to Agent theft without evidence.
+- [ ] WinUI/UWP, Electron (outside CDP), arbitrary native file dialogs, multiwindow lifecycle, owner-aware handoff and real Gateway-owned MCP native-app entry still **OPEN**. No production install/merge/push.
+
+Evidence and reproducible source: `docs/desktop2-background-input-candidate.md#2026-10-09--winforms--wpf-real-windows-virtual-desktop-2-native-app-acceptance-additional-source-only-worktree`.
+
+**RED / USER-CONFIRMED 2026-10-09:** Owner reported **4 unwanted Windows Desktop switches during the latest real WPF GUI test**. Treat as 4 user-confirmed interruptions and a **failed zero-interference release gate**, even though a later Desktop1 check passed and installed lease-bound invariant log remained at 9. The probe was not using an Agent lease, so no log delta does not establish zero switching. Exact action-to-switch attribution is unknown; don't relabel them owner manual switches. All live GUI/window-placement/input tests remain paused until the safe continuous observer/focus guard is available and verified. Distinguish functional UIA app-readback PASS from cross-desktop safety FAIL.
+
+### 2026-10-09 after incident — non-GUI safety harness work only
+
+- [x] Candidate passive event watcher source created: `test-area/desktop2-switch-observer/`. VDA virtual-desktop notifications + Windows foreground HWND/PID + timer fallback, JSONL UTC elapsed event metadata, no clipboard/content reading and **no desktop navigation/input**. Native .NET build **0/0 warnings/errors**. Pure simulated latch test **exit 0**.
+- [x] WPF GUI acceptance source fails **before launching GUI** unless an active, verified listener exists and no persistent switch tripwire exists; guards each native/UIA call and records action-kind timestamps. Static guard tests **4/4 PASS**, PowerShell syntax check **0 parse errors**.
+- [ ] Live validation of passive listener's VDA notification ABI/timing and foreground event coverage **NOT performed**. Not safe to claim no switching based on these source checks. No WPF/WinUI/Electron or generic pointer tests resumed. Even a correctly working tripwire stops *subsequent* actions; it does not guarantee prevention of the first nonconsensual switch. The **4 user-confirmed interruptions** remain a RED release gate.
+- [ ] Gate next: obtain a reliable cause-and-effect trace and design an input path that cannot activate the user's foreground Windows virtual desktop during autonomy; only after that may real GUI acceptance restart.
+
 **Do not mark blockers passed based on a unit test, an `invoke` alias, or auto-return safety behavior. Current installed version remains 0.9.23, main `94082fc`.**

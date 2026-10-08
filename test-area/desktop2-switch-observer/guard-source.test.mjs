@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+const here=path.dirname(fileURLToPath(import.meta.url));
+const observer=readFileSync(path.join(here,'Program.cs'),'utf8');
+const wpf=readFileSync(path.join(here,'..','d2-wpf-matrix.ps1'),'utf8');
+test('no native GUI launch before observer fail-closed preflight',()=>{
+ const gate=wpf.indexOf('try{Assert-ForegroundIsolation}catch');
+ const launch=wpf.indexOf('$owned=Start-Process');
+ assert.ok(gate>0 && launch>gate);
+ assert.match(wpf,/PASSIVE_DESKTOP_SWITCH_OBSERVER_REQUIRED_BEFORE_ANY_GUI_ACTION/);
+ assert.match(wpf,/DESKTOP_SWITCH_TRIPWIRE_LATCHED_ABORT_ALL_GUI_ACTIONS/);
+});
+test('native calls and UIA actions are guarded before and after',()=>{
+ const native=wpf.match(/function N\(\[string\[\]\]\$params\) \{([\s\S]*?)\n\}/)?.[1];
+ const uia=wpf.match(/function W\(\[string\[\]\]\$params\) \{([\s\S]*?)\n\}/)?.[1];
+ assert.ok(native && uia);
+ for(const body of [native,uia]){
+  const first=body.indexOf('Assert-ForegroundIsolation');
+  assert.ok(first>=0);
+  const invocation=body.includes('$winapp ui')?body.indexOf('$winapp ui'):body.indexOf('$native @params');
+  assert.ok(invocation>first);
+  assert.ok(body.indexOf('Assert-ForegroundIsolation',invocation)>invocation);
+ }
+});
+test('monitor uses only message-only notification and passive foreground hooks',()=>{
+ for(const s of ['new IntPtr(-3)','RegisterPostMessageHook','SetWinEventHook','GetCurrentDesktopNumber','NO_AUTO_RETURN','attribution = "UNKNOWN_UNTIL_OWNER_CORRELATION"'])
+   assert.ok(observer.includes(s),s);
+ for(const prohibited of [/\bGoToDesktopNumber\s*\(/,/\bSetForegroundWindow\s*\(/,/\bSendInput\s*\(/,/\bSetCursorPos\s*\(/,/\bGetClipboardData\s*\(/])
+   assert.doesNotMatch(observer,prohibited);
+});
+test('record action stamps without user text or target values',()=>{
+ assert.match(wpf,/gui-action-timeline\.jsonl/);
+ assert.match(wpf,/Trace-Action 'START' 'winapp-uia' \$params\[0\]/);
+ assert.doesNotMatch(wpf,/Trace-Action[^\n]*\$params\[2\]/);
+});
