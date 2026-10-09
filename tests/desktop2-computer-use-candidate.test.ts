@@ -4,7 +4,7 @@ import { ComputerObservationRegistry } from '../src/computer-use-observation.js'
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
 import { Desktop2ComputerUseCandidate } from '../src/desktop2-computer-use-candidate.js';
 import type { ComputerWindow } from '../src/computer-use-backend.js';
-import type { Desktop2DirectUiaLeaseCoordinator } from '../src/desktop2-direct-uia-lease.js';
+import type { Desktop2DirectUiaLeaseCoordinator, Desktop2SemanticControl, Desktop2UiaAction } from '../src/desktop2-direct-uia-lease.js';
 
 const lease = 'a2519d05-1219-4c25-9a10-d1b35cef2812';
 const otherLease = 'e8d9ca2b-1f73-4fcd-993c-682cb11a0d72';
@@ -21,13 +21,13 @@ function fixture() {
   let live: readonly ComputerWindow[] = [window];
   let performed = 0, armed = 0;
   const seen: unknown[] = [];
+  let semanticControls: readonly Desktop2SemanticControl[] = [
+    {automationId:'Scroller',controlType:'ControlType.Pane',
+      className:'ScrollViewer',canSetValue:false,canScrollTopBottom:true}
+  ];
   const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls' | 'inspectNativeButtons' | 'inspectNativeLists'> = {
     async arm(scope) { armed++; seen.push(scope); return {armed:true,desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c'}; },
-    async inspectControls() { return [
-      {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
-      {automationId:'Edit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
-      {automationId:'Scroller',controlType:'ControlType.Pane',className:'ScrollViewer',canSetValue:false,canScrollTopBottom:true}
-    ]; },
+    async inspectControls() {return semanticControls;},
     async inspectNativeControls(){ return [
       {automationId:'native-edit:884020',controlType:'NativeWin32.Edit',
         className:'Edit',canSetValue:false,canScrollTopBottom:false,canSetNativeValue:true}
@@ -48,14 +48,15 @@ function fixture() {
   const adapter=new Desktop2ComputerUseCandidate(
     {windows,observations,coordinator}, native, async()=>live
   );
-  const input=(phase:'arm'|'perform',action?:{type:'set_value';automationId:string;value:string})=>{
+  const input=(phase:'arm'|'perform',action?:Desktop2UiaAction)=>{
     const computerObservationId=observations.issue(windowId,Date.now(),lease);
     return {phase, windowId, computerObservationId, agentDesktopLeaseId:lease,
       observerReadyFile:'C:\\tmp\\observer.ready.json', ...(action?{action}:{})};
   };
   return { windows,observations,coordinator,windowId,adapter,input,
     get invoked(){return {performed,armed};},seen,
-    setLive(value:readonly ComputerWindow[]) {live=value;} };
+    setLive(value:readonly ComputerWindow[]) {live=value;},
+    setSemanticControls(value:readonly Desktop2SemanticControl[]) {semanticControls=value;} };
 }
 
 test('real Computer Use one-time lease-bound observation is consumed before native arm',async()=>{
@@ -78,14 +79,15 @@ test('mutating action requires a NEW lease observation, not the observer arm tok
   const snapshot=await t.adapter.snapshotWindow({
     windowId:t.windowId,agentDesktopLeaseId:lease,observerReadyFile:'C:\\tmp\\observer.ready.json'
   });
-  assert.equal(snapshot.controls.length,3);
-  const request={...t.input('perform',{type:'set_value',automationId:'WpfEdit',value:'Hello'}),
+  assert.equal(snapshot.controls.length,1);
+  assert.equal(snapshot.controls[0]?.canSetValue,false);
+  const request={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'top'}),
     computerObservationId:snapshot.computerObservationId};
   const result=await t.adapter.dispatch(request);
   assert.deepEqual(result,{uiaReadbackConfirmed:true,appEventConfirmed:false});
   assert.equal(t.invoked.performed,1);
   assert.deepEqual((t.seen[1] as {action:unknown}).action,
-    {type:'set_value',automationId:'WpfEdit',value:'Hello'});
+    {type:'scroll',automationId:'Scroller',to:'top'});
 });
 
 test('observation without a lease cannot be upgraded to target Desktop2',async()=>{
@@ -139,9 +141,9 @@ test('two observations of same window cannot both mutate after first consume and
     observerReadyFile:'C:\\tmp\\observer.ready.json'};
   const a=await t.adapter.snapshotWindow(inspect);
   const b=await t.adapter.snapshotWindow(inspect);
-  const first={...t.input('perform',{type:'set_value',automationId:'Edit',value:'A'}),
+  const first={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'top'}),
     computerObservationId:a.computerObservationId};
-  const second={...t.input('perform',{type:'set_value',automationId:'Edit',value:'B'}),
+  const second={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'bottom'}),
     computerObservationId:b.computerObservationId};
   await t.adapter.dispatch(first);
   await assert.rejects(t.adapter.dispatch(second),/stale/);
@@ -222,7 +224,7 @@ test('protected element observation cannot be replayed with another observer rea
  const t=fixture();
  const snap=await t.adapter.snapshotWindow({windowId:t.windowId,
   agentDesktopLeaseId:lease,observerReadyFile:'C:\\observer-A\\ready.json'});
- const request={...t.input('perform',{type:'set_value',automationId:'WpfEdit',value:'cannot-cross'}),
+ const request={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'bottom'}),
   computerObservationId:snap.computerObservationId,observerReadyFile:'C:\\observer-B\\ready.json'};
  await assert.rejects(t.adapter.dispatch(request),/fresh protected semantic control snapshot/);
  assert.equal(t.invoked.performed,0);
@@ -327,5 +329,40 @@ test('native ListBox scroll only accepts an exact one-use ListBox observation, n
  const valid=await t.adapter.snapshotNativeLists(observed);
  await t.adapter.dispatch({...forged,computerObservationId:valid.computerObservationId,
    action:{...forged.action,automationId:'native-list:188811'}});
+ assert.equal(t.invoked.performed,1);
+});
+
+test('WPF ValuePattern edit capability is rejected even when a mocked invoker forges the metadata',async()=>{
+ const t=fixture();
+ t.setSemanticControls([
+  {automationId:'Scroller',controlType:'ControlType.Pane',className:'ScrollViewer',
+   canSetValue:false,canScrollTopBottom:true},
+  {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',
+   canSetValue:true,canScrollTopBottom:false}
+ ]);
+ await assert.rejects(t.adapter.snapshotWindow({
+  windowId:t.windowId,agentDesktopLeaseId:lease,
+  observerReadyFile:'C:\\tmp\\observer.ready.json'
+ }),/invalid/);
+ assert.equal(t.invoked.performed,0);
+});
+
+test('even an authentic scroll-only UIA permit never becomes a ValuePattern write permit',async()=>{
+ const t=fixture();
+ const params={windowId:t.windowId,agentDesktopLeaseId:lease,
+   observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const snap=await t.adapter.snapshotWindow(params);
+ assert.equal(snap.controls.length,1);
+ assert.deepEqual(snap.controls.map(c=>c.canSetValue),[false]);
+ const attack={...t.input('perform',{type:'set_value',automationId:'Scroller',value:'unsafe'}),
+   computerObservationId:snap.computerObservationId};
+ await assert.rejects(t.adapter.dispatch(attack),/fresh protected semantic control snapshot/);
+ await assert.rejects(t.adapter.dispatch({...attack,
+   action:{type:'scroll' as const,automationId:'Scroller',to:'top' as const}
+ }),/fresh protected semantic control snapshot/);
+ const valid=await t.adapter.snapshotWindow(params);
+ await t.adapter.dispatch({...attack,computerObservationId:valid.computerObservationId,
+   action:{type:'scroll' as const,automationId:'Scroller',to:'top' as const}
+ });
  assert.equal(t.invoked.performed,1);
 });

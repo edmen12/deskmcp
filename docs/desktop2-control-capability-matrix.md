@@ -55,6 +55,14 @@ Raw evidence (retained; Git ignored):
 
 **SOURCE TESTS**: .NET Release helper + fixture build 0 warnings/errors, TypeScript compilation pass, focused lease/capability 45/45, full Desktop2 suite 88/88, static source contracts 19/19, offline fail-closed tests including missing observer PASS. Observer/test GUI processes exited; Agent lease stopped and Desktop2 free. The extra fixture ListBox had not yet been used for a new Edit/Button regression; a planned follow-up was intentionally **BLOCKED by host free RAM ~459 MB**, not falsely reported PASS. Non-owned and third-party app behavior remains unverified, production RED.
 
+## 2026-10-09 — Computer Use candidate rejects legacy forged UIA ValuePattern authority
+
+**SOURCE-ONLY SAFETY FIX**: The native UIA semantic snapshot and lease coordinator already rejected `canSetValue=true` after actual WPF ValuePattern foreground theft, but the outer `Desktop2ComputerUseCandidate.snapshotWindow` previously trusted its injected `inspectControls` result and would mint a one-use permit for a forged editable UIA element. Its `dispatch` also had an old branch authorizing `set_value` when such a permit existed; native/lease helper would still refuse, but authority at this boundary was inconsistent.
+
+The candidate now **rejects any `canSetValue !== false`**, requires a guarded UIA scroll-only snapshot, refuses mixed native action flags, and **hard-denies `set_value` even if an old/forged semantic permit is supplied**. The action attempt burns the one-use observation. Authentic scroll snapshots and separate native HWND Edit/Button/ListBox capabilities remain intact. Test fixtures were changed from the formerly permissive fake WPF edit into a scroll-only control; two adversarial tests cover forged `canSetValue=true` metadata and trying to upgrade/replay a scroll permit for a prohibited write.
+
+**Verified**: TypeScript compilation PASS, focused Computer Use/lease tests **47/47 PASS**, all eight Desktop2 source tests **90/90 PASS**, native source contracts **20/20 PASS**, `git diff --check` PASS. **No new real GUI test in this change** because host free RAM repeatedly dropped to ~380–507 MB despite brief recovery; the added-ListBox-fixture Edit/Button E2E regression remains OPEN. No lease started, no target/app foreground operations, and no upgrade/restart/merge/push to production. WPF UIA ValuePattern and generic third-party Computer Use remain RED.
+
 ## Primary evidence
 - Native WinForms Edit: test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md
 - Native WinForms PushButton: test-area/desktop2-real-acceptance/native-winforms-button-findings-20261009.md

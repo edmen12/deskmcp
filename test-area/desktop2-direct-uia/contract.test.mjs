@@ -265,3 +265,13 @@ test('native ListBox scroll uses bounded hwnd-only LB_SETTOPINDEX with exact old
  const candidate=readFileSync(path.join(dir,'..','..','src','desktop2-computer-use-candidate.ts'),'utf8');
  assert.match(candidate,/action.type === 'scroll_native_list' && !allowed.canScrollNativeList/);
 });
+
+test('Computer Use cannot mint forged UIA edit or re-enable ValuePattern from an old permit',()=>{
+ const candidate=readFileSync(path.join(dir,'..','..','src','desktop2-computer-use-candidate.ts'),'utf8');
+ const snapshot=candidate.slice(candidate.indexOf('async snapshotWindow('),candidate.indexOf('async snapshotNativeWindow('));
+ assert.match(snapshot,/item\.canSetValue !== false/);
+ assert.match(snapshot,/item\.canScrollTopBottom !== true/);
+ const dispatch=candidate.slice(candidate.indexOf('async dispatch(input: Desktop2ComputerAction)'));
+ assert.match(dispatch,/\|\| action\.type === 'set_value'/);
+ assert.match(dispatch,/this\.semanticObservations\.delete\(input\.computerObservationId\)/);
+});
