@@ -16,6 +16,7 @@ internal sealed class SemanticPolicy
     public static bool Permitted(string? action) =>
         action is "inspect" or "inspect-tree" or "inspect-native-edits"
             or "set-native-edit" or "inspect-native-buttons" or "click-native-button"
+            or "inspect-native-lists" or "scroll-native-list"
             or "scroll-top" or "scroll-bottom";
 
     public static void Demand(string? action)
@@ -47,6 +48,8 @@ internal sealed class Request
     public string AutomationId { get; set; } = "";
     public string? Value { get; set; }
     public string? ExpectedPreviousValue { get; set; }
+    public int? TopIndex { get; set; }
+    public int? ExpectedPreviousTopIndex { get; set; }
     public string ObserverReady { get; set; } = "";
 }
 
@@ -258,6 +261,15 @@ internal static partial class DirectUia
         }
         else if (req.Value != null || req.ExpectedPreviousValue != null)
             throw new InvalidOperationException("EXTRA_NATIVE_EDIT_VALUES_NOT_ALLOWED");
+        if (req.Action == "scroll-native-list")
+        {
+            if (req.TopIndex is < 0 or >= 512 || req.ExpectedPreviousTopIndex is < 0 or >= 512
+                || req.TopIndex == null || req.ExpectedPreviousTopIndex == null
+                || !req.AutomationId.StartsWith("native-list:", StringComparison.Ordinal))
+                throw new InvalidOperationException("NATIVE_LIST_EXACT_INDEX_PRECONDITION_REQUIRED");
+        }
+        else if (req.TopIndex != null || req.ExpectedPreviousTopIndex != null)
+            throw new InvalidOperationException("EXTRA_NATIVE_LIST_INDICES_NOT_ALLOWED");
         if (req.Action == "inspect-tree" && req.AutomationId != "__tree_snapshot__")
             throw new InvalidOperationException("TREE_SNAPSHOT_SENTINEL_REQUIRED");
         if (req.Action == "inspect-native-edits" && req.AutomationId != "__native_edit_snapshot__")
@@ -266,6 +278,8 @@ internal static partial class DirectUia
             throw new InvalidOperationException("NATIVE_BUTTON_SNAPSHOT_SENTINEL_REQUIRED");
         if (req.Action == "click-native-button" && !req.AutomationId.StartsWith("native-button:", StringComparison.Ordinal))
             throw new InvalidOperationException("NATIVE_BUTTON_EXACT_CAPABILITY_REQUIRED");
+        if (req.Action == "inspect-native-lists" && req.AutomationId != "__native_list_snapshot__")
+            throw new InvalidOperationException("NATIVE_LIST_SNAPSHOT_SENTINEL_REQUIRED");
         return req;
     }
 
@@ -353,6 +367,11 @@ internal static partial class DirectUia
             return NativeButton.Inspect(hwnd, request.ProcessId, Guard);
         if (request.Action == "click-native-button")
             return NativeButton.Click(hwnd, request.ProcessId, request.AutomationId, Guard);
+        if (request.Action == "inspect-native-lists")
+            return NativeList.Inspect(hwnd, request.ProcessId, Guard);
+        if (request.Action == "scroll-native-list")
+            return NativeList.Scroll(hwnd, request.ProcessId, request.AutomationId,
+                request.TopIndex!.Value, request.ExpectedPreviousTopIndex!.Value, Guard);
         // UIA is restricted to guarded read-only metadata and unapproved
         // candidate ScrollPattern; ValuePattern mutation remains quarantined.
         if (request.Action == "inspect-tree")

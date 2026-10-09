@@ -23,7 +23,8 @@ const here=path.dirname(fileURLToPath(import.meta.url));
 const root=path.resolve(here,'../..');
 const main=path.resolve(root,'../DeskMCP');
 const lease=process.argv[2],stage=process.argv[3],sentinel=process.argv[4];
-if(process.argv.length!==5||!['inspect','write','deny-stale','button-inspect','button-click'].includes(stage)
+if(process.argv.length!==5||!['inspect','write','deny-stale','button-inspect','button-click',
+     'list-inspect','list-scroll','list-deny-stale'].includes(stage)
    ||sentinel!=='OWNED_WINFORMS_NATIVE_EDIT_ONCE'
    ||!/^[0-9a-f]{8}-[0-9a-f-]{27}$/iu.test(lease??''))
   throw Error('EXPLICIT_TEST_LEASE_STAGE_AND_OWNED_FIXTURE_REQUIRED');
@@ -71,7 +72,8 @@ const value='D2_NATIVE_WINFORMS_ONE_SHOT';
 const result={
   stage,pass:false,desktopBefore:undefined,desktopAfter:undefined,
   claimedForegroundSafety:false,tripwire:false,error:undefined,
-  observed:[],appCallbackCount:0,appButtonCallbackCount:0,appFocusEvents:[],observerEventPath:null,
+  observed:[],appCallbackCount:0,appButtonCallbackCount:0,appListTopChanges:[],
+  appFocusEvents:[],observerEventPath:null,
   appEventPath:app,timelinePath:timeline
 };
 async function guard(where){
@@ -127,6 +129,13 @@ try{
     ||first.pid!==child.pid || typeof first.childHwnd!=='number'
     || !(first.childClass?.toLowerCase()==='edit'||first.childClass?.toLowerCase().startsWith('windowsforms10.edit.')))
     throw Error('OWNED_FIXTURE_PROTECTION_OR_PROCESS_IDENTITY_FAILED');
+  if(stage.startsWith('list-') && (
+    !Number.isSafeInteger(first.listHwnd) || first.listHwnd<=0
+    || !(first.listClass?.toLowerCase()==='listbox'
+         || first.listClass?.toLowerCase().startsWith('windowsforms10.listbox.'))
+    || !Number.isSafeInteger(first.listStyle) || (first.listStyle & 0x2230)!==0
+    || first.listCount!==80 || first.listTop!==0
+  ))throw Error('OWNED_NATIVE_LIST_STYLE_OR_HANDLE_UNVERIFIED');
   if(stage.startsWith('button-') && (
     !Number.isSafeInteger(first.buttonHwnd) || first.buttonHwnd<=0
     || !first.buttonClass?.toLowerCase().startsWith('windowsforms10.button.')
@@ -150,12 +159,17 @@ try{
   await guard('TARGET_WATCH_ARMED');
   log('TARGET_FOREGROUND_HOOK_ARMED');
   const buttonMode=stage==='button-inspect'||stage==='button-click';
-  const snap=buttonMode
-    ? await session.snapshotNativeButtons(target.windowId)
+  const listMode=stage.startsWith('list-');
+  const snap=listMode
+    ? await session.snapshotNativeLists(target.windowId)
+    : buttonMode ? await session.snapshotNativeButtons(target.windowId)
     : await session.snapshotNativeWindow(target.windowId);
   result.observed=snap.controls;
   if(snap.controls.length!==1
-    || (buttonMode
+    || (listMode
+      ? snap.controls[0].automationId!=='native-list:'+first.listHwnd
+        || snap.controls[0].canScrollNativeList!==true
+      : buttonMode
       ? snap.controls[0].automationId!=='native-button:'+first.buttonHwnd
         || snap.controls[0].canClickNative!==true
       : snap.controls[0].automationId!=='native-edit:'+first.childHwnd
@@ -177,6 +191,35 @@ try{
     await sleep(300);
     await guard('BM_CLICK_SETTLED');
     log('NATIVE_BUTTON_MESSAGE_DISPATCHED');
+  }
+  if(stage==='list-scroll'){
+    // Exactly one guarded native LB_SETTOPINDEX, with a fresh one-use ListBox permit.
+    const outcome=await session.dispatch({
+      phase:'perform',windowId:target.windowId,
+      computerObservationId:snap.computerObservationId,
+      action:{type:'scroll_native_list',automationId:snap.controls[0].automationId,
+        topIndex:20,expectedPreviousTopIndex:0}
+    });
+    if(outcome?.topIndexReadbackConfirmed!==true||outcome?.appEventConfirmed!==false
+       ||outcome?.foregroundSafetyUnproven!==true)
+      throw Error('LISTBOX_TOPINDEX_READBACK_NOT_CONFIRMED');
+    await guard('NATIVE_LIST_SCROLL_COMPLETE');
+    await sleep(350);
+    await guard('NATIVE_LIST_SETTLED');
+    log('NATIVE_LIST_TOPINDEX_READBACK_PASS');
+  }
+  if(stage==='list-deny-stale'){
+    let denied=false;
+    try{
+      await session.dispatch({phase:'perform',windowId:target.windowId,
+        computerObservationId:snap.computerObservationId,
+        action:{type:'scroll_native_list',automationId:snap.controls[0].automationId,
+          topIndex:20,expectedPreviousTopIndex:5}});
+    }catch(e){denied=true;log('WRONG_TOPINDEX_REJECTED',{error:e instanceof Error?e.message:String(e)});}
+    if(!denied)throw Error('NATIVE_LIST_STALE_SCROLL_UNSAFE_ACCEPTED');
+    await guard('NATIVE_LIST_WRONG_OLD_INDEX_DENIED');
+    await sleep(300);
+    await guard('NATIVE_LIST_DENIAL_SETTLED');
   }
   if(stage==='deny-stale'){
     // Compare-and-swap safety: wrong old value MUST reject before WM_SETTEXT.
@@ -220,6 +263,12 @@ try{
   const changes=appText.split(/\r?\n/).filter(line=>line.includes('APP_EDIT='));
   const clickCallbacks=appText.split(/\r?\n/).filter(line=>line.includes('APP_BUTTON_CLICK='));
   result.appButtonCallbackCount=clickCallbacks.length;
+  result.appListTopChanges=appText.split(/\r?\n/).filter(line=>line.includes('APP_LIST_TOP='));
+  if(stage==='list-scroll' && (result.appListTopChanges.length!==1
+      || !result.appListTopChanges[0].endsWith('APP_LIST_TOP=20')))
+    throw Error('LISTBOX_REAL_TOPINDEX_CHANGE_NOT_CONFIRMED');
+  if(stage!=='list-scroll' && result.appListTopChanges.length!==0)
+    throw Error('LISTBOX_UNEXPECTED_SCROLL');
   if(stage==='button-click'&&(clickCallbacks.length!==1
       || !clickCallbacks[0].endsWith('APP_BUTTON_CLICK=1')))
     throw Error('NATIVE_BUTTON_REAL_CALLBACK_NOT_EXACTLY_ONCE');

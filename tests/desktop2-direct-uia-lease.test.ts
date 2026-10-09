@@ -386,3 +386,75 @@ test('native pushbutton snapshot rejects forged PID, class, duplicate capability
    await assert.rejects(t.coordinator.inspectNativeButtons(scope));
  }
 });
+
+test('guarded native ListBox inspection publishes only exact HWND-only controls',async()=>{
+ const t=fixture();
+ t.setResult({operation:'inspect-native-lists',hwnd,processId:pid,scannedNodes:2,
+  uiaReadbackConfirmed:false,appEventConfirmed:false,
+  controls:[{automationId:'native-list:1777',controlType:'NativeWin32.ListBox',
+    className:'WindowsForms10.LISTBOX.app.0.1',canSetValue:false,
+    canScrollTopBottom:false,canSetNativeValue:false,canClickNative:false,
+    canScrollNativeList:true}]});
+ const controls=await t.coordinator.inspectNativeLists(scope);
+ assert.equal(controls.length,1);
+ assert.equal(controls[0]?.canScrollNativeList,true);
+ assert.equal(t.requests.length,1);
+ assert.equal((t.requests[0]?.request as {automationId:string}).automationId,'__native_list_snapshot__');
+});
+
+test('native ListBox scroll binds requested and expected index with no generic wheel/scroll fallback',async()=>{
+ const t=fixture();
+ t.setResult({operation:'scroll-native-list',topIndexReadbackConfirmed:true,
+  appEventConfirmed:false,foregroundSafetyUnproven:true});
+ const result=await t.coordinator.perform(scope,{
+  type:'scroll_native_list',automationId:'native-list:1777',topIndex:20,expectedPreviousTopIndex:0
+ });
+ assert.deepEqual(result,{topIndexReadbackConfirmed:true,appEventConfirmed:false,foregroundSafetyUnproven:true});
+ assert.deepEqual(t.requests[0]?.request,{
+  action:'scroll-native-list',hwnd,processId:pid,desktopId,automationId:'native-list:1777',
+  topIndex:20,expectedPreviousTopIndex:0,observerReady:observerReadyFile
+ });
+});
+
+test('native ListBox denies invalid target/indices and forged native acknowledgement before invoking provider',async()=>{
+ for(const action of [
+  {automationId:'native-list:0',topIndex:1,expectedPreviousTopIndex:0},
+  {automationId:'native-button:123',topIndex:1,expectedPreviousTopIndex:0},
+  {automationId:'native-list:123',topIndex:-1,expectedPreviousTopIndex:0},
+  {automationId:'native-list:123',topIndex:512,expectedPreviousTopIndex:0},
+  {automationId:'native-list:123',topIndex:20,expectedPreviousTopIndex:1.5},
+  {automationId:'native-list:123',topIndex:20,expectedPreviousTopIndex:-1},
+  {automationId:'native-list:9999999999999999999999999',topIndex:20,expectedPreviousTopIndex:0}
+ ]) {
+  const t=fixture();
+  await assert.rejects(t.coordinator.perform(scope,{type:'scroll_native_list',...action}));
+  assert.equal(t.requests.length,0);
+ }
+ const t=fixture();
+ t.setResult({operation:'scroll-native-list',topIndexReadbackConfirmed:true,
+  appEventConfirmed:true,foregroundSafetyUnproven:true});
+ await assert.rejects(t.coordinator.perform(scope,{
+  type:'scroll_native_list',automationId:'native-list:1777',topIndex:20,expectedPreviousTopIndex:0
+ }),/readback/);
+});
+
+test('native ListBox inventory refuses wrong HWND/PID, duplicate and malformed child controls',async()=>{
+ const good={automationId:'native-list:1777',controlType:'NativeWin32.ListBox',
+  className:'ListBox',canSetValue:false,canScrollTopBottom:false,
+  canSetNativeValue:false,canClickNative:false,canScrollNativeList:true};
+ const base={operation:'inspect-native-lists',hwnd,processId:pid,scannedNodes:2,
+  uiaReadbackConfirmed:false,appEventConfirmed:false};
+ for(const patch of [
+  {hwnd:hwnd+1,controls:[good]},
+  {processId:pid+1,controls:[good]},
+  {controls:[good,good]},
+  {controls:[{...good,automationId:'native-list:not-a-hwnd'}]},
+  {controls:[{...good,canScrollNativeList:false}]},
+  {controls:[{...good,className:'Button'}]},
+  {controls:[{...good,canSetValue:true}]},
+  {controls:[good],scannedNodes:129}
+ ]){
+  const t=fixture();t.setResult({...base,...patch});
+  await assert.rejects(t.coordinator.inspectNativeLists(scope));
+ }
+});

@@ -24,6 +24,8 @@ internal sealed class EditFixture:Form
     private readonly int lifetime;
     private readonly IntPtr originalForeground;
     private readonly TextBox edit;
+    private readonly ListBox list;
+    private int lastListTop;
     private readonly System.Windows.Forms.Timer timer=new(){Interval=110};
     private bool uncloaked;
     private int edits;
@@ -72,7 +74,7 @@ internal sealed class EditFixture:Form
         ready=readyPath;release=releasePath;events=eventPath;lifetime=lifetimeMs;
         originalForeground=Native.GetForegroundWindow();
         Text="DeskMCP D2 Native WinForms Edit Fixture";Name="DeskMCPD2OwnedNativeEdit";
-        Width=465;Height=240;StartPosition=FormStartPosition.Manual;
+        Width=465;Height=450;StartPosition=FormStartPosition.Manual;
         Left=400;Top=250;ShowInTaskbar=true;TopMost=false;
         FormBorderStyle=FormBorderStyle.FixedSingle;MaximizeBox=false;
         edit=new TracedEdit(Log) {
@@ -90,9 +92,16 @@ internal sealed class EditFixture:Form
         int clickCount=0;
         button.Click+=(_,_)=>Log("APP_BUTTON_CLICK="+(++clickCount));
         Controls.Add(button);
+        list=new ListBox {Name="OwnedScrollableList",Left=22,Top=205,
+            Width=400,Height=128,IntegralHeight=false,SelectionMode=SelectionMode.One,
+            DrawMode=DrawMode.Normal};
+        for(int i=0;i<80;i++)list.Items.Add("Test list item "+i.ToString("D3"));
+        Controls.Add(list);
+        lastListTop=list.TopIndex;
         root=Handle;
         IntPtr child=edit.Handle;
         IntPtr buttonHandle=button.Handle;
+        IntPtr listHandle=list.Handle;
         var rootStyle=Native.GetWindowLongPtr(root,-20).ToInt64();
         if((rootStyle & 0x08000000L)==0)throw new Exception("PROTECTED_NOACTIVATE_STYLE_MISSING");
         int cloak=1;
@@ -104,11 +113,16 @@ internal sealed class EditFixture:Form
             Native.GetClassName(child,klass,klass.Capacity);
             StringBuilder buttonClass=new(256);
             Native.GetClassName(buttonHandle,buttonClass,buttonClass.Capacity);
+            StringBuilder listClass=new(256);
+            Native.GetClassName(listHandle,listClass,listClass.Capacity);
             File.WriteAllText(ready,JsonSerializer.Serialize(new {
                 hwnd=root.ToInt64(),pid=Environment.ProcessId,childHwnd=child.ToInt64(),
                 childClass=klass.ToString(),buttonHwnd=buttonHandle.ToInt64(),
                 buttonClass=buttonClass.ToString(),
                 buttonStyle=Native.GetWindowLongPtr(buttonHandle,-16).ToInt64(),
+                listHwnd=listHandle.ToInt64(),listClass=listClass.ToString(),
+                listStyle=Native.GetWindowLongPtr(listHandle,-16).ToInt64(),
+                listCount=list.Items.Count,listTop=list.TopIndex,
                 dwmCloaked=state,rootNoActivate=true,
                 initialForeground=originalForeground.ToInt64(),
                 afterForeground=Native.GetForegroundWindow().ToInt64()
@@ -116,6 +130,7 @@ internal sealed class EditFixture:Form
             Log("APP_SHOWN_FOREGROUND="+Native.GetForegroundWindow().ToInt64());
         };
         timer.Tick+=(_,_)=>{
+            if(list.TopIndex!=lastListTop){lastListTop=list.TopIndex;Log("APP_LIST_TOP="+lastListTop);}
             if(Environment.TickCount64-began>lifetime){timer.Stop();Close();return;}
             if(!uncloaked && File.Exists(release) &&
                 File.ReadAllText(release).Trim()=="UN-CLOAK-AFTER-VERIFIED-DESKTOP2") {

@@ -21,6 +21,7 @@ export type Desktop2UiaAction =
   | { readonly type: 'set_value'; readonly automationId: string; readonly value: string }
   | { readonly type: 'set_native_edit'; readonly automationId: string; readonly value: string; readonly expectedPreviousValue: string }
   | { readonly type: 'click_native_button'; readonly automationId: string }
+  | { readonly type: 'scroll_native_list'; readonly automationId: string; readonly topIndex: number; readonly expectedPreviousTopIndex: number }
   | { readonly type: 'scroll'; readonly automationId: string; readonly to: 'top' | 'bottom' };
 export interface Desktop2UiaScope {
   readonly leaseId: string;
@@ -35,10 +36,12 @@ export interface Desktop2SemanticControl {
   readonly canScrollTopBottom: boolean;
   readonly canSetNativeValue?: boolean;
   readonly canClickNative?: boolean;
+  readonly canScrollNativeList?: boolean;
 }
 export interface Desktop2UiaRequest {
   readonly action: 'inspect' | 'inspect-tree' | 'inspect-native-edits'
     | 'inspect-native-buttons' | 'click-native-button'
+    | 'inspect-native-lists' | 'scroll-native-list'
     | 'set-value' | 'set-native-edit' | 'scroll-top' | 'scroll-bottom';
   readonly hwnd: number;
   readonly processId: number;
@@ -47,6 +50,8 @@ export interface Desktop2UiaRequest {
   readonly observerReady: string;
   readonly value?: string;
   readonly expectedPreviousValue?: string;
+  readonly topIndex?: number;
+  readonly expectedPreviousTopIndex?: number;
 }
 export interface Desktop2UiaInvoker {
   execute(mode: 'arm-target' | 'request', request: Desktop2UiaRequest): Promise<unknown>;
@@ -120,7 +125,7 @@ export class Desktop2DirectUiaLeaseCoordinator {
     }
     return id;
   }
-  private static nativeAction(action: Desktop2UiaAction): Pick<Desktop2UiaRequest, 'action' | 'automationId' | 'value' | 'expectedPreviousValue'> {
+  private static nativeAction(action: Desktop2UiaAction): Pick<Desktop2UiaRequest, 'action' | 'automationId' | 'value' | 'expectedPreviousValue' | 'topIndex' | 'expectedPreviousTopIndex'> {
     const automationId = Desktop2DirectUiaLeaseCoordinator.validateId(action.automationId);
     if (action.type === 'set_value') {
       // A real protected WPF window stole the user's foreground on
@@ -145,6 +150,17 @@ export class Desktop2DirectUiaLeaseCoordinator {
         throw new Error('Verified native pushbutton HWND capability required.');
       }
       return { action:'click-native-button', automationId };
+    }
+    if (action.type === 'scroll_native_list') {
+      if (!/^native-list:[1-9][0-9]{0,15}$/u.test(automationId)
+          || !Number.isSafeInteger(Number(automationId.slice('native-list:'.length)))
+          || !Number.isSafeInteger(action.topIndex) || action.topIndex < 0 || action.topIndex >= 512
+          || !Number.isSafeInteger(action.expectedPreviousTopIndex)
+          || action.expectedPreviousTopIndex < 0 || action.expectedPreviousTopIndex >= 512) {
+        throw new Error('Verified native ListBox and bounded exact indices required.');
+      }
+      return { action:'scroll-native-list', automationId,
+        topIndex:action.topIndex, expectedPreviousTopIndex:action.expectedPreviousTopIndex };
     }
     if (action.type === 'scroll' && (action.to === 'top' || action.to === 'bottom')) {
       return { action: action.to === 'top' ? 'scroll-top' : 'scroll-bottom', automationId };
@@ -304,12 +320,54 @@ export class Desktop2DirectUiaLeaseCoordinator {
     });
   }
 
+  async inspectNativeLists(scope:Desktop2UiaScope):Promise<readonly Desktop2SemanticControl[]> {
+    const proof=await this.verify(scope);
+    const raw=await this.invoker.execute('request',{
+      action:'inspect-native-lists',hwnd:scope.window.hwnd,
+      processId:scope.window.processId,desktopId:proof.desktopId,
+      automationId:'__native_list_snapshot__',observerReady:scope.observerReadyFile
+    });
+    await this.verify(scope,proof);
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))
+      throw new Error('Native ListBox inventory missing.');
+    const r=raw as Record<string,unknown>;
+    if(r.operation!=='inspect-native-lists'||r.hwnd!==scope.window.hwnd
+      ||r.processId!==scope.window.processId||r.uiaReadbackConfirmed!==false
+      ||r.appEventConfirmed!==false||!Number.isInteger(r.scannedNodes)
+      ||Number(r.scannedNodes)<0||Number(r.scannedNodes)>128
+      ||!Array.isArray(r.controls)||r.controls.length>16
+      ||r.controls.length>Number(r.scannedNodes))
+      throw new Error('Native ListBox inventory identity/size invalid.');
+    const seen=new Set<string>();
+    return r.controls.map((row:unknown)=>{
+      if(!row||typeof row!=='object'||Array.isArray(row))
+        throw new Error('Invalid native ListBox row');
+      const c=row as Record<string,unknown>;
+      if(typeof c.automationId!=='string'
+        || !/^native-list:[1-9][0-9]{0,15}$/u.test(c.automationId)
+        || !Number.isSafeInteger(Number(c.automationId.slice('native-list:'.length)))
+        || seen.has(c.automationId) || c.controlType!=='NativeWin32.ListBox'
+        || typeof c.className!=='string'
+        || (c.className.toLowerCase()!=='listbox'
+          &&!c.className.toLowerCase().startsWith('windowsforms10.listbox.'))
+        ||c.canSetValue!==false||c.canScrollTopBottom!==false
+        ||c.canSetNativeValue!==false||c.canClickNative!==false
+        ||c.canScrollNativeList!==true)
+        throw new Error('Forged native ListBox capability');
+      seen.add(c.automationId);
+      return {automationId:c.automationId,controlType:'NativeWin32.ListBox',className:c.className,
+        canSetValue:false,canScrollTopBottom:false,canSetNativeValue:false,
+        canClickNative:false,canScrollNativeList:true};
+    });
+  }
+
   async perform(
     scope: Desktop2UiaScope,
     action: Desktop2UiaAction
   ): Promise<{ readonly uiaReadbackConfirmed: true; readonly appEventConfirmed: false }
     | { readonly textReadbackConfirmed: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }
-    | { readonly messageDispatched: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }> {
+    | { readonly messageDispatched: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }
+    | { readonly topIndexReadbackConfirmed: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }> {
     const parsed = Desktop2DirectUiaLeaseCoordinator.nativeAction(action);
     const proof = await this.verify(scope);
     const request: Desktop2UiaRequest = {
@@ -327,6 +385,14 @@ export class Desktop2DirectUiaLeaseCoordinator {
           || native.appEventConfirmed!==false || native.foregroundSafetyUnproven!==true)
         throw new Error('Native HWND Edit write/readback not confirmed.');
       return {textReadbackConfirmed:true,appEventConfirmed:false,foregroundSafetyUnproven:true};
+    }
+    if(action.type==='scroll_native_list') {
+      const state=result as {operation?:unknown;topIndexReadbackConfirmed?:unknown;
+        appEventConfirmed?:unknown;foregroundSafetyUnproven?:unknown}|null;
+      if(!state||state.operation!=='scroll-native-list'||state.topIndexReadbackConfirmed!==true
+        ||state.appEventConfirmed!==false||state.foregroundSafetyUnproven!==true)
+        throw new Error('Native ListBox top-index readback unconfirmed.');
+      return {topIndexReadbackConfirmed:true,appEventConfirmed:false,foregroundSafetyUnproven:true};
     }
     if(action.type==='click_native_button') {
       const click=result as {operation?:unknown;messageDispatched?:unknown;appEventConfirmed?:unknown;

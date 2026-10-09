@@ -21,7 +21,7 @@ function fixture() {
   let live: readonly ComputerWindow[] = [window];
   let performed = 0, armed = 0;
   const seen: unknown[] = [];
-  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls' | 'inspectNativeButtons'> = {
+  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls' | 'inspectNativeButtons' | 'inspectNativeLists'> = {
     async arm(scope) { armed++; seen.push(scope); return {armed:true,desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c'}; },
     async inspectControls() { return [
       {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
@@ -32,6 +32,12 @@ function fixture() {
       {automationId:'native-edit:884020',controlType:'NativeWin32.Edit',
         className:'Edit',canSetValue:false,canScrollTopBottom:false,canSetNativeValue:true}
     ]; },
+    async inspectNativeLists(){return [{
+      automationId:'native-list:188811',controlType:'NativeWin32.ListBox',
+      className:'WindowsForms10.LISTBOX.app.0.1',canSetValue:false,
+      canScrollTopBottom:false,canSetNativeValue:false,canClickNative:false,
+      canScrollNativeList:true
+    }];},
     async inspectNativeButtons(){return [{
       automationId:'native-button:194857',controlType:'NativeWin32.Button',
       className:'WindowsForms10.Button.app.0.23_r3_ad1',canSetValue:false,
@@ -293,4 +299,33 @@ test('forged native Button HWND burns one-use observation before any input',asyn
   type:'click_native_button' as const,automationId:'native-button:194857'
  }}),/fresh protected semantic control snapshot/);
  assert.equal(t.invoked.performed,0);
+});
+
+test('native ListBox scroll only accepts an exact one-use ListBox observation, never borrowed Edit/Button/UIA token',async()=>{
+ const t=fixture();
+ const observed={windowId:t.windowId,agentDesktopLeaseId:lease,
+   observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const raw=t.input('arm');
+ await assert.rejects(t.adapter.dispatch({...raw,phase:'perform',
+   action:{type:'scroll_native_list',automationId:'native-list:188811',
+     topIndex:20,expectedPreviousTopIndex:0}}),/fresh protected semantic control snapshot/);
+ const nativeEdit=await t.adapter.snapshotNativeWindow(observed);
+ await assert.rejects(t.adapter.dispatch({...raw,phase:'perform',
+   computerObservationId:nativeEdit.computerObservationId,
+   action:{type:'scroll_native_list',automationId:'native-list:188811',
+     topIndex:20,expectedPreviousTopIndex:0}}),/fresh protected semantic control snapshot/);
+ const list=await t.adapter.snapshotNativeLists(observed);
+ assert.equal(list.controls.length,1);
+ assert.equal(list.controls[0]?.canScrollNativeList,true);
+ const forged={...raw,phase:'perform' as const,computerObservationId:list.computerObservationId,
+   action:{type:'scroll_native_list' as const,automationId:'native-list:999999',
+     topIndex:20,expectedPreviousTopIndex:0}};
+ await assert.rejects(t.adapter.dispatch(forged),/fresh protected semantic control snapshot/);
+ await assert.rejects(t.adapter.dispatch({...forged,
+   action:{...forged.action,automationId:'native-list:188811'}}),
+   /fresh protected semantic control snapshot/);
+ const valid=await t.adapter.snapshotNativeLists(observed);
+ await t.adapter.dispatch({...forged,computerObservationId:valid.computerObservationId,
+   action:{...forged.action,automationId:'native-list:188811'}});
+ assert.equal(t.invoked.performed,1);
 });

@@ -7,7 +7,7 @@ import type { Desktop2ObserverLifecycle, Desktop2ObserverSession } from './deskt
 // The requester cannot supply their own observer ready path or lease ID.
 type Passive = Pick<Desktop2WindowInventory,'list'>;
 type Observer = Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>;
-type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'|'snapshotNativeWindow'|'snapshotNativeButtons'>>;
+type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'|'snapshotNativeWindow'|'snapshotNativeButtons'|'snapshotNativeLists'>>;
 type UserAction = Omit<Desktop2ComputerAction,'agentDesktopLeaseId'|'observerReadyFile'>;
 
 export class Desktop2ComputerUseSession {
@@ -113,6 +113,20 @@ export class Desktop2ComputerUseSession {
       if(!this.actions.snapshotNativeButtons)
         throw new Error('Native Button inventory unavailable.');
       const snapshot=await this.actions.snapshotNativeButtons({
+        windowId,agentDesktopLeaseId:this.leaseId,observerReadyFile:guard.readyFile
+      });
+      await this.checked();
+      return snapshot;
+    });
+  }
+
+  async snapshotNativeLists(windowId:string):
+    Promise<Awaited<ReturnType<NonNullable<Actions['snapshotNativeLists']>>>> {
+    return this.withMonitorHeld(async()=>{
+      const guard=await this.checked();
+      if(!this.actions.snapshotNativeLists)
+        throw new Error('Native ListBox inventory unavailable.');
+      const snapshot=await this.actions.snapshotNativeLists({
         windowId,agentDesktopLeaseId:this.leaseId,observerReadyFile:guard.readyFile
       });
       await this.checked();

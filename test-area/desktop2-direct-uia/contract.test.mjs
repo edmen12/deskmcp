@@ -245,3 +245,23 @@ test('quarantined UIA ValuePattern is never queried or advertised by semantic tr
  const native=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
  assert.match(native,/return new \{ operation = "set-native-edit"/);
 });
+
+test('native ListBox scroll uses bounded hwnd-only LB_SETTOPINDEX with exact old-index CAS and no global input',()=>{
+ const native=readFileSync(path.join(dir,'DirectUia.NativeList.cs'),'utf8');
+ assert.match(native,/LbSetTopIndex=0x0197/);
+ assert.match(native,/NATIVE_LIST_EXPECTED_TOP_INDEX_MISMATCH/);
+ assert.match(native,/NATIVE_LIST_TOP_INDEX_READBACK_MISMATCH/);
+ assert.match(native,/if\(!complete\)throw new InvalidOperationException\("NATIVE_LIST_ENUMERATION_INCOMPLETE"\)/);
+ for(const forbidden of [/\bSendInput\s*\(/,/\bSetForegroundWindow\s*\(/,/\bSetFocus\s*\(/,
+  /\bPostMessage\s*\(/,/\bGetClipboardData\s*\(/,/\bSetCursorPos\s*\(/,
+  /ScrollPattern/,/\bMouseEvent\s*\(/])
+  assert.doesNotMatch(native,forbidden);
+ const program=readFileSync(path.join(dir,'Program.cs'),'utf8');
+ assert.match(program,/NativeList.Inspect\(hwnd, request.ProcessId, Guard\)/);
+ assert.match(program,/NativeList.Scroll\(hwnd, request.ProcessId, request.AutomationId,/);
+ const lease=readFileSync(path.join(dir,'..','..','src','desktop2-direct-uia-lease.ts'),'utf8');
+ assert.match(lease,/action:'scroll-native-list'/);
+ assert.match(lease,/expectedPreviousTopIndex/);
+ const candidate=readFileSync(path.join(dir,'..','..','src','desktop2-computer-use-candidate.ts'),'utf8');
+ assert.match(candidate,/action.type === 'scroll_native_list' && !allowed.canScrollNativeList/);
+});

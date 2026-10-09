@@ -53,6 +53,12 @@ for(const file of ['deny-native-buttons-no-observer.json','deny-native-click-no-
   assert.match(denied.stderr,/PASSIVE_OBSERVER_NOT_READY/);
 }
 console.log('DIRECT_NATIVE_BUTTON_NO_OBSERVER_DENIED_PASS');
+for(const file of ['deny-native-list-inspect-no-observer.json','deny-native-list-scroll-no-observer.json']){
+  const denied=run(sdk,[dll,'--request',path.join(dir,file),'--vda',vda],12000);
+  assert.equal(denied.status,3,'Native ListBox must reject missing observer');
+  assert.match(denied.stderr,/PASSIVE_OBSERVER_NOT_READY/);
+}
+console.log('DIRECT_NATIVE_LIST_NO_OBSERVER_DENIED_PASS');
 const quarantined=run(sdk,[dll,'--request',path.join(dir,'deny-quarantined-value.json'),'--vda',vda],12000);
 assert.equal(quarantined.status,3,'Known foreground-stealing ValuePattern must fail before touching GUI');
 assert.match(quarantined.stderr,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
