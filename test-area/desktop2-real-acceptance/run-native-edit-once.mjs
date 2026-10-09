@@ -23,7 +23,7 @@ const here=path.dirname(fileURLToPath(import.meta.url));
 const root=path.resolve(here,'../..');
 const main=path.resolve(root,'../DeskMCP');
 const lease=process.argv[2],stage=process.argv[3],sentinel=process.argv[4];
-if(process.argv.length!==5||!['inspect','write','deny-stale'].includes(stage)
+if(process.argv.length!==5||!['inspect','write','deny-stale','button-inspect','button-click'].includes(stage)
    ||sentinel!=='OWNED_WINFORMS_NATIVE_EDIT_ONCE'
    ||!/^[0-9a-f]{8}-[0-9a-f-]{27}$/iu.test(lease??''))
   throw Error('EXPLICIT_TEST_LEASE_STAGE_AND_OWNED_FIXTURE_REQUIRED');
@@ -71,7 +71,7 @@ const value='D2_NATIVE_WINFORMS_ONE_SHOT';
 const result={
   stage,pass:false,desktopBefore:undefined,desktopAfter:undefined,
   claimedForegroundSafety:false,tripwire:false,error:undefined,
-  observed:[],appCallbackCount:0,appFocusEvents:[],observerEventPath:null,
+  observed:[],appCallbackCount:0,appButtonCallbackCount:0,appFocusEvents:[],observerEventPath:null,
   appEventPath:app,timelinePath:timeline
 };
 async function guard(where){
@@ -127,6 +127,12 @@ try{
     ||first.pid!==child.pid || typeof first.childHwnd!=='number'
     || !(first.childClass?.toLowerCase()==='edit'||first.childClass?.toLowerCase().startsWith('windowsforms10.edit.')))
     throw Error('OWNED_FIXTURE_PROTECTION_OR_PROCESS_IDENTITY_FAILED');
+  if(stage.startsWith('button-') && (
+    !Number.isSafeInteger(first.buttonHwnd) || first.buttonHwnd<=0
+    || !first.buttonClass?.toLowerCase().startsWith('windowsforms10.button.')
+    || !Number.isSafeInteger(first.buttonStyle)
+    || ![0,1].includes(first.buttonStyle & 0xF)
+  ))throw Error('OWNED_NATIVE_PUSHBUTTON_STYLE_OR_HANDLE_UNVERIFIED');
   await guard('FIXTURE_CLOAKED');
   const moved=await native.moveWindow(first.hwnd,proof.binding.desktopId);
   if(moved.desktopId.toLowerCase()!==proof.binding.desktopId.toLowerCase())
@@ -143,14 +149,35 @@ try{
     computerObservationId:target.computerObservationId});
   await guard('TARGET_WATCH_ARMED');
   log('TARGET_FOREGROUND_HOOK_ARMED');
-  const snap=await session.snapshotNativeWindow(target.windowId);
+  const buttonMode=stage==='button-inspect'||stage==='button-click';
+  const snap=buttonMode
+    ? await session.snapshotNativeButtons(target.windowId)
+    : await session.snapshotNativeWindow(target.windowId);
   result.observed=snap.controls;
   if(snap.controls.length!==1
-    || snap.controls[0].automationId!=='native-edit:'+first.childHwnd
-    || snap.controls[0].canSetNativeValue!==true)
-    throw Error('NATIVE_EDIT_CHILD_ID_NOT_SEMANTICALLY_VERIFIED');
+    || (buttonMode
+      ? snap.controls[0].automationId!=='native-button:'+first.buttonHwnd
+        || snap.controls[0].canClickNative!==true
+      : snap.controls[0].automationId!=='native-edit:'+first.childHwnd
+        || snap.controls[0].canSetNativeValue!==true))
+    throw Error('NATIVE_CHILD_CAPABILITY_NOT_SEMANTICALLY_VERIFIED');
   await guard('NATIVE_SNAPSHOT');
   log('NATIVE_CHILD_CAPABILITY_PASS',{controls:snap.controls});
+  if(stage==='button-click'){
+    // One native BM_CLICK, never SetActiveWindow or fallback global mouse.
+    const clicked=await session.dispatch({
+      phase:'perform',windowId:target.windowId,
+      computerObservationId:snap.computerObservationId,
+      action:{type:'click_native_button',automationId:snap.controls[0].automationId}
+    });
+    if(clicked?.messageDispatched!==true||clicked?.appEventConfirmed!==false
+      ||clicked?.foregroundSafetyUnproven!==true)
+      throw Error('NATIVE_BUTTON_DISPATCH_NOT_CONFIRMED');
+    await guard('BM_CLICK_COMPLETE');
+    await sleep(300);
+    await guard('BM_CLICK_SETTLED');
+    log('NATIVE_BUTTON_MESSAGE_DISPATCHED');
+  }
   if(stage==='deny-stale'){
     // Compare-and-swap safety: wrong old value MUST reject before WM_SETTEXT.
     let denied=false;
@@ -188,9 +215,16 @@ try{
   }
   const appText=await readFile(app,'utf8').catch(()=>'(missing)');
   result.appFocusEvents=appText.split(/\r?\n/).filter(line=>
-    /\b(ROOT_WM_(6|7|8|1C)|EDIT_WM_(6|7|8|100|101|102))\b/iu.test(line));
+    /\b(ROOT_WM_(6|7|8|1C)|EDIT_WM_(6|7|8|100|101|102)|BUTTON_WM_(6|7|8|100|101|102))\b/iu.test(line));
   result.appCallbackCount=appText.split(/\r?\n/).filter(line=>line.includes('APP_EDIT=')).length;
   const changes=appText.split(/\r?\n/).filter(line=>line.includes('APP_EDIT='));
+  const clickCallbacks=appText.split(/\r?\n/).filter(line=>line.includes('APP_BUTTON_CLICK='));
+  result.appButtonCallbackCount=clickCallbacks.length;
+  if(stage==='button-click'&&(clickCallbacks.length!==1
+      || !clickCallbacks[0].endsWith('APP_BUTTON_CLICK=1')))
+    throw Error('NATIVE_BUTTON_REAL_CALLBACK_NOT_EXACTLY_ONCE');
+  if(stage!=='button-click'&&clickCallbacks.length!==0)
+    throw Error('NATIVE_BUTTON_UNEXPECTED_CALLBACK');
   if(result.appFocusEvents.length)
     throw Error('APP_ACTIVATION_OR_KEYBOARD_FOCUS_EVENT_DETECTED');
   if(stage==='write'&&(changes.length!==1 || !changes[0].endsWith('APP_EDIT=1:'+value)))

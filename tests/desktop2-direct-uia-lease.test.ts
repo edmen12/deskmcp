@@ -316,3 +316,74 @@ test('native HWND Edit enumeration rejects forged PID, wrong classes, duplicate 
   await assert.rejects(t.coordinator.inspectNativeControls(scope));
  }
 });
+
+test('native pushbutton inspect is bounded and separate from UIA Invoke and Edit',async()=>{
+ const t=fixture();
+ t.setResult({operation:'inspect-native-buttons',hwnd,processId:pid,scannedNodes:2,
+  uiaReadbackConfirmed:false,appEventConfirmed:false,controls:[{
+   automationId:'native-button:194857',controlType:'NativeWin32.Button',
+   className:'WindowsForms10.BUTTON.app.0.123_r3_ad1',canSetValue:false,
+   canScrollTopBottom:false,canSetNativeValue:false,canClickNative:true
+  }]});
+ const seen=await t.coordinator.inspectNativeButtons(scope);
+ assert.equal(seen.length,1);
+ assert.equal(seen[0]?.canClickNative,true);
+ assert.deepEqual(t.requests[0],{mode:'request',request:{
+  action:'inspect-native-buttons',hwnd,processId:pid,desktopId,
+  automationId:'__native_button_snapshot__',observerReady:observerReadyFile
+ }});
+});
+
+test('native pushbutton message result never claims application callback or focus safety',async()=>{
+ const t=fixture();
+ t.setResult({operation:'click-native-button',messageDispatched:true,
+  appEventConfirmed:false,foregroundSafetyUnproven:true});
+ const clicked=await t.coordinator.perform(scope,{
+  type:'click_native_button',automationId:'native-button:194857'
+ });
+ assert.deepEqual(clicked,{messageDispatched:true,appEventConfirmed:false,
+  foregroundSafetyUnproven:true});
+ assert.deepEqual(t.requests[0],{mode:'request',request:{
+  action:'click-native-button',hwnd,processId:pid,desktopId,
+  automationId:'native-button:194857',observerReady:observerReadyFile
+ }});
+});
+
+test('native pushbutton rejects forged handles and false-positive click confirmations',async()=>{
+ for(const bad of ['WpfButton','native-edit:194857','native-button:0',
+    'native-button:99999999999999999999','native-button:abc']){
+  const t=fixture();
+  await assert.rejects(t.coordinator.perform(scope,{
+    type:'click_native_button',automationId:bad
+  }));
+  assert.equal(t.requests.length,0);
+ }
+ const t=fixture();
+ t.setResult({operation:'click-native-button',messageDispatched:true,
+  appEventConfirmed:true,foregroundSafetyUnproven:true});
+ await assert.rejects(t.coordinator.perform(scope,{
+  type:'click_native_button',automationId:'native-button:194857'
+ }),/dispatch/);
+});
+
+test('native pushbutton snapshot rejects forged PID, class, duplicate capability or unsafe control types',async()=>{
+ const good={automationId:'native-button:194857',controlType:'NativeWin32.Button',
+  className:'WindowsForms10.Button.app.0.123_r3_ad1',
+  canSetValue:false,canScrollTopBottom:false,canSetNativeValue:false,canClickNative:true};
+ const base={operation:'inspect-native-buttons',hwnd,processId:pid,
+  scannedNodes:1,uiaReadbackConfirmed:false,appEventConfirmed:false};
+ for(const patch of [
+  {hwnd:hwnd+1,controls:[good]},
+  {processId:pid+1,controls:[good]},
+  {controls:[good,good],scannedNodes:2},
+  {controls:[{...good,automationId:'native-button:abc'}]},
+  {controls:[{...good,controlType:'ControlType.Button'}]},
+  {controls:[{...good,className:'Chrome_RenderWidgetHostHWND'}]},
+  {controls:[{...good,canClickNative:false}]},
+  {controls:[{...good,canSetValue:true}]},
+  {controls:[good],scannedNodes:129}
+ ]) {
+   const t=fixture();t.setResult({...base,...patch});
+   await assert.rejects(t.coordinator.inspectNativeButtons(scope));
+ }
+});

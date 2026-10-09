@@ -7,7 +7,7 @@ import type { Desktop2DirectUiaLeaseCoordinator, Desktop2UiaAction, Desktop2Sema
 // Live enumeration MUST be passive (do not call WinApp focus/activate paths).
 type RegistryRuntime = Pick<ComputerUseRuntime, 'windows' | 'observations' | 'coordinator'>;
 type LeaseNativeAdapter = Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform'>
-  & Partial<Pick<Desktop2DirectUiaLeaseCoordinator, 'inspectControls' | 'inspectNativeControls'>>;
+  & Partial<Pick<Desktop2DirectUiaLeaseCoordinator, 'inspectControls' | 'inspectNativeControls' | 'inspectNativeButtons'>>;
 export interface Desktop2ComputerAction {
   readonly phase: 'arm' | 'perform';
   readonly windowId: string;
@@ -141,6 +141,46 @@ export class Desktop2ComputerUseCandidate {
     });
   }
 
+  /** Distinct one-use native HWND PUSHBUTTON observation; no UIA Invoke. */
+  async snapshotNativeButtons(input:{
+    windowId:string;agentDesktopLeaseId:string;observerReadyFile:string;
+  }):Promise<{readonly computerObservationId:string;readonly controls:readonly Desktop2SemanticControl[]}>{
+    return this.runtime.coordinator.exclusive(async()=>{
+      if(!this.leaseNative.inspectNativeButtons)
+        throw new Error('Native HWND Button adapter unavailable.');
+      const target=this.runtime.windows.resolve(input.windowId,await this.listLiveWindowsPassively());
+      if(target.title?.startsWith('DeskMCP Agent Desktop'))
+        throw new Error('Safety HUD is not a button target.');
+      const controls=await this.leaseNative.inspectNativeButtons({
+        leaseId:input.agentDesktopLeaseId,window:{hwnd:target.hwnd,processId:target.processId},
+        observerReadyFile:input.observerReadyFile
+      });
+      if(!Array.isArray(controls)||controls.length>32)
+        throw new Error('Native Button inventory exceeds limit.');
+      const seen=new Set<string>();
+      for(const control of controls){
+        if(!control||typeof control.automationId!=='string'
+          ||!/^native-button:[1-9][0-9]{0,15}$/u.test(control.automationId)
+          ||seen.has(control.automationId)||control.controlType!=='NativeWin32.Button'
+          ||control.canClickNative!==true||control.canSetValue!==false
+          ||control.canScrollTopBottom!==false||control.canSetNativeValue!==false)
+          throw new Error('Untrusted native Button control.');
+        seen.add(control.automationId);
+      }
+      const computerObservationId=this.runtime.observations.issue(
+        input.windowId,Date.now(),input.agentDesktopLeaseId);
+      if(this.semanticObservations.size>=128){
+        const oldest=this.semanticObservations.keys().next().value;
+        if(oldest)this.semanticObservations.delete(oldest);
+      }
+      this.semanticObservations.set(computerObservationId,{
+        windowId:input.windowId,leaseId:input.agentDesktopLeaseId.toLowerCase(),
+        observerReadyFile:input.observerReadyFile,controls:controls.map(c=>({...c}))
+      });
+      return {computerObservationId,controls};
+    });
+  }
+
   async dispatch(input: Desktop2ComputerAction): Promise<unknown> {
     return this.runtime.coordinator.exclusive(async () => {
       // Require an explicit lease-bound Computer Use observation, never a bare
@@ -186,8 +226,9 @@ export class Desktop2ComputerUseCandidate {
             || (action.type === 'set_value' && !allowed.canSetValue)
             || (action.type === 'scroll' && !allowed.canScrollTopBottom)
             || (action.type === 'set_native_edit' && !allowed.canSetNativeValue)
+            || (action.type === 'click_native_button' && !allowed.canClickNative)
             || (action.type !== 'set_value' && action.type !== 'scroll'
-                && action.type !== 'set_native_edit')) {
+                && action.type !== 'set_native_edit' && action.type !== 'click_native_button')) {
           throw new Error('Desktop2 action requires a fresh protected semantic control snapshot.');
         }
       }

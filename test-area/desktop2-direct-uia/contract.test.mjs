@@ -191,3 +191,35 @@ test('native Edit never aliases UIA set-value and cannot target WPF TextBox by g
  assert.match(source,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
  assert.doesNotMatch(source,/\bpattern\.SetValue\s*\(/);
 });
+
+test('native Button BM_CLICK handler has no activation, global mouse/keyboard, clipboard, or UIA fallback',()=>{
+ const native=readFileSync(path.join(dir,'DirectUia.NativeButton.cs'),'utf8');
+ for(const forbidden of [
+  /\bSetActiveWindow\s*\(/,/\bSetForegroundWindow\s*\(/,/\bSwitchDesktop\s*\(/,
+  /\bSendInput\s*\(/,/\bSetFocus\s*\(/,/\bPostMessage\s*\(/,
+  /\bOpenClipboard\s*\(/,/\bInvokePattern\s*\./,/\bAutomationElement\s*\./
+ ])assert.doesNotMatch(native,forbidden);
+ for(const required of [
+  'BmClick=0x00F5','GetAncestor(child,2)!=root',
+  'childPid!=parentPid','MaxChildren=128, MaxButtons=32',
+  'NativeWin32.Button','canClickNative=true',
+  'type!=0 && type!=1','SmtoAbortIfHung|SmtoBlock',
+  'NATIVE_BUTTON_CAPABILITY_STALE_OR_UNKNOWN',
+  'foregroundSafetyUnproven=true','appEventConfirmed=false'
+ ])assert.ok(native.includes(required),required);
+ assert.match(native,/guard\(\);\s*\/\/ BM_CLICK/);
+ assert.match(native,/SendMessageTimeout\(button,BmClick/);
+ assert.match(native,/guard\(\);\s*VerifiedChild\(root,button,pid\);\s*guard\(\)/);
+});
+
+test('native Button discovery/click has armed monitor and real Desktop2 checks before any Win32 button message',()=>{
+ const perform=source.slice(source.indexOf('private static object Perform('));
+ const monitor=perform.indexOf('ObserverGuard.AssertWatchedTarget');
+ const inspect=perform.indexOf('NativeButton.Inspect(hwnd, request.ProcessId, Guard)');
+ const click=perform.indexOf('NativeButton.Click(hwnd, request.ProcessId, request.AutomationId, Guard)');
+ const uia=perform.indexOf('FindExactElement(hwnd, request.AutomationId)');
+ assert.ok(monitor>=0 && inspect>monitor && click>monitor && uia>inspect && uia>click);
+ assert.match(source,/NATIVE_BUTTON_SNAPSHOT_SENTINEL_REQUIRED/);
+ assert.match(source,/NATIVE_BUTTON_EXACT_CAPABILITY_REQUIRED/);
+ assert.match(source,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
+});

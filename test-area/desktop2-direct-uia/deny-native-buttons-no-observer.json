@@ -1,0 +1,8 @@
+{
+  "action": "inspect-native-buttons",
+  "hwnd": 1,
+  "processId": 9999,
+  "desktopId": "d81244e4-e0c5-456f-a707-2b685a00662c",
+  "automationId": "__native_button_snapshot__",
+  "observerReady": "C:\\Users\\User\\Desktop\\DeskMCP-D2-Native-Acceptance\\test-area\\desktop2-direct-uia\\never-created.ready.json"
+}

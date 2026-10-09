@@ -27,8 +27,9 @@ for(const fixture of [denyMissing,denyInvoke]){
   assert.ok(r.observerReady && !fs.existsSync(r.observerReady),
     'Fixture observer must be a definitely absent file; no live GUI call permitted.');
 }
-const build=run(sdk,['build',project,'-c','Release','--nologo','-v:q'],90000);
-assert.equal(build.status,0,'Build failed: '+(build.stdout||'')+' '+(build.stderr||''));
+const build=run(sdk,['build',project,'--no-restore','-c','Release','--nologo','-v:q'],120000);
+assert.equal(build.status,0,'Build failed: '+(build.stdout||'')+' '+(build.stderr||'')+
+  (build.error ? ' PROCESS_ERROR='+build.error.message : ''));
 console.log('DIRECT_UIA_BUILD_PASS');
 const policy=run(sdk,[dll,'--self-test'],10000);
 assert.equal(policy.status,0,'Policy self-test failed');
@@ -46,6 +47,12 @@ for(const file of ['deny-native-inspect-no-observer.json','deny-native-edit-no-o
   assert.match(denied.stderr,/PASSIVE_OBSERVER_NOT_READY/);
 }
 console.log('DIRECT_NATIVE_EDIT_NO_OBSERVER_DENIED_PASS');
+for(const file of ['deny-native-buttons-no-observer.json','deny-native-click-no-observer.json']){
+  const denied=run(sdk,[dll,'--request',path.join(dir,file),'--vda',vda],12000);
+  assert.equal(denied.status,3,'Native pushbutton must reject missing observer');
+  assert.match(denied.stderr,/PASSIVE_OBSERVER_NOT_READY/);
+}
+console.log('DIRECT_NATIVE_BUTTON_NO_OBSERVER_DENIED_PASS');
 const quarantined=run(sdk,[dll,'--request',path.join(dir,'deny-quarantined-value.json'),'--vda',vda],12000);
 assert.equal(quarantined.status,3,'Known foreground-stealing ValuePattern must fail before touching GUI');
 assert.match(quarantined.stderr,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
@@ -64,7 +71,7 @@ assert.match(noArmWithWriteRequest.stderr,/ARM_TARGET_REQUIRES_READONLY_IDENTITY
 console.log('DIRECT_UIA_ARM_NEGATIVE_TESTS_PASS');
 const suite=run(process.execPath,['--test',path.join(dir,'contract.test.mjs')],12000);
 assert.equal(suite.status,0,'Static guard suite failed: '+(suite.stdout||'')+' '+(suite.stderr||''));
-console.log('DIRECT_UIA_STATIC_GUARDS_14_OF_14_PASS');
+console.log('DIRECT_UIA_STATIC_GUARDS_16_OF_16_PASS');
 const observerProject=path.join(worktree,'test-area','desktop2-switch-observer','DeskMCP.Desktop2SwitchObserver.csproj');
 const observerDll=path.join(worktree,'test-area','desktop2-switch-observer','bin','Release',
   'net10.0-windows','DeskMCP.Desktop2SwitchObserver.dll');

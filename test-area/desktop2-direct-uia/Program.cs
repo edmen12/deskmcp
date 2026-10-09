@@ -15,7 +15,8 @@ internal sealed class SemanticPolicy
 {
     public static bool Permitted(string? action) =>
         action is "inspect" or "inspect-tree" or "inspect-native-edits"
-            or "set-native-edit" or "scroll-top" or "scroll-bottom";
+            or "set-native-edit" or "inspect-native-buttons" or "click-native-button"
+            or "scroll-top" or "scroll-bottom";
 
     public static void Demand(string? action)
     {
@@ -261,6 +262,10 @@ internal static partial class DirectUia
             throw new InvalidOperationException("TREE_SNAPSHOT_SENTINEL_REQUIRED");
         if (req.Action == "inspect-native-edits" && req.AutomationId != "__native_edit_snapshot__")
             throw new InvalidOperationException("NATIVE_EDIT_SNAPSHOT_SENTINEL_REQUIRED");
+        if (req.Action == "inspect-native-buttons" && req.AutomationId != "__native_button_snapshot__")
+            throw new InvalidOperationException("NATIVE_BUTTON_SNAPSHOT_SENTINEL_REQUIRED");
+        if (req.Action == "click-native-button" && !req.AutomationId.StartsWith("native-button:", StringComparison.Ordinal))
+            throw new InvalidOperationException("NATIVE_BUTTON_EXACT_CAPABILITY_REQUIRED");
         return req;
     }
 
@@ -344,6 +349,10 @@ internal static partial class DirectUia
         if (request.Action == "set-native-edit")
             return NativeEdit.Set(hwnd, request.ProcessId, request.AutomationId,
                 request.Value, request.ExpectedPreviousValue, Guard);
+        if (request.Action == "inspect-native-buttons")
+            return NativeButton.Inspect(hwnd, request.ProcessId, Guard);
+        if (request.Action == "click-native-button")
+            return NativeButton.Click(hwnd, request.ProcessId, request.AutomationId, Guard);
         // UIA is restricted to guarded read-only metadata and unapproved
         // candidate ScrollPattern; ValuePattern mutation remains quarantined.
         if (request.Action == "inspect-tree")

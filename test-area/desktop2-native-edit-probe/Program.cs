@@ -56,6 +56,17 @@ internal sealed class EditFixture:Form
             base.WndProc(ref msg);
         }
     }
+    private sealed class TracedButton:Button
+    {
+        private readonly Action<string> log;
+        public TracedButton(Action<string> logger){log=logger;}
+        protected override void WndProc(ref Message msg) {
+            if(msg.Msg is 0x06 or 0x07 or 0x08 or 0x0100 or 0x0101 or 0x0102
+               or 0x0201 or 0x0202 or 0x00F5)
+                log("BUTTON_WM_"+msg.Msg.ToString("X")+" W="+msg.WParam.ToInt64());
+            base.WndProc(ref msg);
+        }
+    }
     public EditFixture(string readyPath,string releasePath,string eventPath,int lifetimeMs)
     {
         ready=readyPath;release=releasePath;events=eventPath;lifetime=lifetimeMs;
@@ -72,8 +83,16 @@ internal sealed class EditFixture:Form
         Controls.Add(edit);
         var hint=new Label{Text="Owned WinForms single-line Edit control",Left=22,Top=80,Width=400};
         Controls.Add(hint);
+        var button=new TracedButton(Log) {
+            Name="OwnedNativePushButton",Text="Test action",Left=22,Top=125,Width=185,Height=38,
+            UseVisualStyleBackColor=false,FlatStyle=FlatStyle.System
+        };
+        int clickCount=0;
+        button.Click+=(_,_)=>Log("APP_BUTTON_CLICK="+(++clickCount));
+        Controls.Add(button);
         root=Handle;
         IntPtr child=edit.Handle;
+        IntPtr buttonHandle=button.Handle;
         var rootStyle=Native.GetWindowLongPtr(root,-20).ToInt64();
         if((rootStyle & 0x08000000L)==0)throw new Exception("PROTECTED_NOACTIVATE_STYLE_MISSING");
         int cloak=1;
@@ -83,9 +102,14 @@ internal sealed class EditFixture:Form
             Native.DwmGetWindowAttribute(root,14,out int state,4);
             StringBuilder klass=new(256);
             Native.GetClassName(child,klass,klass.Capacity);
+            StringBuilder buttonClass=new(256);
+            Native.GetClassName(buttonHandle,buttonClass,buttonClass.Capacity);
             File.WriteAllText(ready,JsonSerializer.Serialize(new {
                 hwnd=root.ToInt64(),pid=Environment.ProcessId,childHwnd=child.ToInt64(),
-                childClass=klass.ToString(),dwmCloaked=state,rootNoActivate=true,
+                childClass=klass.ToString(),buttonHwnd=buttonHandle.ToInt64(),
+                buttonClass=buttonClass.ToString(),
+                buttonStyle=Native.GetWindowLongPtr(buttonHandle,-16).ToInt64(),
+                dwmCloaked=state,rootNoActivate=true,
                 initialForeground=originalForeground.ToInt64(),
                 afterForeground=Native.GetForegroundWindow().ToInt64()
             }));

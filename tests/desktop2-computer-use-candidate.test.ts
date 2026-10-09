@@ -21,7 +21,7 @@ function fixture() {
   let live: readonly ComputerWindow[] = [window];
   let performed = 0, armed = 0;
   const seen: unknown[] = [];
-  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls'> = {
+  const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls' | 'inspectNativeButtons'> = {
     async arm(scope) { armed++; seen.push(scope); return {armed:true,desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c'}; },
     async inspectControls() { return [
       {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',canSetValue:true,canScrollTopBottom:false},
@@ -32,6 +32,11 @@ function fixture() {
       {automationId:'native-edit:884020',controlType:'NativeWin32.Edit',
         className:'Edit',canSetValue:false,canScrollTopBottom:false,canSetNativeValue:true}
     ]; },
+    async inspectNativeButtons(){return [{
+      automationId:'native-button:194857',controlType:'NativeWin32.Button',
+      className:'WindowsForms10.Button.app.0.23_r3_ad1',canSetValue:false,
+      canScrollTopBottom:false,canSetNativeValue:false,canClickNative:true
+    }];},
     async perform(scope,action) { performed++; seen.push({scope,action}); return {uiaReadbackConfirmed:true,appEventConfirmed:false}; }
   };
   const adapter=new Desktop2ComputerUseCandidate(
@@ -253,5 +258,39 @@ test('native Edit controls cannot be forged with raw window capabilities or repl
  await assert.rejects(t.adapter.dispatch(forged),/fresh protected semantic control snapshot/);
  await assert.rejects(t.adapter.dispatch({...input,computerObservationId:snapshot.computerObservationId}),
    /fresh protected semantic control snapshot/);
+ assert.equal(t.invoked.performed,0);
+});
+
+test('native Button click must carry distinct live button snapshot, not ordinary UIA or native Edit',async()=>{
+ const t=fixture();
+ const context={windowId:t.windowId,agentDesktopLeaseId:lease,
+   observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const raw=t.input('perform') as any;
+ raw.action={type:'click_native_button',automationId:'native-button:194857'};
+ await assert.rejects(t.adapter.dispatch(raw),/fresh protected semantic control snapshot/);
+ const ordinary=await t.adapter.snapshotNativeWindow(context);
+ await assert.rejects(t.adapter.dispatch({
+   ...raw,computerObservationId:ordinary.computerObservationId
+ }),/fresh protected semantic control snapshot/);
+ const verified=await t.adapter.snapshotNativeButtons(context);
+ assert.equal(verified.controls.length,1);
+ assert.equal(verified.controls[0]?.canClickNative,true);
+ const op={...raw,computerObservationId:verified.computerObservationId};
+ await t.adapter.dispatch(op);
+ assert.equal(t.invoked.performed,1);
+ await assert.rejects(t.adapter.dispatch(op),/observation/);
+});
+
+test('forged native Button HWND burns one-use observation before any input',async()=>{
+ const t=fixture();
+ const context={windowId:t.windowId,agentDesktopLeaseId:lease,
+  observerReadyFile:'C:\\tmp\\observer.ready.json'};
+ const token=await t.adapter.snapshotNativeButtons(context);
+ const attempt={...t.input('perform'),computerObservationId:token.computerObservationId,
+  action:{type:'click_native_button' as const,automationId:'native-button:1234'}};
+ await assert.rejects(t.adapter.dispatch(attempt),/fresh protected semantic control snapshot/);
+ await assert.rejects(t.adapter.dispatch({...attempt,action:{
+  type:'click_native_button' as const,automationId:'native-button:194857'
+ }}),/fresh protected semantic control snapshot/);
  assert.equal(t.invoked.performed,0);
 });

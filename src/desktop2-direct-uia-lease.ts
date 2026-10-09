@@ -20,6 +20,7 @@ export interface Desktop2UiaWindow {
 export type Desktop2UiaAction =
   | { readonly type: 'set_value'; readonly automationId: string; readonly value: string }
   | { readonly type: 'set_native_edit'; readonly automationId: string; readonly value: string; readonly expectedPreviousValue: string }
+  | { readonly type: 'click_native_button'; readonly automationId: string }
   | { readonly type: 'scroll'; readonly automationId: string; readonly to: 'top' | 'bottom' };
 export interface Desktop2UiaScope {
   readonly leaseId: string;
@@ -33,9 +34,11 @@ export interface Desktop2SemanticControl {
   readonly canSetValue: boolean;
   readonly canScrollTopBottom: boolean;
   readonly canSetNativeValue?: boolean;
+  readonly canClickNative?: boolean;
 }
 export interface Desktop2UiaRequest {
   readonly action: 'inspect' | 'inspect-tree' | 'inspect-native-edits'
+    | 'inspect-native-buttons' | 'click-native-button'
     | 'set-value' | 'set-native-edit' | 'scroll-top' | 'scroll-bottom';
   readonly hwnd: number;
   readonly processId: number;
@@ -135,6 +138,13 @@ export class Desktop2DirectUiaLeaseCoordinator {
       }
       return { action:'set-native-edit', automationId, value:action.value,
         expectedPreviousValue:action.expectedPreviousValue };
+    }
+    if (action.type === 'click_native_button') {
+      if (!/^native-button:[1-9][0-9]{0,15}$/u.test(automationId)
+          || !Number.isSafeInteger(Number(automationId.slice('native-button:'.length)))) {
+        throw new Error('Verified native pushbutton HWND capability required.');
+      }
+      return { action:'click-native-button', automationId };
     }
     if (action.type === 'scroll' && (action.to === 'top' || action.to === 'bottom')) {
       return { action: action.to === 'top' ? 'scroll-top' : 'scroll-bottom', automationId };
@@ -253,11 +263,54 @@ export class Desktop2DirectUiaLeaseCoordinator {
     });
   }
 
+  /** Separate native HWND Button controls from unapproved UIA InvokePattern. */
+  async inspectNativeButtons(scope:Desktop2UiaScope):Promise<readonly Desktop2SemanticControl[]> {
+    const proof=await this.verify(scope);
+    const raw=await this.invoker.execute('request',{
+      action:'inspect-native-buttons',hwnd:scope.window.hwnd,
+      processId:scope.window.processId,desktopId:proof.desktopId,
+      automationId:'__native_button_snapshot__',observerReady:scope.observerReadyFile
+    });
+    await this.verify(scope,proof);
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))
+      throw new Error('Native Button inventory missing.');
+    const r=raw as Record<string,unknown>;
+    if(r.operation!=='inspect-native-buttons'||r.hwnd!==scope.window.hwnd
+       ||r.processId!==scope.window.processId||r.uiaReadbackConfirmed!==false
+       ||r.appEventConfirmed!==false||!Number.isInteger(r.scannedNodes)
+       ||Number(r.scannedNodes)<0||Number(r.scannedNodes)>128
+       ||!Array.isArray(r.controls)||r.controls.length>32
+       ||r.controls.length>Number(r.scannedNodes))
+      throw new Error('Native Button inventory identity/size invalid.');
+    const seen=new Set<string>();
+    return r.controls.map((element:unknown)=>{
+      if(!element||typeof element!=='object'||Array.isArray(element))
+        throw new Error('Invalid native Button entry.');
+      const c=element as Record<string,unknown>;
+      if(typeof c.automationId!=='string'
+        ||!/^native-button:[1-9][0-9]{0,15}$/u.test(c.automationId)
+        ||!Number.isSafeInteger(Number(c.automationId.slice('native-button:'.length)))
+        ||seen.has(c.automationId)
+        ||c.controlType!=='NativeWin32.Button'
+        ||typeof c.className!=='string'
+        ||(c.className.toLowerCase()!=='button'
+          &&!c.className.toLowerCase().startsWith('windowsforms10.button.'))
+        ||c.canSetValue!==false||c.canScrollTopBottom!==false
+        ||c.canSetNativeValue!==false||c.canClickNative!==true)
+        throw new Error('Untrusted native Button capability.');
+      seen.add(c.automationId);
+      return {automationId:c.automationId,controlType:'NativeWin32.Button',
+        className:c.className,canSetValue:false,canScrollTopBottom:false,
+        canSetNativeValue:false,canClickNative:true};
+    });
+  }
+
   async perform(
     scope: Desktop2UiaScope,
     action: Desktop2UiaAction
   ): Promise<{ readonly uiaReadbackConfirmed: true; readonly appEventConfirmed: false }
-    | { readonly textReadbackConfirmed: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }> {
+    | { readonly textReadbackConfirmed: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }
+    | { readonly messageDispatched: true; readonly appEventConfirmed: false; readonly foregroundSafetyUnproven: true }> {
     const parsed = Desktop2DirectUiaLeaseCoordinator.nativeAction(action);
     const proof = await this.verify(scope);
     const request: Desktop2UiaRequest = {
@@ -275,6 +328,14 @@ export class Desktop2DirectUiaLeaseCoordinator {
           || native.appEventConfirmed!==false || native.foregroundSafetyUnproven!==true)
         throw new Error('Native HWND Edit write/readback not confirmed.');
       return {textReadbackConfirmed:true,appEventConfirmed:false,foregroundSafetyUnproven:true};
+    }
+    if(action.type==='click_native_button') {
+      const click=result as {operation?:unknown;messageDispatched?:unknown;appEventConfirmed?:unknown;
+        foregroundSafetyUnproven?:unknown}|null;
+      if(!click||click.operation!=='click-native-button'||click.messageDispatched!==true
+        ||click.appEventConfirmed!==false||click.foregroundSafetyUnproven!==true)
+        throw new Error('Native Button message dispatch unconfirmed.');
+      return {messageDispatched:true,appEventConfirmed:false,foregroundSafetyUnproven:true};
     }
     if (!result || typeof result !== 'object'
         || (result as { uiaReadbackConfirmed?: unknown }).uiaReadbackConfirmed !== true
