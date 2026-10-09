@@ -20,3 +20,13 @@ At 2026-10-09 ~06:03:04.498 Malaysia time (UTC+08:00), the **first direct native
 - Monitor readiness deadline now allows 15 seconds on resource-constrained Windows; unready/invalid monitors remain fail-closed. Monitor-only real smoke is verified. No GUI retest is authorized by this file.
 - The existing production MCP and installed DeskMCP 0.9.23 have **not** been modified, deployed, or restarted.
 - A functional solution needs **independently validated app-specific non-foreground editing**. Possible lines of investigation: verified child Win32 Edit `WM_SETTEXT` with app callback verification, app-owned WPF Dispatcher IPC, or browser CDP—not global `SendInput`, unfocused generic UIA, or a shared clipboard fallback. These are design candidates, not demonstrated fixes.
+
+## Later result — 2026-10-09 15:55–15:59 MYT: native WinForms Edit alternative PASS on owned fixture
+
+The earlier **WPF direct UIAutomation foreground-theft result remains valid**. We did not rerun that quarantined harness.
+
+A **different** test program, `test-area/desktop2-native-edit-probe/`, uses a real `WindowsForms10.Edit.app...` child HWND under a Form that was non-activating before Show, cloaked, moved to Desktop2 and uncloaked only after verification. `run-native-edit-once.mjs` exercised guarded `inspect`, `write`, and `deny-stale` stages through the candidate native `WM_SETTEXT` transport. All three completed PASS, with **no target foreground event, no desktop switch, no application focus/key events**, one exactly matching `TextChanged` on the write run, and zero changes when previous text deliberately mismatched.
+
+Full forensic summary with exact timestamped local evidence paths: `native-winforms-edit-findings-20261009.md`. Raw `runs/native-*/` evidence remains preserved and ignored by Git.
+
+**Scope is narrow:** verified only for this owned single-line WinForms Edit. General real Desktop2 Computer Use remains RED, production remains unchanged, and `ValuePattern.SetValue` remains forbidden.

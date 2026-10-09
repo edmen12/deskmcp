@@ -243,7 +243,7 @@ export class Desktop2DirectUiaLeaseCoordinator {
          || seen.has(c.automationId)
          || c.controlType!=='NativeWin32.Edit'
          || typeof c.className!=='string'
-         || (c.className.toLowerCase()!=='edit' && !c.className.startsWith('WindowsForms10.EDIT.'))
+         || (c.className.toLowerCase()!=='edit' && !c.className.toLowerCase().startsWith('windowsforms10.edit.'))
          || c.canSetValue!==false || c.canScrollTopBottom!==false
          || c.canSetNativeValue!==true)
          throw new Error('Forged or duplicate native HWND edit capability');

@@ -51,7 +51,7 @@ internal static class NativeEdit
     }
     private static bool IsSupportedEdit(string name) =>
         name.Equals("Edit", StringComparison.OrdinalIgnoreCase)
-        || name.StartsWith("WindowsForms10.EDIT.", StringComparison.Ordinal);
+        || name.StartsWith("WindowsForms10.Edit.", StringComparison.OrdinalIgnoreCase);
 
     private static string AssertSupportedChild(IntPtr root, IntPtr child, int processId)
     {

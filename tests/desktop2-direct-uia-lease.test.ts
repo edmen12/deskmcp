@@ -245,7 +245,7 @@ test('native HWND Edit snapshot is separately issued without querying ValuePatte
  t.setResult({operation:'inspect-native-edits',hwnd,processId:pid,scannedNodes:1,
   uiaReadbackConfirmed:false,appEventConfirmed:false,controls:[
    {automationId:'native-edit:884020',controlType:'NativeWin32.Edit',
-    className:'WindowsForms10.EDIT.app.0.141b42a_r8_ad1',canSetValue:false,
+    className:'WindowsForms10.Edit.app.0.2360855_r3_ad1',canSetValue:false,
     canScrollTopBottom:false,canSetNativeValue:true}
   ]});
  const result=await t.coordinator.inspectNativeControls(scope);

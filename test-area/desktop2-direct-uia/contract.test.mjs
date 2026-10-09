@@ -184,7 +184,7 @@ test('native Edit request dispatch occurs only after Desktop2 observer and root 
 test('native Edit never aliases UIA set-value and cannot target WPF TextBox by guess',()=>{
  const native=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
  assert.match(native,/name\.Equals\("Edit", StringComparison\.OrdinalIgnoreCase\)/);
- assert.match(native,/name\.StartsWith\("WindowsForms10\.EDIT\."/);
+ assert.match(native,/name\.StartsWith\("WindowsForms10\.Edit\.", StringComparison\.OrdinalIgnoreCase\)/);
  assert.doesNotMatch(native,/\bTextBox\b/);
  assert.match(native,/automationId = "native-edit:" \+ pair\.child\.ToInt64\(\)/);
  assert.match(native,/!automationId\.StartsWith\("native-edit:"/);
