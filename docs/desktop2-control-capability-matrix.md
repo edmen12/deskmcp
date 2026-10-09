@@ -179,6 +179,14 @@ WPF `ValuePattern.SetValue` foreground theft remains **PROHIBITED**; no generic 
 
 **Tests**: static/contract/resource/adversarial suite **58/58 PASS**, Desktop2 directed suite **102/102 PASS**, Node syntax PASS, `git diff --check` PASS. Changes remain isolated to candidate tests / documents, with no restart, web server kill, WSL shutdown, new browser/GUI or production DeskMCP alteration. Stable physical free RAM capacity remains the next environmental blocker.
 
+## 2026-10-10 — native C# consumer now enforces post-message-pump Ready + exact target-mode proof
+
+**Safety defect**: The TS `Desktop2ObserverLifecycle.start()` already required `ready.messagePumpRunning===true` to reject a readiness file published before WinForms `Application.Run()`. However, the **separate native C# `ObserverGuard.AssertLive()` accepted a Ready marker solely on PID/start-time, VDA notification and foreground hook flags**, without checking the newer post-pump field or excluding the strictly prelaunch (external GUI) watcher mode from target-HWND native actions. The native helper can be called as an executable, so its independent guard must not rely only on the TS admission.
+
+**Candidate patch**: `test-area/desktop2-direct-uia/Program.cs` adds `MessagePumpRunning`, `StrictForegroundArmed`, `StrictWindowShowArmed` readiness fields. Native `TrustedTargetModeReadiness` requires **message loop running, active VDA and foreground hooks, expectedDesktopIndex=0, and both strict launch flags false** before reading any matched process or interacting with HWNDs. The former native observer identity, PID reuse, tripwire, protected root HWND / WS_EX_NOACTIVATE and target watch remain required. External strict launch observers are *never* substituted for a watched target's action permission. No global input/focus/ShowWindow/clipboard added.
+
+**Executable self-test**: Real Windows Release build of `DeskMCP.Desktop2DirectUia.exe` completed with **0 errors, 0 warnings**; its `--self-test` returned `pass:true`, including acceptance of a correctly pumped target watcher and hard rejection of an unpumped Ready, strict foreground mode, strict show mode, absent foreground hook and wrong desktop. Native/source tests **59/59 PASS** including new source contract, full Desktop2 directed suite **102/102 PASS**; `git diff --check` clean. This is an executable **offline admission test**, not a live win32 process foreground-isolation trial. Host RAM at initial check was ~521MiB, below passive 768MiB / GUI 1200MiB hard gates; no new real Desktop2 HUD or third-party GUI started. Only candidate source modified; production Gateway, Tunnel, Desktop1 untouched.
+
 ## Primary evidence
 - Native WinForms Edit: test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md
 - Native WinForms PushButton: test-area/desktop2-real-acceptance/native-winforms-button-findings-20261009.md

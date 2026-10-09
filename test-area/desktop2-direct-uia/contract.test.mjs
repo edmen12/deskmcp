@@ -294,3 +294,20 @@ test('unverified generic UIA ScrollPattern is blocked at native helper, lease an
  assert.ok(outer.includes('item.canScrollTopBottom !== false'));
  assert.ok(outer.includes("action.type === 'scroll_native_list' && !allowed.canScrollNativeList"));
 });
+
+test('native C# mutation gate rejects pre-message-pump and wrong strict-mode observer readiness',()=>{
+  assert.match(source,/public bool MessagePumpRunning \{ get; set; \}/);
+  assert.match(source,/public bool StrictForegroundArmed \{ get; set; \}/);
+  assert.match(source,/public bool StrictWindowShowArmed \{ get; set; \}/);
+  const trusted=source.indexOf('internal static bool TrustedTargetModeReadiness(');
+  const read=source.indexOf('Ready ready = JsonSerializer.Deserialize<Ready>',trusted);
+  const check=source.indexOf('if (!TrustedTargetModeReadiness(ready.MessagePumpRunning',read);
+  const next=source.indexOf('using Process process = Process.GetProcessById(ready.ProcessId)',check);
+  assert.ok(trusted>0&&read>trusted&&check>read&&next>check);
+  assert.match(source,/running && foregroundHook && desktopNotifications/);
+  assert.match(source,/!strictForeground && !strictWindowShow && expectedDesktopIndex==0/);
+  assert.match(source,/rejectedUnpumpedTarget/);
+  assert.match(source,/rejectedStrictForeground/);
+  assert.match(source,/rejectedStrictWindowShow/);
+  assert.match(source,/rejectedWrongDesktop/);
+});

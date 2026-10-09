@@ -167,6 +167,9 @@ internal static class ObserverGuard
         public string? WatchedTargetFile { get; set; }
         public bool HasVirtualDesktopNotifications { get; set; }
         public bool HasForegroundHook { get; set; }
+        public bool MessagePumpRunning { get; set; }
+        public bool StrictForegroundArmed { get; set; }
+        public bool StrictWindowShowArmed { get; set; }
     }
     private sealed class WatchedTarget
     {
@@ -175,6 +178,15 @@ internal static class ObserverGuard
         public int DesktopIndex { get; set; }
     }
 
+    // The native input process must not trust an observer that merely
+    // registered hooks before its WinForms message loop started. Also reject
+    // strict prelaunch watchers as a substitute for exact HWND-target mode.
+    internal static bool TrustedTargetModeReadiness(bool running,
+        bool foregroundHook,bool desktopNotifications,bool strictForeground,
+        bool strictWindowShow,int expectedDesktopIndex) =>
+        running && foregroundHook && desktopNotifications
+        && !strictForeground && !strictWindowShow && expectedDesktopIndex==0;
+
     internal static string AssertLive(string readyFile)
     {
         if (!Path.IsPathFullyQualified(readyFile) || !File.Exists(readyFile))
@@ -182,7 +194,10 @@ internal static class ObserverGuard
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         Ready ready = JsonSerializer.Deserialize<Ready>(File.ReadAllText(readyFile), options)
             ?? throw new InvalidOperationException("PASSIVE_OBSERVER_INVALID_READY");
-        if (ready.ExpectedDesktopIndex != 0 || !ready.HasForegroundHook || !ready.HasVirtualDesktopNotifications
+        if (!TrustedTargetModeReadiness(ready.MessagePumpRunning,
+                ready.HasForegroundHook,ready.HasVirtualDesktopNotifications,
+                ready.StrictForegroundArmed,ready.StrictWindowShowArmed,
+                ready.ExpectedDesktopIndex)
             || ready.ProcessId <= 0 || String.IsNullOrWhiteSpace(ready.TripwireFile))
             throw new InvalidOperationException("PASSIVE_OBSERVER_UNTRUSTED_STATE");
         if (!Path.IsPathFullyQualified(ready.TripwireFile))
@@ -418,12 +433,29 @@ internal static partial class DirectUia
         bool unprotectedWindow = Native.HasNoActivateStyle(0L);
         bool unrelatedStyle = Native.HasNoActivateStyle(0x00080000L);
         bool combinedStyle = Native.HasNoActivateStyle(0x08080000L);
+        bool trustedPumpedTarget = ObserverGuard.TrustedTargetModeReadiness(
+            true,true,true,false,false,0);
+        bool rejectedUnpumpedTarget = !ObserverGuard.TrustedTargetModeReadiness(
+            false,true,true,false,false,0);
+        bool rejectedStrictForeground = !ObserverGuard.TrustedTargetModeReadiness(
+            true,true,true,true,false,0);
+        bool rejectedStrictWindowShow = !ObserverGuard.TrustedTargetModeReadiness(
+            true,true,true,false,true,0);
+        bool rejectedUnhooked = !ObserverGuard.TrustedTargetModeReadiness(
+            true,false,true,false,false,0);
+        bool rejectedWrongDesktop = !ObserverGuard.TrustedTargetModeReadiness(
+            true,true,true,false,false,1);
         bool pass = allow.All(x=>x) && deny.All(x=>!x) && owner0 && !owner1 && !ownerNull
-            && protectedWindow && !unprotectedWindow && !unrelatedStyle && combinedStyle;
+            && protectedWindow && !unprotectedWindow && !unrelatedStyle && combinedStyle
+            && trustedPumpedTarget && rejectedUnpumpedTarget
+            && rejectedStrictForeground && rejectedStrictWindowShow
+            && rejectedUnhooked && rejectedWrongDesktop;
         return new { pass, allowedActions = allow.Length, deniedActions = deny.Length,
             desktop1 = owner0, desktop2 = owner1, unreadable = ownerNull,
             invokeIsDisabled = !SemanticPolicy.Permitted("invoke"),
-            protectedWindow, unprotectedWindow, unrelatedStyle, combinedStyle };
+            protectedWindow, unprotectedWindow, unrelatedStyle, combinedStyle,
+            trustedPumpedTarget,rejectedUnpumpedTarget,rejectedStrictForeground,
+            rejectedStrictWindowShow,rejectedUnhooked,rejectedWrongDesktop };
     }
 
     public static int Main(string[] args)
