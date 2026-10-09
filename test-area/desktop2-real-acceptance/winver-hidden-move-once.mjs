@@ -7,6 +7,7 @@ import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {requireSafeNativeGuiMemory} from './resource-preflight.mjs';
+import {terminateOwnedChild} from './owned-process-cleanup.mjs';
 import {AgentDesktopManager} from '../../dist/src/agent-desktop-state.js';
 import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
 import {Desktop2ObserverLifecycle} from '../../dist/src/desktop2-observer-lifecycle.js';
@@ -37,7 +38,7 @@ await mkdir(run,{recursive:true});
 const result={pass:false,stage:'one-owned-hidden-winver',before:null,after:null,
   observerArmed:false,createdPid:null,foundHidden:false,movedHidden:false,
   visibleDetected:false,focusEvents:0,tripwire:false,everSentInput:false,
-  externalGUIStarted:false,readback:null,error:null,eventLog:null};
+  externalGUIStarted:false,cleanupConfirmed:false,readback:null,error:null,eventLog:null};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const invoke=promisify(execFile);
 let session,child,ownPid=null;
@@ -113,24 +114,40 @@ try{
   result.visibleDetected=result.error.includes('VISIBLE_WINDOW');
 }
 finally{
-  // Owned child only. Never enumerate/terminate unrelated Winver instances.
-  if(child && child.exitCode===null)child.kill();
-  await wait(120);
+  // Terminate ONLY the PID we created. Keep observer running until the
+  // owned app has exited; otherwise a late SHOW/focus event could be missed.
+  try{
+    result.cleanupConfirmed=await terminateOwnedChild(child);
+  }catch(e){
+    result.cleanupConfirmed=false;
+    result.error=result.error||('OWNED_WINVER_CLEANUP_ERROR:'+String(e));
+  }
+  if(!result.cleanupConfirmed)
+    result.error=result.error||'OWNED_WINVER_TERMINATION_NOT_CONFIRMED';
+  // The native watcher is now stopped (and its writer flushed) before
+  // observing the final alarm ledger, not after an early partial read.
+  await watcher.stop().catch(e=>{
+    result.error=result.error||('WATCHER_STOP_FAILED:'+String(e));
+    result.pass=false;
+  });
+  await wait(100);
   if(session){
     result.tripwire=fs.existsSync(session.tripwireFile);
-    const raw=await readFile(session.eventLog,'utf8').catch(()=>'');
+    const raw=await readFile(session.eventLog,'utf8').catch(()=>{
+      result.error=result.error||'OBSERVER_EVENT_LOG_MISSING';result.pass=false;
+      return '';
+    });
     for(const line of raw.split(/\r?\n/).filter(Boolean)){
       try{
         const x=JSON.parse(line);
         if(x.kind==='FOREGROUND_CHANGED')result.focusEvents++;
         if(x.kind==='PRELAUNCH_VISIBLE_ROOT')result.visibleDetected=true;
-      }catch{result.error='OBSERVER_LOG_CORRUPT';result.pass=false}
+      }catch{result.error='OBSERVER_LOG_CORRUPT';result.pass=false;}
     }
   }
-  await watcher.stop().catch(()=>undefined);
   result.after=(await native.info().catch(()=>({currentDesktopNumber:null}))).currentDesktopNumber;
-  result.pass=result.pass&&result.after===1&&!result.tripwire
-    &&result.focusEvents===0&&!result.visibleDetected;
+  result.pass=result.pass&&result.cleanupConfirmed&&result.after===1
+    &&!result.tripwire&&result.focusEvents===0&&!result.visibleDetected;
   await writeFile(path.join(run,'result.json'),JSON.stringify(result,null,2));
   console.log(JSON.stringify({...result,runDirectory:run}));
 }
