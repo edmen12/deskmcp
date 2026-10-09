@@ -56,3 +56,26 @@ export async function requireSafePassiveObserverMemory({
   }
   return {minMb:MIN_PASSIVE_OBSERVER_FREE_MB,seenMb};
 }
+
+
+// More conservative *admission* for volatile hosts: 10 successive physical
+// memory readings across 2.7s. Does not retry or weaken the existing gate.
+// Once admitted, the caller must still check its original immediate gate.
+export async function requireStablePassiveObserverMemory({
+  freeBytes=()=>os.freemem(),
+  pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))
+}={}){
+  const samples=[];
+  for(let i=0;i<10;i++){
+    const bytes=freeBytes();
+    if(!Number.isFinite(bytes)||bytes<0)
+      throw Error('PASSIVE_OBSERVER_STABILITY_READING_INVALID');
+    const mb=Math.floor(bytes/(1024*1024));
+    samples.push(mb);
+    if(mb<MIN_PASSIVE_OBSERVER_FREE_MB)
+      throw Error('PASSIVE_OBSERVER_MEMORY_NOT_STABLE:'+mb+
+        'MB<'+MIN_PASSIVE_OBSERVER_FREE_MB+'MB; samples='+samples.join(','));
+    if(i<9)await pause(300);
+  }
+  return {minMb:MIN_PASSIVE_OBSERVER_FREE_MB,seenMb:samples,windowMs:2700};
+}
