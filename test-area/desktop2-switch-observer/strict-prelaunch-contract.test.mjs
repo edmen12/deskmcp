@@ -40,3 +40,16 @@ test('real Windows monitoring smoke cannot spawn GUI, move window or send global
  assert.match(runner,/strictArmed/);
  assert.match(runner,/await watcher\.stop\(\)/);
 });
+
+test('ready marker is emitted only after first pumped native heartbeat and verified by lease',()=>{
+ const heart=source.indexOf('private void Heartbeat()');
+ const ready=source.indexOf('File.WriteAllText(readyFile, JsonSerializer.Serialize(');
+ const published=source.indexOf('messagePumpRunning = true');
+ const constructor=source.indexOf('public DesktopEventListener(');
+ assert.ok(constructor>0&&heart>constructor&&ready>heart&&published>ready);
+ assert.equal(source.indexOf('File.WriteAllText(readyFile,'),ready);
+ assert.match(source,/!readyPublished && !policy.Aborted/);
+ assert.match(source,/STRICT_READY_FOREGROUND_RECHECK_ABORT/);
+ assert.match(source,/Log\("READY_AFTER_MESSAGE_PUMP"/);
+ assert.match(lifecycle,/ready.messagePumpRunning!==true/);
+});

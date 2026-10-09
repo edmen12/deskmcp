@@ -12,7 +12,7 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean}={}) {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
     pid:7171,readyPidMismatch:false,guardPresent:true,
     produceReady:options.ready!==false};
@@ -42,7 +42,8 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolea
         expectedDesktopIndex:0,firstStartUtc:new Date().toISOString(),
         tripwireFile:tripwire,watchedTargetFile:watch,
         hasVirtualDesktopNotifications:true,hasForegroundHook:true,
-        strictForegroundArmed:options.strict===true && options.forgedReady!==true
+        strictForegroundArmed:options.strict===true && options.forgedReady!==true,
+        messagePumpRunning:options.forgedPump!==true
       }));
     }
     return child;
@@ -162,4 +163,12 @@ test('strict watcher refuses absent strict readiness flag',async()=>{
  const t=fixture({strict:true,forgedReady:true});
  await assert.rejects(t.supervisor.start(leaseId),/ready identity/);
  assert.equal(t.state.killed,true);
+});
+
+test('ready marker issued before native message pump fails closed for both modes',async()=>{
+ for(const strict of [false,true]) {
+   const t=fixture({strict,forgedPump:true});
+   await assert.rejects(t.supervisor.start(leaseId),/ready identity/);
+   assert.equal(t.state.killed,true);
+ }
 });

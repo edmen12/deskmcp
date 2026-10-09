@@ -21,6 +21,7 @@ interface Ready {
   readonly hasVirtualDesktopNotifications: boolean;
   readonly hasForegroundHook: boolean;
   readonly strictForegroundArmed?: boolean;
+  readonly messagePumpRunning?: boolean;
 }
 export interface Desktop2ObserverSession {
   readonly readyFile: string;
@@ -123,6 +124,7 @@ export class Desktop2ObserverLifecycle {
           || ready.watchedTargetFile!==session.targetFile
           || ready.hasVirtualDesktopNotifications!==true
           || ready.hasForegroundHook!==true
+          || ready.messagePumpRunning!==true
           || (this.strictPrelaunch && ready.strictForegroundArmed!==true)
           || (!this.strictPrelaunch && ready.strictForegroundArmed===true)
           || existsSync(session.tripwireFile)) {

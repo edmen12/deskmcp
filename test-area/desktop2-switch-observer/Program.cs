@@ -96,6 +96,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     private const uint WinEventSkipOwnProcess = 2;
     private readonly NativeVirtualDesktopApi vda;
     private readonly StreamWriter log;
+    private readonly string eventLogPath;
     private readonly string readyFile;
     private readonly string tripwireFile;
     private readonly string? watchedTargetFile;
@@ -108,6 +109,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     private IntPtr foregroundHook;
     private bool registered;
     private bool disposed;
+    private bool readyPublished;
     private readonly bool strictPrelaunch;
     private readonly IntPtr baselineForeground;
     private int notifications;
@@ -160,6 +162,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             throw new InvalidOperationException("Target watch file must be an absolute, not-yet-existing path.");
         durationMs = checked(seconds * 1000);
         readyFile = ready;
+        eventLogPath = eventsFile;
         tripwireFile = tripwire;
         watchedTargetFile = watchFile;
         strictPrelaunch = strictLaunch;
@@ -196,18 +199,9 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             heartbeat.Interval = 25;
             heartbeat.Tick += (_, _) => Heartbeat();
             heartbeat.Start();
-            File.WriteAllText(readyFile, JsonSerializer.Serialize(new
-            {
-                processId = Environment.ProcessId,
-                expectedDesktopIndex = policy.ExpectedDesktopIndex,
-                firstStartUtc = DateTime.UtcNow,
-                eventLog = eventsFile,
-                tripwireFile,
-                watchedTargetFile,
-                hasVirtualDesktopNotifications = true,
-                hasForegroundHook = true,
-                strictForegroundArmed = strictPrelaunch
-            }));
+            // The first UI message-loop heartbeat, not this constructor,
+            // publishes READY. Hooks can register before the message pump
+            // actually starts; a premature marker creates a prelaunch race.
         }
         catch
         {
@@ -354,6 +348,33 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                     Observe(current, "STRICT_PRELAUNCH_FOREGROUND_POLL_ABORT", forceAbort: true);
                 GetWindowThreadProcessId(front, out uint frontPid);
                 CheckWatchedForeground(front, frontPid, current);
+            }
+            if (!readyPublished && !policy.Aborted
+                && current == policy.ExpectedDesktopIndex)
+            {
+                // Reaching this point proves the actual WinForms message pump
+                // is servicing callbacks, not merely that hooks registered.
+                // Recheck the baseline immediately before publishing READY.
+                if (strictPrelaunch && GetForegroundWindow() != baselineForeground)
+                    Observe(current, "STRICT_READY_FOREGROUND_RECHECK_ABORT", forceAbort: true);
+                if (!policy.Aborted)
+                {
+                    File.WriteAllText(readyFile, JsonSerializer.Serialize(new
+                    {
+                        processId = Environment.ProcessId,
+                        expectedDesktopIndex = policy.ExpectedDesktopIndex,
+                        firstStartUtc = DateTime.UtcNow,
+                        eventLog = eventLogPath,
+                        tripwireFile,
+                        watchedTargetFile,
+                        hasVirtualDesktopNotifications = true,
+                        hasForegroundHook = true,
+                        strictForegroundArmed = strictPrelaunch,
+                        messagePumpRunning = true
+                    }));
+                    readyPublished = true;
+                    Log("READY_AFTER_MESSAGE_PUMP", current, 0, 0);
+                }
             }
             if (clock.ElapsedMilliseconds >= durationMs)
             {
