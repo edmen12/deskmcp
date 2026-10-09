@@ -25,7 +25,7 @@ test('external launch watchdog sets strict WinEvent foreground hook before readi
 
 test('strict observer ready cannot be faked by legacy target-mode watcher',()=>{
  assert.match(lifecycle,/this\.strictPrelaunch \? '--observe-strict-launch' : '--observe-target'/);
- assert.match(lifecycle,/this\.strictPrelaunch && ready\.strictForegroundArmed!==true/);
+ assert.match(lifecycle,/ready\.strictForegroundArmed!==true/);
  assert.match(lifecycle,/!this\.strictPrelaunch && ready\.strictForegroundArmed===true/);
 });
 
@@ -52,4 +52,38 @@ test('ready marker is emitted only after first pumped native heartbeat and verif
  assert.match(source,/STRICT_READY_FOREGROUND_RECHECK_ABORT/);
  assert.match(source,/Log\("READY_AFTER_MESSAGE_PUMP"/);
  assert.match(lifecycle,/ready.messagePumpRunning!==true/);
+});
+
+test('strict mode latches top-level SHOW before HWND identity is known',()=>{
+ assert.match(source,/WindowShowEvent = 0x8002/);
+ assert.match(source,/SetWinEventHook\(WindowShowEvent, WindowShowEvent/);
+ assert.match(source,/GetAncestor\(hwnd, 2\) != hwnd/);
+ assert.match(source,/PRELAUNCH_VISIBLE_ROOT/);
+ assert.match(source,/strictWindowShowArmed = strictPrelaunch && windowShowHook != IntPtr.Zero/);
+ assert.match(lifecycle,/ready.strictWindowShowArmed!==true/);
+});
+
+test('external Winver one-shot does not show windows, use system input, or operate user files',()=>{
+ const winver=readFileSync(path.join(root,'test-area','desktop2-real-acceptance',
+   'winver-hidden-move-once.mjs'),'utf8');
+ for(const re of [/\.showNoActivate\s*\(/,/\bSetForegroundWindow\s*\(/,
+  /\bSendInput\s*\(/,/\.dispatch\s*\(/,/\bSetClipboardData\s*\(/,
+  /\bexecSync\s*\(/,/\bkillall\s*\(/]) assert.doesNotMatch(winver,re);
+ assert.match(winver,/await watcher.start\(lease\)/);
+ assert.match(winver,/await requireSafeNativeGuiMemory\(\)/);
+ assert.match(winver,/probe-hidden-winver/);
+ assert.match(winver,/windowsHide:true/);
+ assert.match(winver,/native.moveWindow\(discovered.hwnd,state.binding.desktopId\)/);
+ assert.match(winver,/settled.isVisible!==false/);
+ assert.match(winver,/result.focusEvents===0/);
+});
+
+test('native window placement publishes a visibility readback without displaying GUI',()=>{
+ const app=readFileSync(path.join(root,'agent-desktop-host','Program.cs'),'utf8');
+ const section=app.slice(app.indexOf('private static object WindowInfo('),
+   app.indexOf('private static object MoveProcess('));
+ assert.match(section,/isVisible = IsWindowVisible\(hwnd\)/);
+ assert.match(section,/MoveWindowCore\(hwnd, desktopId, desktopNumber.Value, restore, showNoActivate, vda\)/);
+ assert.match(app,/if \(restore\)/);
+ assert.match(app,/else if \(showNoActivate\)/);
 });

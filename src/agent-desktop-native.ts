@@ -28,6 +28,7 @@ export interface AgentDesktopWindowInfo {
   readonly desktopId: string;
   readonly desktopNumber?: number | null;
   readonly onCurrentDesktop?: boolean;
+  readonly isVisible?: boolean;
 }
 
 export interface AgentDesktopPassiveWindow {

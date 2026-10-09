@@ -21,6 +21,7 @@ interface Ready {
   readonly hasVirtualDesktopNotifications: boolean;
   readonly hasForegroundHook: boolean;
   readonly strictForegroundArmed?: boolean;
+  readonly strictWindowShowArmed?: boolean;
   readonly messagePumpRunning?: boolean;
 }
 export interface Desktop2ObserverSession {
@@ -125,7 +126,8 @@ export class Desktop2ObserverLifecycle {
           || ready.hasVirtualDesktopNotifications!==true
           || ready.hasForegroundHook!==true
           || ready.messagePumpRunning!==true
-          || (this.strictPrelaunch && ready.strictForegroundArmed!==true)
+          || (this.strictPrelaunch && (ready.strictForegroundArmed!==true
+              || ready.strictWindowShowArmed!==true))
           || (!this.strictPrelaunch && ready.strictForegroundArmed===true)
           || existsSync(session.tripwireFile)) {
         throw new Error('Desktop2 foreground/switch observer failed ready identity verification.');

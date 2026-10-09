@@ -429,7 +429,8 @@ internal static partial class Program
                 hwnd = HwndText(hwnd),
                 desktopId = desktopId.ToString("D"),
                 desktopNumber = ToUserDesktopNumber(vda.WindowDesktopNumber(hwnd)),
-                onCurrentDesktop = current
+                onCurrentDesktop = current,
+                isVisible = IsWindowVisible(hwnd)
             };
         }
         finally

@@ -92,6 +92,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
 {
     private const uint NotificationMessage = 0x141e;
     private const uint ForegroundEvent = 0x0003;
+    private const uint WindowShowEvent = 0x8002;
     private const uint WinEventOutOfContext = 0;
     private const uint WinEventSkipOwnProcess = 2;
     private readonly NativeVirtualDesktopApi vda;
@@ -103,10 +104,12 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     private readonly SwitchPolicy policy;
     private readonly int desktopCount;
     private readonly WinEventProc foregroundCallback;
+    private readonly WinEventProc windowShownCallback;
     private readonly System.Windows.Forms.Timer heartbeat = new();
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly int durationMs;
     private IntPtr foregroundHook;
+    private IntPtr windowShowHook;
     private bool registered;
     private bool disposed;
     private bool readyPublished;
@@ -189,10 +192,18 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             vda.Register(Handle, NotificationMessage);
             registered = true;
             foregroundCallback = ForegroundChanged;
+            windowShownCallback = WindowShown;
             foregroundHook = SetWinEventHook(ForegroundEvent, ForegroundEvent, IntPtr.Zero,
                 foregroundCallback, 0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
             if (foregroundHook == IntPtr.Zero)
                 throw new InvalidOperationException("Cannot register foreground event observer.");
+            if (strictPrelaunch)
+            {
+                windowShowHook = SetWinEventHook(WindowShowEvent, WindowShowEvent, IntPtr.Zero,
+                    windowShownCallback, 0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
+                if (windowShowHook == IntPtr.Zero)
+                    throw new InvalidOperationException("Cannot register strict root-window show observer.");
+            }
             if (strictPrelaunch && (GetForegroundWindow() != baselineForeground || vda.CurrentIndex() != 0))
                 throw new InvalidOperationException("STRICT_LAUNCH_FOREGROUND_CHANGED_BEFORE_READY");
             Log("START", policy.ExpectedDesktopIndex, 0, 0, "No GUI control, no clipboard reads.");
@@ -302,6 +313,24 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
         base.WndProc(ref m);
     }
 
+    private void WindowShown(IntPtr hook, uint kind, IntPtr hwnd, int objectId, int childId, uint thread, uint eventTime)
+    {
+        try
+        {
+            if (!strictPrelaunch || policy.Aborted || objectId != 0 || childId != 0)
+                return;
+            // Only top-level root windows; including dialogs the app may show
+            // before its PID/HWND is known. This is deliberately conservative.
+            if (hwnd == IntPtr.Zero || GetAncestor(hwnd, 2) != hwnd) return;
+            int index = vda.CurrentIndex();
+            Observe(index, "PRELAUNCH_VISIBLE_ROOT", forceAbort: true);
+        }
+        catch (Exception ex)
+        {
+            Observe(-1, "PRELAUNCH_SHOW_MONITOR_FAILED", ex.GetType().Name);
+        }
+    }
+
     private void ForegroundChanged(IntPtr hook, uint kind, IntPtr hwnd, int objectId, int childId, uint thread, uint eventTime)
     {
         try
@@ -370,6 +399,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                         hasVirtualDesktopNotifications = true,
                         hasForegroundHook = true,
                         strictForegroundArmed = strictPrelaunch,
+                        strictWindowShowArmed = strictPrelaunch && windowShowHook != IntPtr.Zero,
                         messagePumpRunning = true
                     }));
                     readyPublished = true;
@@ -396,6 +426,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
         heartbeat.Stop();
         heartbeat.Dispose();
         if (foregroundHook != IntPtr.Zero) UnhookWinEvent(foregroundHook);
+        if (windowShowHook != IntPtr.Zero) UnhookWinEvent(windowShowHook);
         if (registered) vda.Unregister(Handle);
         if (Handle != IntPtr.Zero) DestroyHandle();
         vda.Dispose();

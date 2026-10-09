@@ -12,7 +12,7 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean}={}) {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
     pid:7171,readyPidMismatch:false,guardPresent:true,
     produceReady:options.ready!==false};
@@ -43,6 +43,7 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolea
         tripwireFile:tripwire,watchedTargetFile:watch,
         hasVirtualDesktopNotifications:true,hasForegroundHook:true,
         strictForegroundArmed:options.strict===true && options.forgedReady!==true,
+        strictWindowShowArmed:options.strict===true && options.forgedShow!==true,
         messagePumpRunning:options.forgedPump!==true
       }));
     }
@@ -171,4 +172,10 @@ test('ready marker issued before native message pump fails closed for both modes
    await assert.rejects(t.supervisor.start(leaseId),/ready identity/);
    assert.equal(t.state.killed,true);
  }
+});
+
+test('external launch aborts if strict top-level window-show hook is not ready',async()=>{
+ const t=fixture({strict:true,forgedShow:true});
+ await assert.rejects(t.supervisor.start(leaseId),/ready identity/);
+ assert.equal(t.state.killed,true);
 });
