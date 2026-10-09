@@ -98,8 +98,15 @@ try{
   // Never route this external Winver trial through generic moveWindow.
   // Native host independently verifies the exact own PID/start, root HWND,
   // hidden state, user Desktop1 and fixed Desktop2 destination.
+  // Native move must independently verify the live strict watcher, not
+  // merely trust a previous Node-side assertHealthy() result.
+  const observerReady=JSON.parse(await readFile(session.readyFile,'utf8'));
+  if(!Number.isSafeInteger(observerReady.processId)||observerReady.processId<=0)
+    throw Error('STRICT_OBSERVER_PID_MISSING');
   const move=await native.moveOwnedHiddenWinver(
-    discovered.hwnd,ownPid,started,state.binding.desktopId);
+    discovered.hwnd,ownPid,started,state.binding.desktopId,
+    {readyFile:session.readyFile,tripwireFile:session.tripwireFile,
+      exePath:observer,pid:observerReady.processId});
   if(move.hiddenMoveVerified!==true||move.ownerProcessId!==ownPid
     ||move.desktopId?.toLowerCase()!==state.binding.desktopId.toLowerCase()
     ||move.desktopNumber!==2||move.onCurrentDesktop!==false

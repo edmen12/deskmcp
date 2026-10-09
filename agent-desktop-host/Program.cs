@@ -273,7 +273,11 @@ internal static partial class Program
                     ParseHwnd(Required(options, "hwnd")),
                     ParsePositiveInt(Required(options, "pid"), "pid"),
                     Required(options, "started-utc"),
-                    ParseDesktopId(Required(options, "desktop-id")), vda),
+                    ParseDesktopId(Required(options, "desktop-id")),
+                    Required(options, "observer-ready"),
+                    Required(options, "observer-tripwire"),
+                    Required(options, "observer-exe"),
+                    ParsePositiveInt(Required(options, "observer-pid"), "observer-pid"), vda),
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
@@ -288,6 +292,7 @@ internal static partial class Program
                     vda.CurrentDesktopNumber),
                 "self-test" => SelfTest(vda),
                 "self-test-hidden-move" => HiddenMoveSelfTest(),
+                "self-test-strict-observer-guard" => StrictObserverGuardSelfTest(),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };
             Console.Out.Write(JsonSerializer.Serialize(result));

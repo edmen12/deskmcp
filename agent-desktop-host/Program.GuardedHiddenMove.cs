@@ -64,7 +64,8 @@ internal static partial class Program
     }
 
     private static object MoveOwnedHiddenWinver(IntPtr hwnd,int pid,string startedUtc,
-        Guid desktopId,VirtualDesktopAccessor vda)
+        Guid desktopId,string observerReady,string observerTripwire,
+        string observerExe,int observerPid,VirtualDesktopAccessor vda)
     {
         // Fixed destination is the real Windows virtual Desktop2, not a
         // private Win32 Desktop Object. No ShowWindow or activation options.
@@ -74,13 +75,16 @@ internal static partial class Program
         Guid? desktop1Id=vda.DesktopIdByNumber(0);
         if(!desktop1Id.HasValue||desktop1Id==desktopId)
             throw new InvalidOperationException("HIDDEN_MOVE_INVALID_DESKTOP_PAIR");
+        AssertStrictObserverLive(observerReady,observerTripwire,observerExe,observerPid);
         using Process owner=VerifyFreshOwnedWinver(pid,startedUtc);
         AssertFreshHiddenWindow(hwnd,pid,desktop1Id.Value,0,vda);
         // The same PID/start proof and exact hidden HWND are checked
         // immediately before the untrusted VDA move.
         if(owner.HasExited)throw new InvalidOperationException("HIDDEN_MOVE_WINVER_EXITED");
         AssertFreshHiddenWindow(hwnd,pid,desktop1Id.Value,0,vda);
+        AssertStrictObserverLive(observerReady,observerTripwire,observerExe,observerPid);
         MoveWindowCore(hwnd,desktopId,1,false,false,vda);
+        AssertStrictObserverLive(observerReady,observerTripwire,observerExe,observerPid);
         // After a move, even a successful VDA HRESULT is NOT enough.
         AssertFreshHiddenWindow(hwnd,pid,desktopId,1,vda);
         IVirtualDesktopManager manager=CreateManager();

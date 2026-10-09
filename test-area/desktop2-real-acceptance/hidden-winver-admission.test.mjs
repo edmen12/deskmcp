@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import {readFileSync,existsSync} from 'node:fs';
+import {readFileSync,existsSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import os from 'node:os';
 
 const worktree=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const bin=path.join(worktree,'agent-desktop-host','bin','Release','net10.0-windows',
@@ -100,5 +101,75 @@ test('native hidden move refuses a real Node process even when destination Deskt
    '--pid',String(process.pid),'--started-utc',new Date().toISOString(),
    '--desktop-id',destination.desktopId]);
  assert.equal(candidate.status,1);
- assert.match(candidate.stderr,/EXTERNAL_PROBE_ONLY_WINVER_PROCESS_ALLOWED/);
+ assert.match(candidate.stderr,/Missing --observer-ready/);
+});
+
+test('strict native watcher executable guard rejects missing hooks and pre-loop Ready',()=>{
+ const r=run(['self-test-strict-observer-guard']);
+ assert.equal(r.status,0,r.stderr);
+ const v=JSON.parse(r.stdout);
+ assert.equal(v.pass,true);
+ for(const k of ['valid','rejectsNoPump','rejectsNoVda','rejectsNoForeground',
+    'rejectsNoStrictForeground','rejectsNoShowHook','rejectsDesktop2'])
+   assert.equal(v[k],true,k);
+});
+test('owned hidden Winver move is denied when watcher ready or live PID proof is absent',()=>{
+ const strict=readFileSync(path.join(worktree,'agent-desktop-host',
+   'Program.StrictObserverGuard.cs'),'utf8');
+ const move=guarded;
+ const first=move.indexOf('AssertStrictObserverLive(observerReady,observerTripwire,observerExe,observerPid)');
+ const actual=move.indexOf('MoveWindowCore(hwnd,desktopId,1,false,false,vda)',first);
+ const second=move.indexOf('AssertStrictObserverLive(observerReady,observerTripwire,observerExe,observerPid)',actual);
+ assert.ok(first>0&&actual>first&&second>actual,'watcher must be checked before AND after moving HWND');
+ for(const literal of ['hasVirtualDesktopNotifications','hasForegroundHook',
+ 'strictForegroundArmed','strictWindowShowArmed','messagePumpRunning',
+ 'processId','firstStartUtc','observer.ready.json','observer.tripwire.json'])
+   assert.ok(strict.includes(literal),literal);
+ assert.match(strict,/owner\.HasExited/);
+ assert.match(strict,/File\.Exists\(alarm\)/);
+ assert.match(strict,/HIDDEN_MOVE_OBSERVER_PID_OR_EXE_MISMATCH/);
+ assert.doesNotMatch(strict,/\bShowWindow\s*\(|\bSetForegroundWindow\s*\(|\bSendInput\s*\(/);
+ const state=run(['desktop-info','--desktop-number','2']);
+ assert.equal(state.status,0,state.stderr);
+ const destination=JSON.parse(state.stdout);
+ const fake=path.join(worktree,'test-area','desktop2-real-acceptance',
+   'nonexistent-observer-identity','observer.ready.json');
+ const guardArgs=['move-owned-hidden-winver','--hwnd','1','--pid',String(process.pid),
+   '--started-utc',new Date().toISOString(),'--desktop-id',destination.desktopId,
+   '--observer-ready',fake,
+   '--observer-tripwire',path.join(path.dirname(fake),'observer.tripwire.json'),
+   '--observer-exe',path.join(worktree,'test-area','desktop2-switch-observer',
+     'bin','Release','net10.0-windows','DeskMCP.Desktop2SwitchObserver.exe'),
+   '--observer-pid',String(process.pid)];
+ const denied=run(guardArgs);
+ assert.equal(denied.status,1,denied.stderr);
+ assert.match(denied.stderr,/HIDDEN_MOVE_OBSERVER_READY_OR_ALARM_INVALID/);
+});
+
+test('forged strict ready file for a real Node PID cannot impersonate the native observer binary',()=>{
+ const state=run(['desktop-info','--desktop-number','2']);
+ assert.equal(state.status,0,state.stderr);
+ const desktopId=JSON.parse(state.stdout).desktopId;
+ const temp=mkdtempSync(path.join(os.tmpdir(),'deskmcp-watch-forgery-'));
+ try{
+  const ready=path.join(temp,'observer.ready.json');
+  const alarm=path.join(temp,'observer.tripwire.json');
+  writeFileSync(ready,JSON.stringify({
+    processId:process.pid,expectedDesktopIndex:0,
+    firstStartUtc:new Date().toISOString(),
+    tripwireFile:alarm,eventLog:path.join(temp,'observer.events.jsonl'),
+    hasVirtualDesktopNotifications:true,hasForegroundHook:true,
+    messagePumpRunning:true,strictForegroundArmed:true,
+    strictWindowShowArmed:true
+  }));
+  const denied=run(['move-owned-hidden-winver',
+    '--hwnd','1','--pid',String(process.pid),
+    '--started-utc',new Date().toISOString(),'--desktop-id',desktopId,
+    '--observer-ready',ready,'--observer-tripwire',alarm,
+    '--observer-exe',path.join(worktree,'test-area','desktop2-switch-observer',
+      'bin','Release','net10.0-windows','DeskMCP.Desktop2SwitchObserver.exe'),
+    '--observer-pid',String(process.pid)]);
+  assert.equal(denied.status,1,denied.stderr);
+  assert.match(denied.stderr,/HIDDEN_MOVE_OBSERVER_PID_OR_EXE_MISMATCH/);
+ }finally{rmSync(temp,{recursive:true,force:true});}
 });

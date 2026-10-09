@@ -146,17 +146,26 @@ export class AgentDesktopNativeBridge {
   // foreground, shared, wrong-source or wrong-destination HWNDs. Not an
   // input permit and not a substitute for strict prelaunch watcher.
   async moveOwnedHiddenWinver(
-    hwnd: number, processId: number, startedUtc: string, desktopId: string
+    hwnd: number, processId: number, startedUtc: string, desktopId: string,
+    observer: {readyFile:string;tripwireFile:string;exePath:string;pid:number}
   ): Promise<AgentDesktopWindowInfo & {readonly hiddenMoveVerified: boolean;readonly ownerProcessId:number}> {
     if(!Number.isSafeInteger(hwnd)||hwnd<=0
        ||!Number.isSafeInteger(processId)||processId<=0
        ||typeof startedUtc!=='string'||startedUtc.length<15||startedUtc.length>50
-       ||!Number.isFinite(Date.parse(startedUtc)))
+       ||!Number.isFinite(Date.parse(startedUtc))
+       ||!observer||!Number.isSafeInteger(observer.pid)||observer.pid<=0
+       ||!path.isAbsolute(observer.readyFile)
+       ||!path.isAbsolute(observer.tripwireFile)
+       ||!path.isAbsolute(observer.exePath))
       throw new Error('Owned hidden Winver PID/HWND/start-time required.');
     return this.run<AgentDesktopWindowInfo & {readonly hiddenMoveVerified:boolean;readonly ownerProcessId:number}>([
       'move-owned-hidden-winver','--hwnd',String(hwnd),
       '--pid',String(processId),'--started-utc',startedUtc,
-      '--desktop-id',normalizeDesktopId(desktopId)
+      '--desktop-id',normalizeDesktopId(desktopId),
+      '--observer-ready',observer.readyFile,
+      '--observer-tripwire',observer.tripwireFile,
+      '--observer-exe',observer.exePath,
+      '--observer-pid',String(observer.pid)
     ]);
   }
 
