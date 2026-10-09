@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -187,6 +187,88 @@ test('invalid owner metadata fails closed', async () => {
       acquirePidDirectoryLock(lockDir, { label: 'test', timeoutMs: 100, initializationGraceMs: 10, pollMs: 5 }),
       /metadata is invalid; refusing unsafe automatic recovery/i
     );
+  });
+});
+
+for (const interruptedKind of ['lock', 'transition'] as const) {
+  test(`Windows termination before ${interruptedKind} owner write leaves canonical ownership recoverable`, { skip: process.platform !== 'win32' }, async () => {
+    await withFixture(async (root, lockDir) => {
+      const moduleUrl = pathToFileURL(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/cross-process-lock.js')).href;
+      const code = `
+        import fs from 'node:fs/promises';
+        import { syncBuiltinESMExports } from 'node:module';
+        const lockDir = ${JSON.stringify(lockDir)};
+        const interruptedDirectory = ${JSON.stringify(interruptedKind === 'lock' ? lockDir : `${lockDir}.transition`)};
+        const mkdir = fs.mkdir;
+        fs.mkdir = async (...args) => {
+          const result = await mkdir(...args);
+          if (args[0] === interruptedDirectory || args[0].startsWith(interruptedDirectory + '.init-')) process.exit(23);
+          return result;
+        };
+        syncBuiltinESMExports();
+        const { acquirePidDirectoryLock } = await import(${JSON.stringify(moduleUrl)});
+        const lease = await acquirePidDirectoryLock(lockDir, { label: 'interrupted publication' });
+        await lease.release();
+      `;
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr += String(chunk); });
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', resolve);
+      });
+      assert.equal(exitCode, 23, stderr);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(await inspectPidDirectoryLock(lockDir, 1), interruptedKind === 'lock' ? 'missing' : 'stale');
+      await assert.rejects(stat(`${lockDir}.transition`), (error: NodeJS.ErrnoException) => error.code === 'ENOENT');
+      const prepared = (await readdir(root)).filter(name => name.includes('.init-'));
+      assert.equal(prepared.length, 1);
+      assert.deepEqual(await readdir(path.join(root, prepared[0]!)), []);
+      const recovered = await acquirePidDirectoryLock(lockDir, { label: 'after interrupted publication', timeoutMs: 2000, pollMs: 5 });
+      await recovered.release();
+      assert.equal(await inspectPidDirectoryLock(lockDir), 'missing');
+    });
+  });
+}
+
+test('Windows prepared publisher cannot replace an existing empty initialization directory', { skip: process.platform !== 'win32' }, async () => {
+  await withFixture(async (root, lockDir) => {
+    let injected = false;
+    await assert.rejects(acquirePidDirectoryLock(lockDir, {
+      label: 'initializing directory race', timeoutMs: 300, initializationGraceMs: 1, pollMs: 5,
+      testHooks: { beforeOwnerDirectoryPublish: async directory => {
+        if (directory === lockDir && !injected) {
+          injected = true;
+          assert.equal(await inspectPidDirectoryLock(lockDir), 'missing');
+          await mkdir(lockDir);
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      } }
+    }), /metadata is invalid; refusing unsafe automatic recovery/i);
+    assert.equal(injected, true);
+    assert.deepEqual(await readdir(lockDir), []);
+    assert.deepEqual(await readdir(root), [path.basename(lockDir)]);
+  });
+});
+
+test('Windows prepared publisher cannot replace another active owner', { skip: process.platform !== 'win32' }, async () => {
+  await withFixture(async (_root, lockDir) => {
+    let contender: Awaited<ReturnType<typeof acquirePidDirectoryLock>> | undefined;
+    try {
+      await assert.rejects(acquirePidDirectoryLock(lockDir, {
+        label: 'delayed publisher', timeoutMs: 200, pollMs: 5,
+        testHooks: { beforeOwnerDirectoryPublish: async directory => {
+          if (directory === lockDir && !contender) {
+            contender = await acquirePidDirectoryLock(lockDir, { label: 'winning publisher', timeoutMs: 1000 });
+          }
+        } }
+      }), /busy in another DeskMCP process/i);
+      assert.ok(contender);
+      const owner = JSON.parse(await readFile(path.join(lockDir, 'owner.json'), 'utf8')) as { token: string };
+      assert.equal(owner.token, contender.token);
+    } finally {
+      await contender?.release();
+    }
   });
 });
 

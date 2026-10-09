@@ -24,6 +24,7 @@ interface PidDirectoryTransitionOwner {
 }
 
 export interface PidDirectoryLockTestHooks {
+  readonly beforeOwnerDirectoryPublish?: (directory: string, preparedDirectory: string) => Promise<void> | void;
   readonly beforeRecoveryMarkerAcquire?: () => Promise<void> | void;
   readonly afterRecoveryMarkerAcquired?: () => Promise<void> | void;
   readonly afterRecoveryDirectoryRetired?: () => Promise<void> | void;
@@ -131,6 +132,63 @@ function transientDirectoryRenameError(error: unknown): boolean {
   return ['EACCES', 'EPERM', 'EBUSY', 'ENOTEMPTY'].includes(code ?? '');
 }
 
+async function tryPublishOwnerDirectory(
+  directory: string,
+  owner: unknown,
+  token: string,
+  testHooks?: PidDirectoryLockTestHooks
+): Promise<boolean> {
+  // On Windows, directory rename cannot replace an existing destination, even
+  // an empty one. Publish a complete owner so termination during preparation
+  // cannot strand an ownerless canonical lock or transition. POSIX rename can
+  // replace an empty destination; retain exclusive mkdir there to avoid taking
+  // over another (possibly older-version) writer's initializing directory.
+  if (process.platform !== 'win32') {
+    try {
+      await mkdir(directory, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+    try {
+      await writeJsonAtomically(directory, 'owner.json', owner, token);
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 20 }).catch(() => undefined);
+      throw error;
+    }
+    return true;
+  }
+
+  const alreadyPublished = await lstat(directory).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (alreadyPublished) return false;
+  const candidate = `${directory}.init-${process.pid}-${token}`;
+  await mkdir(candidate, { mode: 0o700 });
+  try {
+    await writeJsonAtomically(candidate, 'owner.json', owner, token);
+    await testHooks?.beforeOwnerDirectoryPublish?.(directory, candidate);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(candidate, directory);
+        return true;
+      } catch (error) {
+        if (!transientDirectoryRenameError(error) && (error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const existing = await lstat(directory).catch(inspectError => {
+          if ((inspectError as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+          throw inspectError;
+        });
+        if (existing) return false;
+        if (attempt >= 7) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(10 * (2 ** attempt), 200)));
+      }
+    }
+  } finally {
+    await rm(candidate, { recursive: true, force: true, maxRetries: 20, retryDelay: 20 });
+  }
+}
+
 async function retireOwnedDirectory(
   source: string,
   destination: string,
@@ -205,16 +263,11 @@ async function observeTransition(lockDir: string, initializationGraceMs: number)
 async function tryCreateTransition(
   lockDir: string,
   kind: PidDirectoryTransitionOwner['kind'],
-  expectedOwner: PidDirectoryLockOwner
+  expectedOwner: PidDirectoryLockOwner,
+  testHooks?: PidDirectoryLockTestHooks
 ): Promise<TransitionLease | undefined> {
   const marker = transitionPath(lockDir);
   const token = randomUUID();
-  try {
-    await mkdir(marker, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
-    throw error;
-  }
 
   const owner: PidDirectoryTransitionOwner = {
     schema_version: 1,
@@ -225,12 +278,7 @@ async function tryCreateTransition(
     expected_owner_token: expectedOwner.token,
     created_at: new Date().toISOString()
   };
-  try {
-    await writeJsonAtomically(marker, 'owner.json', owner, token);
-  } catch (error) {
-    await rm(marker, { recursive: true, force: true, maxRetries: 20, retryDelay: 20 }).catch(() => undefined);
-    throw error;
-  }
+  if (!await tryPublishOwnerDirectory(marker, owner, token, testHooks)) return undefined;
   return { token, path: marker };
 }
 
@@ -283,7 +331,7 @@ async function reclaimObservedStaleLock(
   options: PidDirectoryLockOptions
 ): Promise<boolean> {
   await options.testHooks?.beforeRecoveryMarkerAcquire?.();
-  const transition = await tryCreateTransition(lockDir, 'reclaim', staleOwner);
+  const transition = await tryCreateTransition(lockDir, 'reclaim', staleOwner, options.testHooks);
   if (!transition) return false;
 
   await options.testHooks?.afterRecoveryMarkerAcquired?.();
@@ -347,13 +395,14 @@ export async function acquirePidDirectoryLock(lockDir: string, options: PidDirec
     }
 
     const token = randomUUID();
-    let created = false;
-    try {
-      await mkdir(lockDir, { mode: 0o700 });
-      created = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
+    const owner: PidDirectoryLockOwner = {
+      schema_version: 1,
+      pid: process.pid,
+      token,
+      created_at: new Date().toISOString(),
+      ...(options.metadata ? { metadata: options.metadata } : {})
+    };
+    const created = await tryPublishOwnerDirectory(lockDir, owner, token, options.testHooks);
 
     if (created) {
       const gateAfterMkdir = await transitionPresence(lockDir);
@@ -364,20 +413,6 @@ export async function acquirePidDirectoryLock(lockDir: string, options: PidDirec
         }
         await waitForTransitionOrThrow(lockDir, options, initializationGraceMs, deadline, pollMs);
         continue;
-      }
-
-      const owner: PidDirectoryLockOwner = {
-        schema_version: 1,
-        pid: process.pid,
-        token,
-        created_at: new Date().toISOString(),
-        ...(options.metadata ? { metadata: options.metadata } : {})
-      };
-      try {
-        await writeJsonAtomically(lockDir, 'owner.json', owner, token);
-      } catch (error) {
-        await rm(lockDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 20 }).catch(() => undefined);
-        throw error;
       }
 
       const expectedOwner: PidDirectoryLockOwner = owner;
@@ -443,7 +478,7 @@ export async function acquirePidDirectoryLock(lockDir: string, options: PidDirec
             if (presence === 'invalid') {
               throw new Error(`${options.label} lock transition marker is invalid; refusing unsafe release.`);
             }
-            if (presence === 'missing') transition = await tryCreateTransition(lockDir, 'release', expectedOwner);
+            if (presence === 'missing') transition = await tryCreateTransition(lockDir, 'release', expectedOwner, options.testHooks);
             if (transition) break;
             await waitForTransitionOrThrow(lockDir, options, initializationGraceMs, releaseDeadline, pollMs);
           }
