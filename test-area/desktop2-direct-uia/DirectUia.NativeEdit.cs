@@ -77,7 +77,7 @@ internal static class NativeEdit
         int scanned = 0;
         bool exhausted = false;
         guard();
-        EnumChildWindows(root, (hwnd, _) => {
+        bool enumerationCompleted = EnumChildWindows(root, (hwnd, _) => {
             // Only capture HWNDs here. Exceptions inside Win32 callbacks
             // must not cross the unmanaged callback boundary.
             scanned++;
@@ -93,6 +93,8 @@ internal static class NativeEdit
         }, IntPtr.Zero);
         guard();
         if (exhausted) throw new InvalidOperationException("NATIVE_EDIT_CHILD_ENUMERATION_BUDGET_EXCEEDED");
+        if (!enumerationCompleted)
+            throw new InvalidOperationException("NATIVE_EDIT_CHILD_ENUMERATION_INCOMPLETE");
         visited = scanned;
         // No partial trust: a supported but disabled, password or multiline
         // candidate is filtered, rather than becoming an arbitrary handle.

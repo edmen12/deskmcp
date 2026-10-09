@@ -223,3 +223,13 @@ test('native Button discovery/click has armed monitor and real Desktop2 checks b
  assert.match(source,/NATIVE_BUTTON_EXACT_CAPABILITY_REQUIRED/);
  assert.match(source,/DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT/);
 });
+
+test('native Edit refuses incomplete Win32 child enumeration rather than trusting a partial snapshot',()=>{
+  const source=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
+  assert.match(source,/bool enumerationCompleted = EnumChildWindows\(root,/);
+  assert.match(source,/if \(!enumerationCompleted\)\s*throw new InvalidOperationException\("NATIVE_EDIT_CHILD_ENUMERATION_INCOMPLETE"\)/);
+  const childList=source.slice(source.indexOf('private static List<'), source.indexOf('private static IntPtr Message('));
+  const finished=childList.indexOf('if (!enumerationCompleted)');
+  const accepted=childList.indexOf('return edits.Where');
+  assert.ok(finished>=0 && accepted>finished,'do not mint child HWND capabilities after incomplete enumeration');
+});
