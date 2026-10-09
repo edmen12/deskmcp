@@ -149,3 +149,22 @@ test('Winver acceptance requires final pumped observer event and detects signale
  assert.match(src,/child\.exitCode!==null\|\|child\.signalCode!==null/);
  assert.match(src,/&&result\.focusEvents===0&&!result\.visibleDetected/);
 });
+
+test('owned WinForms cleanup confirms the GUI exits BEFORE stopping native watcher',()=>{
+ const root=path.dirname(fileURLToPath(import.meta.url));
+ const src=fs.readFileSync(path.join(root,'run-native-edit-once.mjs'),'utf8');
+ const finallyAt=src.indexOf('} finally {');
+ const childExit=src.indexOf('await terminateOwnedChild(child,{deadlineMs:2500})',finallyAt);
+ const watcherExit=src.indexOf('await session.stop()',finallyAt);
+ const verdict=src.indexOf('result.pass=Boolean(result.pass&&result.ownedGuiExitConfirmed',watcherExit);
+ assert.ok(finallyAt>=0&&childExit>finallyAt&&watcherExit>childExit
+   &&verdict>watcherExit,
+   'the owned GUI must exit before watcher teardown and final verdict');
+ assert.match(src,/ownedGuiExitConfirmed:false,observerExitConfirmed:false/);
+ assert.match(src,/result\.observerExitConfirmed=Boolean\(watch\)/);
+ assert.match(src,/&&result\.observerExitConfirmed&&!trip&&last\.currentDesktopNumber===1/);
+ assert.match(src,/OWNED_GUI_EXIT_UNCONFIRMED/);
+ assert.match(src,/SESSION_STOP_FAILED/);
+ assert.match(src,/child\.exitCode!==null \|\| child\.signalCode!==null/);
+ assert.doesNotMatch(src,/if\(child && child\.exitCode===null\)child\.kill\(\)/);
+});

@@ -9,6 +9,7 @@ import {spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {requireSafeNativeGuiMemory} from './resource-preflight.mjs';
+import {terminateOwnedChild} from './owned-process-cleanup.mjs';
 import {AgentDesktopManager} from '../../dist/src/agent-desktop-state.js';
 import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
 import {resolveDeskMcpStateRoot} from '../../dist/src/data-root.js';
@@ -73,6 +74,7 @@ const value='D2_NATIVE_WINFORMS_ONE_SHOT';
 const result={
   stage,pass:false,desktopBefore:undefined,desktopAfter:undefined,
   claimedForegroundSafety:false,tripwire:false,error:undefined,
+  ownedGuiExitConfirmed:false,observerExitConfirmed:false,
   observed:[],appCallbackCount:0,appButtonCallbackCount:0,appListTopChanges:[],
   appFocusEvents:[],observerEventPath:null,
   appEventPath:app,timelinePath:timeline
@@ -97,7 +99,8 @@ async function awaitReady(ms){
   while(Date.now()<limit){
     await guard('WAIT_READY');
     if(fs.existsSync(ready))return JSON.parse(await readFile(ready,'utf8'));
-    if(child && child.exitCode!==null)throw Error('OWNED_WINFORMS_EARLY_EXIT');
+    if(child && (child.exitCode!==null || child.signalCode!==null))
+      throw Error('OWNED_WINFORMS_EARLY_EXIT');
     await sleep(50);
   }
   throw Error('OWNED_WINFORMS_READINESS_TIMEOUT');
@@ -294,9 +297,32 @@ try{
   result.error=e instanceof Error?e.message:String(e);
   log('FIRST_FAILURE_HALT',{error:result.error});
 } finally {
-  // Do not auto-return user's desktop or retry the failed GUI action.
-  await session.stop().catch(e=>log('SESSION_STOP_FAILED',{error:String(e)}));
-  if(child && child.exitCode===null)child.kill();
+  // Do not auto-return the owner's Desktop1 or repeat a failed GUI action.
+  // The watcher MUST remain active while the actual owned GUI process exits.
+  // Sending a kill signal alone is not evidence of process termination.
+  if(child){
+    try{
+      result.ownedGuiExitConfirmed=await terminateOwnedChild(child,{deadlineMs:2500});
+    }catch(e){
+      result.error=result.error||('OWNED_GUI_CLEANUP_FAILED:'+String(e));
+    }
+    if(!result.ownedGuiExitConfirmed){
+      result.error=result.error||'OWNED_GUI_EXIT_UNCONFIRMED';
+      log('OWNED_GUI_EXIT_UNCONFIRMED');
+    }
+  }
+  if(watch && fs.existsSync(watch.tripwireFile)){
+    trip=true;
+    result.tripwireEvidence=await readFile(watch.tripwireFile,'utf8').catch(()=>'(unreadable)');
+  }
+  try{
+    await session.stop();
+    result.observerExitConfirmed=Boolean(watch);
+  }catch(e){
+    result.error=result.error||('SESSION_STOP_FAILED:'+String(e));
+    log('SESSION_STOP_FAILED',{error:String(e)});
+  }
+  // A late tripwire during fixture teardown still voids the experiment.
   if(watch && fs.existsSync(watch.tripwireFile)){
     trip=true;
     result.tripwireEvidence=await readFile(watch.tripwireFile,'utf8').catch(()=>'(unreadable)');
@@ -304,11 +330,16 @@ try{
   result.tripwire=trip;
   const last=await native.info().catch(()=>({currentDesktopNumber:null}));
   result.desktopAfter=last.currentDesktopNumber;
-  result.pass=result.pass&&!trip&&last.currentDesktopNumber===1;
-  result.claimedForegroundSafety=result.pass; // only for owned one-off fixture
+  result.pass=Boolean(result.pass&&result.ownedGuiExitConfirmed
+    &&result.observerExitConfirmed&&!trip&&last.currentDesktopNumber===1
+    &&result.appFocusEvents.length===0&&!result.error);
+  result.claimedForegroundSafety=result.pass; // ONLY owned one-off fixture
   await writeFile(path.join(out,'result.json'),JSON.stringify(result,null,2));
   log('FINAL_RESULT',{stage,pass:result.pass,desktopAfter:result.desktopAfter,
-    tripwire:result.tripwire,error:result.error,appCallbackCount:result.appCallbackCount,
+    tripwire:result.tripwire,error:result.error,
+    ownedGuiExitConfirmed:result.ownedGuiExitConfirmed,
+    observerExitConfirmed:result.observerExitConfirmed,
+    appCallbackCount:result.appCallbackCount,
     appFocusEvents:result.appFocusEvents.length});
 }
 if(!result.pass)process.exitCode=3;
