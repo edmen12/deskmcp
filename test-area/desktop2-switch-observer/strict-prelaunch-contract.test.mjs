@@ -73,7 +73,8 @@ test('external Winver one-shot does not show windows, use system input, or opera
  assert.match(winver,/await requireSafeNativeGuiMemory\(\)/);
  assert.match(winver,/probe-hidden-winver/);
  assert.match(winver,/windowsHide:true/);
- assert.match(winver,/native.moveWindow\(discovered.hwnd,state.binding.desktopId\)/);
+ assert.match(winver,/native.moveOwnedHiddenWinver\(/);
+ assert.doesNotMatch(winver,/native\.moveWindow\(/);
  assert.match(winver,/settled.isVisible!==false/);
  assert.match(winver,/result.focusEvents===0/);
 });

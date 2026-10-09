@@ -14,23 +14,9 @@ internal static partial class Program
     // otherwise interact with any window.
     private static object ProbeHiddenWinver(int pid,string startedAtUtc,VirtualDesktopAccessor vda)
     {
-        if(!DateTimeOffset.TryParse(startedAtUtc,out var expectedStart))
-            throw new ArgumentException("EXTERNAL_PROBE_VALID_START_TIME_REQUIRED");
         if(!vda.Available || vda.CurrentDesktopNumber()!=0)
             throw new InvalidOperationException("EXTERNAL_PROBE_OWNER_DESKTOP1_REQUIRED");
-        using Process process=Process.GetProcessById(pid);
-        if(!String.Equals(process.ProcessName,"winver",StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("EXTERNAL_PROBE_ONLY_WINVER_PROCESS_ALLOWED");
-        string expectedPath=Path.GetFullPath(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),"System32","winver.exe"));
-        if(!String.Equals(Path.GetFullPath(process.MainModule?.FileName??""),
-            expectedPath,StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("EXTERNAL_PROBE_SYSTEM32_WINVER_PATH_REQUIRED");
-        DateTimeOffset actualStart=new(process.StartTime.ToUniversalTime(),TimeSpan.Zero);
-        if(Math.Abs((actualStart-expectedStart).TotalSeconds)>4
-            ||(DateTimeOffset.UtcNow-actualStart).TotalSeconds>60
-            ||actualStart>DateTimeOffset.UtcNow.AddSeconds(5))
-            throw new InvalidOperationException("EXTERNAL_PROBE_PROCESS_START_PROOF_FAILED");
+        using Process process=VerifyFreshOwnedWinver(pid,startedAtUtc);
         List<object> hidden=new();
         bool wrongDesktop=false,ambiguous=false,visibleWindow=false;
         bool success=EnumWindows((hwnd,_)=>{

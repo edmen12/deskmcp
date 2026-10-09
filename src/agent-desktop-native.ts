@@ -141,6 +141,25 @@ export class AgentDesktopNativeBridge {
     return this.run<AgentDesktopWindowInfo>(['window-info', '--hwnd', String(hwnd)]);
   }
 
+  // Candidate-only exact fresh Winver hidden placement. Unlike generic
+  // moveWindow, the native host rejects wrong PID/creation time, visible,
+  // foreground, shared, wrong-source or wrong-destination HWNDs. Not an
+  // input permit and not a substitute for strict prelaunch watcher.
+  async moveOwnedHiddenWinver(
+    hwnd: number, processId: number, startedUtc: string, desktopId: string
+  ): Promise<AgentDesktopWindowInfo & {readonly hiddenMoveVerified: boolean;readonly ownerProcessId:number}> {
+    if(!Number.isSafeInteger(hwnd)||hwnd<=0
+       ||!Number.isSafeInteger(processId)||processId<=0
+       ||typeof startedUtc!=='string'||startedUtc.length<15||startedUtc.length>50
+       ||!Number.isFinite(Date.parse(startedUtc)))
+      throw new Error('Owned hidden Winver PID/HWND/start-time required.');
+    return this.run<AgentDesktopWindowInfo & {readonly hiddenMoveVerified:boolean;readonly ownerProcessId:number}>([
+      'move-owned-hidden-winver','--hwnd',String(hwnd),
+      '--pid',String(processId),'--started-utc',startedUtc,
+      '--desktop-id',normalizeDesktopId(desktopId)
+    ]);
+  }
+
   async moveWindow(
     hwnd: number,
     desktopId: string,

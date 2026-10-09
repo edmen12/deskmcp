@@ -95,8 +95,13 @@ try{
   result.foundHidden=true;
   await requireSafeNativeGuiMemory();
   await verify();
-  const move=await native.moveWindow(discovered.hwnd,state.binding.desktopId);
-  if(move.desktopId?.toLowerCase()!==state.binding.desktopId.toLowerCase()
+  // Never route this external Winver trial through generic moveWindow.
+  // Native host independently verifies the exact own PID/start, root HWND,
+  // hidden state, user Desktop1 and fixed Desktop2 destination.
+  const move=await native.moveOwnedHiddenWinver(
+    discovered.hwnd,ownPid,started,state.binding.desktopId);
+  if(move.hiddenMoveVerified!==true||move.ownerProcessId!==ownPid
+    ||move.desktopId?.toLowerCase()!==state.binding.desktopId.toLowerCase()
     ||move.desktopNumber!==2||move.onCurrentDesktop!==false
     ||move.isVisible!==false)throw Error('HIDDEN_MOVE_READBACK_FAILED');
   await wait(250);
