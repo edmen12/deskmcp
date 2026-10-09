@@ -43,20 +43,16 @@ internal static partial class DirectUia
                 if (!String.IsNullOrWhiteSpace(id) && id.Length <= 128
                     && !id.Contains('\0'))
                 {
-                    bool isWpfEdit = info.ControlType == ControlType.Edit
-                        && info.ClassName == "TextBox";
-                    bool isFormsEdit = info.ControlType == ControlType.Edit
-                        && info.ClassName.StartsWith("WindowsForms10.EDIT.", StringComparison.Ordinal);
-                    bool canSet = false;
-                    if ((isWpfEdit || isFormsEdit)
-                        && element.TryGetCurrentPattern(ValuePattern.Pattern, out object? valueRaw)
-                        && valueRaw is ValuePattern valuePattern)
-                        canSet = !valuePattern.Current.IsReadOnly;
+                    // UIA ValuePattern.SetValue stole Desktop1 foreground on real
+                    // Desktop2, even with WS_EX_NOACTIVATE. Never advertise an
+                    // actionable UIA edit capability or probe ValuePattern here.
+                    // Native Win32 Edit lives in a separate guarded HWND transport.
+                    const bool canSet = false;
                     bool canScroll = element.TryGetCurrentPattern(ScrollPattern.Pattern,
                         out object? scrollRaw)
                         && scrollRaw is ScrollPattern scrollPattern
                         && scrollPattern.Current.VerticallyScrollable;
-                    if (canSet || canScroll)
+                    if (canScroll)
                     {
                         // A duplicate AutomationId may target the wrong
                         // control; fail the entire snapshot, never guess.

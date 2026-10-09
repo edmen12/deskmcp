@@ -71,7 +71,9 @@ assert.match(noArmWithWriteRequest.stderr,/ARM_TARGET_REQUIRES_READONLY_IDENTITY
 console.log('DIRECT_UIA_ARM_NEGATIVE_TESTS_PASS');
 const suite=run(process.execPath,['--test',path.join(dir,'contract.test.mjs')],12000);
 assert.equal(suite.status,0,'Static guard suite failed: '+(suite.stdout||'')+' '+(suite.stderr||''));
-console.log('DIRECT_UIA_STATIC_GUARDS_16_OF_16_PASS');
+const guardCount=suite.stdout.match(/(?:ℹ|#)\s+tests\s+(\d+)/u)?.[1];
+assert.ok(guardCount && Number(guardCount)>=18,'Could not prove updated guard-test count');
+console.log(`DIRECT_UIA_STATIC_GUARDS_${guardCount}_OF_${guardCount}_PASS`);
 const observerProject=path.join(worktree,'test-area','desktop2-switch-observer','DeskMCP.Desktop2SwitchObserver.csproj');
 const observerDll=path.join(worktree,'test-area','desktop2-switch-observer','bin','Release',
   'net10.0-windows','DeskMCP.Desktop2SwitchObserver.dll');

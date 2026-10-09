@@ -207,13 +207,12 @@ test('guarded inspect-tree uses sentinel and returns bounded metadata only, neve
  t.setResult({operation:'inspect-tree',hwnd,processId:pid,scannedNodes:17,
   uiaReadbackConfirmed:false,appEventConfirmed:false,
   controls:[
-    {automationId:'WpfEdit',controlType:'ControlType.Edit',className:'TextBox',
-     canSetValue:true,canScrollTopBottom:false},
     {automationId:'WpfScroller',controlType:'ControlType.Pane',className:'ScrollViewer',
      canSetValue:false,canScrollTopBottom:true}
   ]});
  const result=await t.coordinator.inspectControls(scope);
- assert.equal(result.length,2);
+ assert.equal(result.length,1);
+ assert.equal(result[0]?.canSetValue,false);
  assert.equal(JSON.stringify(result).includes('password'),false);
  assert.deepEqual(t.requests[0],{mode:'request',request:{
   action:'inspect-tree',hwnd,processId:pid,desktopId,
@@ -224,16 +223,16 @@ test('guarded inspect-tree uses sentinel and returns bounded metadata only, neve
 test('guarded inspect-tree rejects wrong HWND/PID, duplicates and forged mutable controls',async()=>{
  const base={operation:'inspect-tree',hwnd,processId:pid,scannedNodes:4,
   uiaReadbackConfirmed:false,appEventConfirmed:false};
- const ok={automationId:'Edit',controlType:'ControlType.Edit',className:'TextBox',
-  canSetValue:true,canScrollTopBottom:false};
+ const ok={automationId:'Scroll',controlType:'ControlType.Pane',className:'ScrollViewer',
+  canSetValue:false,canScrollTopBottom:true};
  for(const patch of [
   {hwnd:hwnd+1,controls:[ok]},
   {processId:pid+1,controls:[ok]},
   {controls:[ok,ok]},
-  {controls:[{...ok,className:'Button'}]},
-  {controls:[{...ok,canSetValue:false,canScrollTopBottom:false}]},
+  {controls:[{...ok,canSetValue:true}]},
+  {controls:[{...ok,canScrollTopBottom:false}]},
   {scannedNodes:129,controls:[ok]},
-  {controls:Array.from({length:33},(_,i)=>({...ok,automationId:'Edit'+i}))}
+  {controls:Array.from({length:33},(_,i)=>({...ok,automationId:'Scroll'+i}))}
  ]){
   const t=fixture();t.setResult({...base,...patch});
   await assert.rejects(t.coordinator.inspectControls(scope));

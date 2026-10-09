@@ -233,3 +233,15 @@ test('native Edit refuses incomplete Win32 child enumeration rather than trustin
   const accepted=childList.indexOf('return edits.Where');
   assert.ok(finished>=0 && accepted>finished,'do not mint child HWND capabilities after incomplete enumeration');
 });
+
+test('quarantined UIA ValuePattern is never queried or advertised by semantic tree snapshot',()=>{
+ const tree=readFileSync(path.join(dir,'DirectUia.SemanticSnapshot.cs'),'utf8');
+ const lease=readFileSync(path.join(dir,'..','..','src','desktop2-direct-uia-lease.ts'),'utf8');
+ assert.doesNotMatch(tree,/ValuePattern\.Pattern|valuePattern\.Current\.IsReadOnly/);
+ assert.match(tree,/const bool canSet = false/);
+ assert.match(tree,/if \(canScroll\)/);
+ assert.match(lease,/c\.canSetValue !== false \|\| c\.canScrollTopBottom !== true/);
+ assert.match(lease,/Desktop2 UIA edit capability is quarantined/);
+ const native=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
+ assert.match(native,/return new \{ operation = "set-native-edit"/);
+});

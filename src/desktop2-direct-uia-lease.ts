@@ -204,12 +204,11 @@ export class Desktop2DirectUiaLeaseCoordinator {
           || seen.has(c.automationId)
           || typeof c.controlType !== 'string' || c.controlType.length > 90
           || typeof c.className !== 'string' || c.className.length > 260
-          || typeof c.canSetValue !== 'boolean' || typeof c.canScrollTopBottom !== 'boolean'
-          || (!c.canSetValue && !c.canScrollTopBottom)
-          || (c.canSetValue && (c.controlType !== 'ControlType.Edit'
-            || (c.className !== 'TextBox'
-              && !c.className.startsWith('WindowsForms10.EDIT.'))))) {
-        throw new Error('Desktop2 semantic snapshot contains duplicate or unauthorized control.');
+          || c.canSetValue !== false || c.canScrollTopBottom !== true) {
+        // The former ValuePattern mutation is quarantined after actual
+        // Desktop1 foreground theft. Reject even a forged "canSetValue"
+        // response instead of issuing a one-use mutation capability.
+        throw new Error('Desktop2 UIA edit capability is quarantined or semantic control is invalid.');
       }
       seen.add(c.automationId);
       controls.push({
