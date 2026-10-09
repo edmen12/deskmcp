@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
-import {requireSafeNativeGuiMemory} from './resource-preflight.mjs';
+import {requireSafePassiveObserverMemory} from './resource-preflight.mjs';
 import {AgentDesktopManager} from '../../dist/src/agent-desktop-state.js';
 import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
 import {Desktop2ObserverLifecycle} from '../../dist/src/desktop2-observer-lifecycle.js';
@@ -36,7 +36,7 @@ const result={pass:false,strictArmed:false,before:null,after:null,latched:false,
   messagePumpReady:false,error:null,launchedExternalGui:false};
 let session;
 try{
- await requireSafeNativeGuiMemory();
+ await requireSafePassiveObserverMemory();
  const proof=await manager.assertLease(lease);
  const info=await native.info();
  if(info.currentDesktopNumber!==1||proof.control.desktopNumber!==2

@@ -35,7 +35,7 @@ test('real Windows monitoring smoke cannot spawn GUI, move window or send global
   /\bSetForegroundWindow\s*\(/,/\bSendInput\s*\(/]) {
     assert.doesNotMatch(runner,bad);
  }
- assert.match(runner,/requireSafeNativeGuiMemory/);
+ assert.match(runner,/requireSafePassiveObserverMemory/);
  assert.match(runner,/await watcher\.start\(lease\)/);
  assert.match(runner,/strictArmed/);
  assert.match(runner,/await watcher\.stop\(\)/);
@@ -86,4 +86,14 @@ test('native window placement publishes a visibility readback without displaying
  assert.match(section,/MoveWindowCore\(hwnd, desktopId, desktopNumber.Value, restore, showNoActivate, vda\)/);
  assert.match(app,/if \(restore\)/);
  assert.match(app,/else if \(showNoActivate\)/);
+});
+
+test('native launcher captures the child handle before PID validation to prevent orphan observers',()=>{
+ const lifecycleSource=readFileSync(path.join(root,'src','desktop2-observer-lifecycle.ts'),'utf8');
+ const begin=lifecycleSource.indexOf('const child=this.launcher(this.observerExe,');
+ const store=lifecycleSource.indexOf('this.child=child;',begin);
+ const reject=lifecycleSource.indexOf('Passive observer did not return a native process ID.',begin);
+ const catchCleanup=lifecycleSource.indexOf('try{await this.stop();}',begin);
+ assert.ok(begin>=0&&store>begin&&reject>store&&catchCleanup>reject,
+  'a child process without a PID must still be owned and explicitly stopped');
 });

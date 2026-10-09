@@ -13,7 +13,7 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean;observerExit?:'ack'|'silent'|'refuse';signaledBeforeReady?:boolean}={}) {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean;observerExit?:'ack'|'silent'|'refuse';signaledBeforeReady?:boolean;missingPid?:boolean}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
     pid:7171,readyPidMismatch:false,guardPresent:true,
     produceReady:options.ready!==false};
@@ -31,7 +31,7 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolea
     async info(){return {officialApi:true,virtualDesktopAccessor:true,currentDesktopNumber:state.desktop,desktopCount:2};}
   };
   const child=Object.assign(new EventEmitter(),{
-    pid:state.pid,exitCode:null as number|null,signalCode:null as NodeJS.Signals|null,
+    pid:state.pid as number|undefined,exitCode:null as number|null,signalCode:null as NodeJS.Signals|null,
     kill(){
       state.killed=true;
       if(options.observerExit==='refuse')return false;
@@ -58,6 +58,7 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolea
       }));
     }
     if(options.signaledBeforeReady)child.signalCode='SIGTERM';
+    if(options.missingPid)child.pid=undefined;
     return child;
   };
   const supervisor=new Desktop2ObserverLifecycle(leases,native,observerExe,vdaDll,launch,
@@ -250,4 +251,20 @@ test('signal exit before ready marker validation cannot mint an observer session
  await assert.rejects(t.supervisor.start(leaseId),/exited before ready/);
  assert.equal(t.launches.length,1);
  await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
+});
+
+test('native child with no PID is terminated and exit-confirmed, never orphaned',async()=>{
+ const t=fixture({missingPid:true});
+ await assert.rejects(t.supervisor.start(leaseId),/did not return a native process ID/);
+ assert.equal(t.state.killed,true,'must kill the actual launcher process handle');
+ assert.equal(t.child.exitCode,1);
+ await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
+});
+
+test('missing PID and refused kill retains old child, preventing observer overlap',async()=>{
+ const t=fixture({missingPid:true,observerExit:'refuse'});
+ await assert.rejects(t.supervisor.start(leaseId),
+   /OBSERVER_STARTUP_FAILURE_CLEANUP_UNCONFIRMED/);
+ assert.equal(t.state.killed,true);
+ await assert.rejects(t.supervisor.start(leaseId),/already active/);
 });

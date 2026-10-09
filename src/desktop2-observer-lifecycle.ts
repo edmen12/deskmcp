@@ -103,10 +103,13 @@ export class Desktop2ObserverLifecycle {
         this.strictPrelaunch ? '--observe-strict-launch' : '--observe-target',this.vdaDll,session.eventLog,
         session.readyFile,session.tripwireFile,session.targetFile
       ]);
-      if (!Number.isInteger(child.pid) || (child.pid??0)<1)
-        throw new Error('Passive observer did not return a native process ID.');
+      // Store the actual spawned ChildProcess handle BEFORE validating PID.
+      // Node may return a process handle with PID not yet available; throwing
+      // first would orphan a still-running native observer and its hooks.
       this.child=child;
       this.session=session;
+      if (!Number.isInteger(child.pid) || (child.pid??0)<1)
+        throw new Error('Passive observer did not return a native process ID.');
       let ready:Ready|undefined;
       const deadline=Date.now()+this.readyTimeoutMs;
       while(Date.now()<deadline) {
