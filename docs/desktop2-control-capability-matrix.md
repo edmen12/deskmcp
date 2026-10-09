@@ -217,6 +217,18 @@ WPF `ValuePattern.SetValue` foreground theft remains **PROHIBITED**; no generic 
 
 **Status**: Still no new genuine WinEvent watcher runtime exitConfirmed proof, no actual hidden Winver start/placement E2E, no complete external-app Computer Use. Production Gateway/Tunnel, user workload and Desktop1 unchanged. Candidate source only; do not promote as full Computer Use.
 
+## 2026-10-10 — genuine Windows native observer exit and HUD-backed strict-mode acceptance PASS
+
+**Two real Windows processes passed (not simulations)**, on candidate HEAD `ac79782`:
+
+1. **Strict native watcher without Desktop2 HUD/GUI**: candidate one-shot `native-observer-exit-no-lease.mjs` passed stable 768MiB x10/2.7s and immediate preflight, actually launched `DeskMCP.Desktop2SwitchObserver.exe` PID **22380**, verified strict WinEvent/VDA readiness, real WinForms message loop, stayed on user Desktop1 throughout, **0 FOREGROUND_CHANGED**, **0 PRELAUNCH_VISIBLE_ROOT**, zero tripwire, and obtained a genuine own-child process **exitConfirmed=true**. Original unaltered artifact `test-area/desktop2-real-acceptance/runs/native-observer-no-hud-2026-10-09T20-08-24-147Z/result.json`; raw `watcher.jsonl` contains `START` and `READY_AFTER_MESSAGE_PUMP` at 20:08:28Z. Does not use a Desktop2 lease and cannot authorize GUI actions.
+
+2. **Real HUD-backed Desktop2 strict monitor-only**: prelease 10 stable RAM readings **1293,1362,1374,1364,1364,1315,1309,1326,1320,1294MiB**, active HUD-backed real Desktop2 lease `c1cd27df-8990-4bdf-acc6-c6a0a26501d3` with owner still Desktop1. `strict-prelaunch-watch-once.mjs` returned **pass=true**, `strictArmed=true`, `messagePumpReady=true`, **observerExitConfirmed=true**, owner desktop 1→1, **foregroundEvents=0**, `latched=false`, and no external GUI. Original result `test-area/desktop2-real-acceptance/runs/strict-foreground-watch-2026-10-09T20-09-25-286Z/result.json`; native event log `C:\Users\User\AppData\Local\DMC\t\deskmcp-d2-lease-a452a380-ggZ9Ya\observer.events.jsonl` includes `START` and `READY_AFTER_MESSAGE_PUMP` at 20:09:28Z, no foreground alarm events. Lease explicitly **STOPPED** after process returned; Desktop2 free. No user desktop switch, mouse/keyboard/clipboard, Winver, or fixture window was used.
+
+**Next protected GUI stage NOT run**: An owned, DWM-cloaked WinForms fixture inspection was considered, but a new 3-sample GUI preflight refused at **1162MiB < fixed 1200MiB**. No fixture was started; no additional lease was created. `Winver` third-party hidden launch/move and arbitrary WPF/WinUI/Electron/full Computer Use **still RED**. The native strict watchdog lifetime and HUD lease integration are now genuine **PASS** on this candidate; do not keep labelling those two verified monitor-only stages untested. The prior caveat still holds: early focus/SHOW hooks detect but cannot retroactively prevent a third-party app's first activation.
+
+**Scope and provenance**: Tests ran on the local Windows host against independent candidate binaries and Desktop2 HUD lease via already-running official DeskMCP. No merge, install, service restart, production Computer Use authorization, browser spawn on Desktop1, or user-workload termination. The production policy still reports `observationGuardsEnabled=false`, so candidate-only PASS does NOT mean production external GUI Computer Use is safe.
+
 ## Primary evidence
 - Native WinForms Edit: test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md
 - Native WinForms PushButton: test-area/desktop2-real-acceptance/native-winforms-button-findings-20261009.md
