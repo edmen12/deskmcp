@@ -13,7 +13,7 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean;observerExit?:'ack'|'silent'|'refuse'}={}) {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean;observerExit?:'ack'|'silent'|'refuse';signaledBeforeReady?:boolean}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
     pid:7171,readyPidMismatch:false,guardPresent:true,
     produceReady:options.ready!==false};
@@ -57,6 +57,7 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolea
         messagePumpRunning:options.forgedPump!==true
       }));
     }
+    if(options.signaledBeforeReady)child.signalCode='SIGTERM';
     return child;
   };
   const supervisor=new Desktop2ObserverLifecycle(leases,native,observerExe,vdaDll,launch,
@@ -228,4 +229,25 @@ test('startup timeout with refused watcher kill must not permit a second observe
    /OBSERVER_STARTUP_FAILURE_CLEANUP_UNCONFIRMED/);
  assert.ok(t.state.killed);
  await assert.rejects(t.supervisor.start(leaseId),/already active/);
+});
+
+test('signal-terminated observer with null exitCode never authorizes input',async()=>{
+ const t=fixture();
+ const s=await t.supervisor.start(leaseId);
+ try{
+   t.child.signalCode='SIGTERM';
+   assert.equal(t.child.exitCode,null);
+   assert.ok(existsSync(s.readyFile),'stale ready token still exists');
+   await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
+ }finally{
+   const ended=await t.supervisor.stop();
+   assert.equal(ended.exitConfirmed,true);
+   await rm(s.directory,{recursive:true,force:true});
+ }
+});
+test('signal exit before ready marker validation cannot mint an observer session',async()=>{
+ const t=fixture({signaledBeforeReady:true});
+ await assert.rejects(t.supervisor.start(leaseId),/exited before ready/);
+ assert.equal(t.launches.length,1);
+ await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
 });

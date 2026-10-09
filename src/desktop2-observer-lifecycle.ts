@@ -110,7 +110,8 @@ export class Desktop2ObserverLifecycle {
       let ready:Ready|undefined;
       const deadline=Date.now()+this.readyTimeoutMs;
       while(Date.now()<deadline) {
-        if (child.exitCode!==null || this.reason) throw new Error('Passive observer exited before ready.');
+        if (child.exitCode!==null || child.signalCode!==null || this.reason)
+          throw new Error('Passive observer exited before ready.');
         try {
           const parsed=JSON.parse(await readFile(session.readyFile,'utf8')) as Ready;
           ready=parsed;break;
@@ -166,7 +167,7 @@ export class Desktop2ObserverLifecycle {
   async assertHealthy(leaseId:string):Promise<Desktop2ObserverSession> {
     const session=this.session,child=this.child;
     if(!session || !child || this.reason || child.exitCode!==null
-        || !existsSync(session.readyFile) || existsSync(session.tripwireFile)) {
+        || child.signalCode!==null || !existsSync(session.readyFile) || existsSync(session.tripwireFile)) {
       throw new Error('Desktop2 observer stopped, missing or latched; input must remain paused.');
     }
     if(this.healthInFlight) return this.healthInFlight;
@@ -178,8 +179,8 @@ export class Desktop2ObserverLifecycle {
         || !info.virtualDesktopAccessor || info.currentDesktopNumber!==1)
         throw new Error('Desktop2 observer lost lease/HUD/owner Desktop1.');
       if(this.reason || this.session!==session || this.child!==child
-        || child.exitCode!==null || !existsSync(session.readyFile)
-        || existsSync(session.tripwireFile))
+        || child.exitCode!==null || child.signalCode!==null
+        || !existsSync(session.readyFile) || existsSync(session.tripwireFile))
         throw new Error('Desktop2 observer tripped during health check.');
       return session;
     })();
