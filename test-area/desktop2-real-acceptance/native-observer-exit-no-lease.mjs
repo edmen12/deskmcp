@@ -82,9 +82,13 @@ try{
     throw Error('NATIVE_OBSERVER_UNHEALTHY');
 }catch(e){result.error=e instanceof Error?e.message:String(e)}
 finally{
-  try{result.exitConfirmed=await terminateOwnedChild(child,{deadlineMs:2200});}
+  let ownedChildTerminated=false;
+  try{ownedChildTerminated=await terminateOwnedChild(child,{deadlineMs:2200});}
   catch(e){result.error=result.error||('OWNED_OBSERVER_EXIT_FAILED:'+String(e));}
-  if(!result.exitConfirmed)result.error=result.error||'OWNED_NATIVE_OBSERVER_EXIT_UNCONFIRMED';
+  // No spawned/identified watcher means no process exit was actually proved.
+  result.exitConfirmed=Boolean(child && result.ownedNativePid && ownedChildTerminated);
+  if(child && !ownedChildTerminated)
+    result.error=result.error||'OWNED_NATIVE_OBSERVER_EXIT_UNCONFIRMED';
   result.alarm=fs.existsSync(tripwire);
   if(result.started){
     const raw=await readFile(events,'utf8').catch(()=>{

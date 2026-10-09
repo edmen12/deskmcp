@@ -127,3 +127,25 @@ test('no-HUD watcher sets the local .NET runtime before NativeBridge probes',()=
  assert.match(src,/process.env.DOTNET_ROOT_X64=sdk/);
  assert.match(src,/process.env.DESKTOP_MCP_VDA_PATH=dll/);
 });
+
+test('a rejected or unspawned observer never reports a verified native-process exit',()=>{
+ const here=path.dirname(fileURLToPath(import.meta.url));
+ const noHud=fs.readFileSync(path.join(here,'native-observer-exit-no-lease.mjs'),'utf8');
+ const hud=fs.readFileSync(path.join(here,'strict-prelaunch-watch-once.mjs'),'utf8');
+ const winver=fs.readFileSync(path.join(here,'winver-hidden-move-once.mjs'),'utf8');
+ assert.match(noHud,/result\.exitConfirmed=Boolean\(child && result\.ownedNativePid && ownedChildTerminated\)/);
+ assert.match(noHud,/if\(child && !ownedChildTerminated\)/);
+ assert.match(hud,/result\.observerExitConfirmed=Boolean\(session\)&&closed\.exitConfirmed===true/);
+ assert.match(winver,/observerExited=Boolean\(session\)&&ended\.exitConfirmed===true/);
+ assert.match(winver,/result\.cleanupConfirmed=Boolean\(child\)&&ownedChildTerminated/);
+ assert.match(winver,/if\(child && !result\.cleanupConfirmed\)/);
+});
+
+test('Winver acceptance requires final pumped observer event and detects signaled child exit',()=>{
+ const here=path.dirname(fileURLToPath(import.meta.url));
+ const src=fs.readFileSync(path.join(here,'winver-hidden-move-once.mjs'),'utf8');
+ assert.match(src,/if\(x.kind==='READY_AFTER_MESSAGE_PUMP'\)result\.messagePumpReady=true/);
+ assert.match(src,/result\.pass=result\.pass&&result\.cleanupConfirmed&&result\.messagePumpReady/);
+ assert.match(src,/child\.exitCode!==null\|\|child\.signalCode!==null/);
+ assert.match(src,/&&result\.focusEvents===0&&!result\.visibleDetected/);
+});

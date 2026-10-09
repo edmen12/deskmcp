@@ -57,7 +57,8 @@ try{
 finally{
  try{
    const closed=await watcher.stop();
-   result.observerExitConfirmed=closed.exitConfirmed===true;
+   // A no-op stop with no launched watcher must never count as live exit evidence.
+   result.observerExitConfirmed=Boolean(session)&&closed.exitConfirmed===true;
  }catch(e){
    result.error=result.error||('WATCHER_STOP_FAILED:'+String(e));
  }

@@ -36,7 +36,7 @@ const run=path.join(root,'test-area','desktop2-real-acceptance','runs',
   'winver-hidden-move-'+new Date().toISOString().replace(/[:.]/gu,'-'));
 await mkdir(run,{recursive:true});
 const result={pass:false,stage:'one-owned-hidden-winver',before:null,after:null,
-  observerArmed:false,createdPid:null,foundHidden:false,movedHidden:false,
+  observerArmed:false,messagePumpReady:false,createdPid:null,foundHidden:false,movedHidden:false,
   visibleDetected:false,focusEvents:0,tripwire:false,everSentInput:false,
   externalGUIStarted:false,cleanupConfirmed:false,readback:null,error:null,eventLog:null};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -71,7 +71,8 @@ try{
   const deadline=Date.now()+4300;
   while(Date.now()<deadline) {
     await verify();
-    if(child.exitCode!==null)throw Error('OWNED_WINVER_EXITED_EARLY');
+    if(child.exitCode!==null||child.signalCode!==null)
+      throw Error('OWNED_WINVER_EXITED_EARLY');
     const {stdout}=await invoke(host,['probe-hidden-winver','--pid',String(ownPid),
       '--started-utc',started],{windowsHide:true,shell:false,timeout:2300,
       maxBuffer:12000,env:process.env});
@@ -117,23 +118,24 @@ finally{
   // Terminate ONLY the PID we created. Keep observer running until the
   // owned app has exited; otherwise a late SHOW/focus event could be missed.
   try{
-    result.cleanupConfirmed=await terminateOwnedChild(child);
+    const ownedChildTerminated=await terminateOwnedChild(child);
+    result.cleanupConfirmed=Boolean(child)&&ownedChildTerminated;
   }catch(e){
     result.cleanupConfirmed=false;
     result.error=result.error||('OWNED_WINVER_CLEANUP_ERROR:'+String(e));
   }
-  if(!result.cleanupConfirmed)
+  if(child && !result.cleanupConfirmed)
     result.error=result.error||'OWNED_WINVER_TERMINATION_NOT_CONFIRMED';
   // The native watcher is now stopped (and its writer flushed) before
   // observing the final alarm ledger, not after an early partial read.
   let observerExited=false;
   try{
     const ended=await watcher.stop();
-    observerExited=ended.exitConfirmed===true;
+    observerExited=Boolean(session)&&ended.exitConfirmed===true;
   }catch(e){
     result.error=result.error||('WATCHER_STOP_FAILED:'+String(e));
   }
-  if(!observerExited){
+  if(session && !observerExited){
     result.error=result.error||'WATCHER_EXIT_UNCONFIRMED';
     result.pass=false;
   }
@@ -146,13 +148,15 @@ finally{
     for(const line of raw.split(/\r?\n/).filter(Boolean)){
       try{
         const x=JSON.parse(line);
+        if(x.kind==='READY_AFTER_MESSAGE_PUMP')result.messagePumpReady=true;
         if(x.kind==='FOREGROUND_CHANGED')result.focusEvents++;
         if(x.kind==='PRELAUNCH_VISIBLE_ROOT')result.visibleDetected=true;
       }catch{result.error='OBSERVER_LOG_CORRUPT';result.pass=false;}
     }
   }
   result.after=(await native.info().catch(()=>({currentDesktopNumber:null}))).currentDesktopNumber;
-  result.pass=result.pass&&result.cleanupConfirmed&&result.after===1
+  result.pass=result.pass&&result.cleanupConfirmed&&result.messagePumpReady
+    &&result.after===1
     &&!result.tripwire&&result.focusEvents===0&&!result.visibleDetected;
   await writeFile(path.join(run,'result.json'),JSON.stringify(result,null,2));
   console.log(JSON.stringify({...result,runDirectory:run}));
