@@ -108,6 +108,8 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     private IntPtr foregroundHook;
     private bool registered;
     private bool disposed;
+    private readonly bool strictPrelaunch;
+    private readonly IntPtr baselineForeground;
     private int notifications;
     private int heartbeatChanges;
 
@@ -150,7 +152,7 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
     }
 
     public DesktopEventListener(string dll, string eventsFile, string ready, string tripwire, int seconds,
-        string? watchFile = null)
+        string? watchFile = null, bool strictLaunch = false)
     {
         if (seconds is < 5 or > 900) throw new ArgumentOutOfRangeException(nameof(seconds));
         if (watchFile != null && (!Path.IsPathFullyQualified(watchFile)
@@ -160,6 +162,10 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
         readyFile = ready;
         tripwireFile = tripwire;
         watchedTargetFile = watchFile;
+        strictPrelaunch = strictLaunch;
+        baselineForeground = GetForegroundWindow();
+        if (strictPrelaunch && baselineForeground == IntPtr.Zero)
+            throw new InvalidOperationException("STRICT_LAUNCH_FOREGROUND_BASELINE_MISSING");
         if (File.Exists(readyFile) || File.Exists(tripwireFile))
             throw new InvalidOperationException("Stale ready/tripwire files must be reviewed and cleared before creating a fresh observer.");
         vda = new NativeVirtualDesktopApi(dll);
@@ -184,6 +190,8 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                 foregroundCallback, 0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
             if (foregroundHook == IntPtr.Zero)
                 throw new InvalidOperationException("Cannot register foreground event observer.");
+            if (strictPrelaunch && (GetForegroundWindow() != baselineForeground || vda.CurrentIndex() != 0))
+                throw new InvalidOperationException("STRICT_LAUNCH_FOREGROUND_CHANGED_BEFORE_READY");
             Log("START", policy.ExpectedDesktopIndex, 0, 0, "No GUI control, no clipboard reads.");
             heartbeat.Interval = 25;
             heartbeat.Tick += (_, _) => Heartbeat();
@@ -197,7 +205,8 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                 tripwireFile,
                 watchedTargetFile,
                 hasVirtualDesktopNotifications = true,
-                hasForegroundHook = true
+                hasForegroundHook = true,
+                strictForegroundArmed = strictPrelaunch
             }));
         }
         catch
@@ -307,9 +316,12 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
             uint pid;
             GetWindowThreadProcessId(hwnd, out pid);
             int current = vda.CurrentIndex();
-            // Preserve the precise, pre-switch foreground event before
-            // emitting the early-stop tripwire for the watched Desktop2 PID.
+            // For external GUI startup, there is no target HWND yet. Trip
+            // on ANY foreground change while on Desktop1, even from owner
+            // activity; never leave the pre-HWND launch gap unprotected.
             Log("FOREGROUND_CHANGED", current, hwnd.ToInt64(), pid);
+            if (strictPrelaunch && !policy.Aborted)
+                Observe(current, "STRICT_PRELAUNCH_FOREGROUND_EARLY_ABORT", forceAbort: true);
             if (current != policy.ExpectedDesktopIndex)
                 Observe(current, "FOREGROUND_CURRENT_DESKTOP");
             else
@@ -338,6 +350,8 @@ internal sealed class DesktopEventListener : NativeWindow, IDisposable
                 // Foreground hook is primary. This is a 25ms fallback when
                 // a callback is late or missed during a focus transition.
                 IntPtr front = GetForegroundWindow();
+                if (strictPrelaunch && front != baselineForeground)
+                    Observe(current, "STRICT_PRELAUNCH_FOREGROUND_POLL_ABORT", forceAbort: true);
                 GetWindowThreadProcessId(front, out uint frontPid);
                 CheckWatchedForeground(front, frontPid, current);
             }
@@ -411,17 +425,18 @@ internal static class Program
         // containing verified Desktop2 root HWND + PID; early focus theft
         // latches before the virtual-desktop transition where observable.
         bool targetMode = args.Length == 6 && args[0] == "--observe-target";
+        bool strictLaunch = args.Length == 6 && args[0] == "--observe-strict-launch";
         bool idle = args.Length == 6 && args[0] == "--observe-idle";
         bool synthetic = args.Length == 6 && args[0] == "--self-test-notification";
-        if (!targetMode && !idle && !synthetic && (args.Length != 5 || args[0] != "--observe"))
+        if (!targetMode && !strictLaunch && !idle && !synthetic && (args.Length != 5 || args[0] != "--observe"))
             return 2;
-        int seconds = targetMode ? 900 : 90; // 15-minute max; supervisor must fail closed at expiry.
+        int seconds = targetMode || strictLaunch ? 900 : 90; // 15-minute max; supervisor must fail closed at expiry.
         if ((idle || synthetic) && (!int.TryParse(args[5], out seconds) || seconds is < 5 or > 15))
             return 2;
         try
         {
             using DesktopEventListener observer = new(args[1], args[2], args[3], args[4],
-                seconds, targetMode ? args[5] : null);
+                seconds, targetMode || strictLaunch ? args[5] : null, strictLaunch);
             if (synthetic)
                 observer.PostSyntheticNotificationForSelfTest();
             Application.Run();

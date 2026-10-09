@@ -20,6 +20,7 @@ interface Ready {
   readonly watchedTargetFile: string;
   readonly hasVirtualDesktopNotifications: boolean;
   readonly hasForegroundHook: boolean;
+  readonly strictForegroundArmed?: boolean;
 }
 export interface Desktop2ObserverSession {
   readonly readyFile: string;
@@ -55,7 +56,8 @@ export class Desktop2ObserverLifecycle {
     // Windows under heavy memory pressure can take several seconds to launch
     // a framework-dependent .NET watcher. This is a readiness deadline,
     // NEVER permission to send input without a fully trusted observer.
-    private readonly readyTimeoutMs:number=15000
+    private readonly readyTimeoutMs:number=15000,
+    private readonly strictPrelaunch:boolean=false
   ) {
     if(!Number.isInteger(readyTimeoutMs) || readyTimeoutMs<100 || readyTimeoutMs>20000)
       throw new Error('Invalid passive observer startup timeout.');
@@ -94,7 +96,7 @@ export class Desktop2ObserverLifecycle {
     };
     try {
       const child=this.launcher(this.observerExe,[
-        '--observe-target',this.vdaDll,session.eventLog,
+        this.strictPrelaunch ? '--observe-strict-launch' : '--observe-target',this.vdaDll,session.eventLog,
         session.readyFile,session.tripwireFile,session.targetFile
       ]);
       if (!Number.isInteger(child.pid) || (child.pid??0)<1)
@@ -120,7 +122,10 @@ export class Desktop2ObserverLifecycle {
           || ready.tripwireFile!==session.tripwireFile
           || ready.watchedTargetFile!==session.targetFile
           || ready.hasVirtualDesktopNotifications!==true
-          || ready.hasForegroundHook!==true || existsSync(session.tripwireFile)) {
+          || ready.hasForegroundHook!==true
+          || (this.strictPrelaunch && ready.strictForegroundArmed!==true)
+          || (!this.strictPrelaunch && ready.strictForegroundArmed===true)
+          || existsSync(session.tripwireFile)) {
         throw new Error('Desktop2 foreground/switch observer failed ready identity verification.');
       }
       await this.assertHealthy(leaseId);

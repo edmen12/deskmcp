@@ -12,7 +12,7 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture(options:{ready?:boolean;startupTimeoutMs?:number}={}) {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
     pid:7171,readyPidMismatch:false,guardPresent:true,
     produceReady:options.ready!==false};
@@ -41,13 +41,14 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number}={}) {
         processId:state.readyPidMismatch?999:state.pid,
         expectedDesktopIndex:0,firstStartUtc:new Date().toISOString(),
         tripwireFile:tripwire,watchedTargetFile:watch,
-        hasVirtualDesktopNotifications:true,hasForegroundHook:true
+        hasVirtualDesktopNotifications:true,hasForegroundHook:true,
+        strictForegroundArmed:options.strict===true && options.forgedReady!==true
       }));
     }
     return child;
   };
   const supervisor=new Desktop2ObserverLifecycle(leases,native,observerExe,vdaDll,launch,
-    options.startupTimeoutMs??15000);
+    options.startupTimeoutMs??15000,options.strict??false);
   return {state,supervisor,launches,child};
 }
 async function withSession(run:(t:ReturnType<typeof fixture>,s:Awaited<ReturnType<Desktop2ObserverLifecycle['start']>>)=>Promise<void>) {
@@ -145,4 +146,20 @@ test('observer startup budget rejects unbounded or unsupported timeout values',(
  for(const timeout of [0,99,20001,Number.NaN,1.5]){
    assert.throws(()=>fixture({startupTimeoutMs:timeout}),/startup timeout/);
  }
+});
+
+test('strict watcher requires explicit mode and verifies ready flag',async()=>{
+ const t=fixture({strict:true});
+ const s=await t.supervisor.start(leaseId);
+ try{
+   assert.deepEqual(t.launches[0],['--observe-strict-launch',
+     vdaDll,s.eventLog,s.readyFile,s.tripwireFile,s.targetFile]);
+   await t.supervisor.assertHealthy(leaseId);
+ }finally{await t.supervisor.stop();await rm(s.directory,{recursive:true,force:true});}
+});
+
+test('strict watcher refuses absent strict readiness flag',async()=>{
+ const t=fixture({strict:true,forgedReady:true});
+ await assert.rejects(t.supervisor.start(leaseId),/ready identity/);
+ assert.equal(t.state.killed,true);
 });
