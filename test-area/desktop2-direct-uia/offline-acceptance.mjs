@@ -71,7 +71,7 @@ const denyArm=path.join(dir,'deny-arm-missing-observer.json');
 const noArmObserver=run(sdk,[dll,'--arm-target',denyArm,'--vda',vda],12000);
 assert.equal(noArmObserver.status,3,'Arm without observer must fail');
 assert.match(noArmObserver.stderr,/PASSIVE_OBSERVER_NOT_READY/);
-const noArmWithWriteRequest=run(sdk,[dll,'--arm-target',denyMissing,'--vda',vda],12000);
+const noArmWithWriteRequest=run(sdk,[dll,'--arm-target',path.join(dir,'deny-native-edit-no-observer.json'),'--vda',vda],12000);
 assert.equal(noArmWithWriteRequest.status,3,'Arm must reject a mutating request');
 assert.match(noArmWithWriteRequest.stderr,/ARM_TARGET_REQUIRES_READONLY_IDENTITY_REQUEST/);
 console.log('DIRECT_UIA_ARM_NEGATIVE_TESTS_PASS');

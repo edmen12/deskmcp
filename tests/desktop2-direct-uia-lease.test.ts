@@ -110,12 +110,16 @@ test('confirmed real Desktop2 ValuePattern foreground theft is quarantined BEFOR
   assert.equal(t.requests.length,0);
 });
 
-test('scroll top and bottom use only direct UIA ScrollPattern semantics',async()=>{
-  const t=fixture();
-  t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:false});
-  await t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'top'});
-  await t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'bottom'});
-  assert.deepEqual(t.requests.map(x=>(x.request as {action:string}).action),['scroll-top','scroll-bottom']);
+test('unverified UIA ScrollPattern is denied before any lease or native invocation',async()=>{
+  for(const to of ['top','bottom'] as const){
+    const t=fixture();
+    await assert.rejects(
+      t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to}),
+      /DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED/
+    );
+    assert.deepEqual(t.calls,[]);
+    assert.equal(t.requests.length,0);
+  }
 });
 
 test('dangerous actions and malformed input reject before ANY native or lease action',async()=>{
@@ -163,9 +167,10 @@ test('fake/stale requester lease cannot arm another window or bypass active Desk
 
 test('lease generation change after UIA action rejects even if UIA readback was successful',async()=>{
   const t=fixture();
-  t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:false});
+  t.setResult({operation:'click-native-button',messageDispatched:true,
+    appEventConfirmed:false,foregroundSafetyUnproven:true});
   t.onExecute(()=>{t.state.generation=23;});
-  await assert.rejects(t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'bottom'}),
+  await assert.rejects(t.coordinator.perform(scope,{type:'click_native_button',automationId:'native-button:1777'}),
     /generation/);
   assert.equal(t.requests.length,1,'native provider side effect cannot be rolled back');
 });
@@ -173,25 +178,28 @@ test('lease generation change after UIA action rejects even if UIA readback was 
 test('HUD loss or owner desktop switch during native call is detected on post-check',async()=>{
   for(const change of [(x:Controls)=>{x.hudStale=true;},(x:Controls)=>{x.owner=2;}]) {
     const t=fixture();
-    t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:false});
+    t.setResult({operation:'click-native-button',messageDispatched:true,
+      appEventConfirmed:false,foregroundSafetyUnproven:true});
     t.onExecute(()=>change(t.state));
-    await assert.rejects(t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'bottom'}));
+    await assert.rejects(t.coordinator.perform(scope,{type:'click_native_button',automationId:'native-button:1777'}));
     assert.equal(t.requests.length,1);
   }
 });
 
 test('native helper result cannot claim app event confirmation without app-side witness',async()=>{
   const t=fixture();
-  t.setResult({uiaReadbackConfirmed:true,appEventConfirmed:true});
-  await assert.rejects(t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'top'}),/readback/);
+  t.setResult({operation:'click-native-button',messageDispatched:true,
+    appEventConfirmed:true,foregroundSafetyUnproven:true});
+  await assert.rejects(t.coordinator.perform(scope,{type:'click_native_button',automationId:'native-button:1777'}),/unconfirmed/);
 });
 
 test('failed arming or incomplete readback never reports success',async()=>{
   const t=fixture();
   t.setResult({armed:false});
   await assert.rejects(t.coordinator.arm(scope),/not confirmed/);
-  t.setResult({uiaReadbackConfirmed:false,appEventConfirmed:false});
-  await assert.rejects(t.coordinator.perform(scope,{type:'scroll',automationId:'WpfScroller',to:'bottom'}),/not confirmed/);
+  t.setResult({operation:'click-native-button',messageDispatched:false,
+    appEventConfirmed:false,foregroundSafetyUnproven:true});
+  await assert.rejects(t.coordinator.perform(scope,{type:'click_native_button',automationId:'native-button:1777'}),/unconfirmed/);
 });
 
 test('older valid binding without optional desktopNumber still permits live Desktop2 control and VDA verification',async()=>{
@@ -208,7 +216,7 @@ test('guarded inspect-tree uses sentinel and returns bounded metadata only, neve
   uiaReadbackConfirmed:false,appEventConfirmed:false,
   controls:[
     {automationId:'WpfScroller',controlType:'ControlType.Pane',className:'ScrollViewer',
-     canSetValue:false,canScrollTopBottom:true}
+     canSetValue:false,canScrollTopBottom:false}
   ]});
  const result=await t.coordinator.inspectControls(scope);
  assert.equal(result.length,1);
@@ -224,13 +232,13 @@ test('guarded inspect-tree rejects wrong HWND/PID, duplicates and forged mutable
  const base={operation:'inspect-tree',hwnd,processId:pid,scannedNodes:4,
   uiaReadbackConfirmed:false,appEventConfirmed:false};
  const ok={automationId:'Scroll',controlType:'ControlType.Pane',className:'ScrollViewer',
-  canSetValue:false,canScrollTopBottom:true};
+  canSetValue:false,canScrollTopBottom:false};
  for(const patch of [
   {hwnd:hwnd+1,controls:[ok]},
   {processId:pid+1,controls:[ok]},
   {controls:[ok,ok]},
   {controls:[{...ok,canSetValue:true}]},
-  {controls:[{...ok,canScrollTopBottom:false}]},
+  {controls:[{...ok,canScrollTopBottom:true}]},
   {scannedNodes:129,controls:[ok]},
   {controls:Array.from({length:33},(_,i)=>({...ok,automationId:'Scroll'+i}))}
  ]){

@@ -79,7 +79,7 @@ export class Desktop2ComputerUseCandidate {
             // Desktop1 foreground steal. The candidate layer must not
             // mint a write permit even if an invoker lies about capability.
             || item.canSetValue !== false
-            || item.canScrollTopBottom !== true
+            || item.canScrollTopBottom !== false
             || item.canSetNativeValue === true || item.canClickNative === true
             || item.canScrollNativeList === true) {
           throw new Error('Protected Desktop2 semantic snapshot is invalid.');
@@ -272,11 +272,11 @@ export class Desktop2ComputerUseCandidate {
             // Fail closed here as well as in the lease/native helpers:
             // legacy or forged UIA edit tokens must never be actionable.
             || action.type === 'set_value'
-            || (action.type === 'scroll' && !allowed.canScrollTopBottom)
+            || action.type === 'scroll'
             || (action.type === 'set_native_edit' && !allowed.canSetNativeValue)
             || (action.type === 'click_native_button' && !allowed.canClickNative)
             || (action.type === 'scroll_native_list' && !allowed.canScrollNativeList)
-            || (action.type !== 'scroll' && action.type !== 'set_native_edit'
+            || (action.type !== 'set_native_edit'
                 && action.type !== 'click_native_button'
                 && action.type !== 'scroll_native_list')) {
           throw new Error('Desktop2 action requires a fresh protected semantic control snapshot.');

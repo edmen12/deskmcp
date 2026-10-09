@@ -23,7 +23,7 @@ function fixture() {
   const seen: unknown[] = [];
   let semanticControls: readonly Desktop2SemanticControl[] = [
     {automationId:'Scroller',controlType:'ControlType.Pane',
-      className:'ScrollViewer',canSetValue:false,canScrollTopBottom:true}
+      className:'ScrollViewer',canSetValue:false,canScrollTopBottom:false}
   ];
   const native: Pick<Desktop2DirectUiaLeaseCoordinator, 'arm' | 'perform' | 'inspectControls' | 'inspectNativeControls' | 'inspectNativeButtons' | 'inspectNativeLists'> = {
     async arm(scope) { armed++; seen.push(scope); return {armed:true,desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c'}; },
@@ -72,7 +72,7 @@ test('real Computer Use one-time lease-bound observation is consumed before nati
   assert.deepEqual(t.invoked,{armed:1,performed:0});
 });
 
-test('mutating action requires a NEW lease observation, not the observer arm token',async()=>{
+test('metadata-only UIA snapshot cannot authorize a ScrollPattern mutation',async()=>{
   const t=fixture();
   const armed=t.input('arm');
   await t.adapter.dispatch(armed);
@@ -83,11 +83,9 @@ test('mutating action requires a NEW lease observation, not the observer arm tok
   assert.equal(snapshot.controls[0]?.canSetValue,false);
   const request={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'top'}),
     computerObservationId:snapshot.computerObservationId};
-  const result=await t.adapter.dispatch(request);
-  assert.deepEqual(result,{uiaReadbackConfirmed:true,appEventConfirmed:false});
-  assert.equal(t.invoked.performed,1);
-  assert.deepEqual((t.seen[1] as {action:unknown}).action,
-    {type:'scroll',automationId:'Scroller',to:'top'});
+  await assert.rejects(t.adapter.dispatch(request),/fresh protected semantic control snapshot/);
+  assert.equal(t.invoked.performed,0);
+  await assert.rejects(t.adapter.dispatch(request),/fresh protected semantic control snapshot/);
 });
 
 test('observation without a lease cannot be upgraded to target Desktop2',async()=>{
@@ -139,11 +137,13 @@ test('two observations of same window cannot both mutate after first consume and
   const t=fixture();
   const inspect={windowId:t.windowId,agentDesktopLeaseId:lease,
     observerReadyFile:'C:\\tmp\\observer.ready.json'};
-  const a=await t.adapter.snapshotWindow(inspect);
-  const b=await t.adapter.snapshotWindow(inspect);
-  const first={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'top'}),
+  const a=await t.adapter.snapshotNativeButtons(inspect);
+  const b=await t.adapter.snapshotNativeButtons(inspect);
+  const first={...t.input('arm'),phase:'perform' as const,
+    action:{type:'click_native_button' as const,automationId:'native-button:194857'},
     computerObservationId:a.computerObservationId};
-  const second={...t.input('perform',{type:'scroll',automationId:'Scroller',to:'bottom'}),
+  const second={...t.input('arm'),phase:'perform' as const,
+    action:{type:'click_native_button' as const,automationId:'native-button:194857'},
     computerObservationId:b.computerObservationId};
   await t.adapter.dispatch(first);
   await assert.rejects(t.adapter.dispatch(second),/stale/);
@@ -347,7 +347,7 @@ test('WPF ValuePattern edit capability is rejected even when a mocked invoker fo
  assert.equal(t.invoked.performed,0);
 });
 
-test('even an authentic scroll-only UIA permit never becomes a ValuePattern write permit',async()=>{
+test('metadata-only UIA permit never becomes a ValuePattern or ScrollPattern write permit',async()=>{
  const t=fixture();
  const params={windowId:t.windowId,agentDesktopLeaseId:lease,
    observerReadyFile:'C:\\tmp\\observer.ready.json'};
@@ -361,8 +361,9 @@ test('even an authentic scroll-only UIA permit never becomes a ValuePattern writ
    action:{type:'scroll' as const,automationId:'Scroller',to:'top' as const}
  }),/fresh protected semantic control snapshot/);
  const valid=await t.adapter.snapshotWindow(params);
- await t.adapter.dispatch({...attack,computerObservationId:valid.computerObservationId,
+ await assert.rejects(t.adapter.dispatch({...attack,
+   computerObservationId:valid.computerObservationId,
    action:{type:'scroll' as const,automationId:'Scroller',to:'top' as const}
- });
- assert.equal(t.invoked.performed,1);
+ }),/fresh protected semantic control snapshot/);
+ assert.equal(t.invoked.performed,0);
 });

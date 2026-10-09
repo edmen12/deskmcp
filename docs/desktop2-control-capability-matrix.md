@@ -15,7 +15,7 @@ Updated 2026-10-09 (Asia/Kuala_Lumpur)
 | WPF Button UIA Invoke | No proven zero-interference Click on exact candidate chain | RED | Not enabled |
 | WinUI/XAML controls | No real zero-interference coverage | RED | Not enabled |
 | Electron/WebView/browser UI | No genuine Desktop2 app-specific transport acceptance | RED | Not enabled |
-| WPF/WinForms UIA ScrollPattern | Static tests only, no complete independent live scroll acceptance | RED | Not approved for production |
+| WPF/WinForms UIA ScrollPattern | No real zero-foreground acceptance; older candidate exposed a callable SetScrollPercent transport | **PROHIBITED** | Now blocked at outer Computer Use, TS lease and native C# policy; SetScrollPercent implementation removed; metadata snapshot reports canScrollTopBottom=false. Distinct verified native WinForms ListBox LB_SETTOPINDEX remains separate |
 | Menus, popups, drag, arbitrary mouse/keyboard | No comprehensive independent live acceptance | RED | No host-global input fallback |
 | Clipboard | User requested DeskMCP-owned copy buffer, not global clipboard sync; global clipboard isolation not validated | RED | Never use OS clipboard as an automatic input fallback |
 
@@ -80,6 +80,14 @@ Each of the three stage `result.json` and separate passive WinEvent/VDA observer
 - `native-button-click-2026-10-09T11-36-02-400Z/`
 
 WPF `ValuePattern.SetValue` foreground theft remains **PROHIBITED**; no generic WinUI/WPF/Electron mouse/drag/scroll enablement, no production MCP registration or install, no automatic desktop switching. These app-class specific tests **cannot certify universal no-interference**.
+
+## 2026-10-09 — Unverified UIA ScrollPattern transport closed at all three candidate layers
+
+**New security finding (SOURCE-ONLY)**: Matrix listed generic WPF/WinForms UIA `ScrollPattern.SetScrollPercent` RED, but candidate source still accepted `scroll` on a UIA `canScrollTopBottom=true` observation, TS lease translated into `scroll-top/bottom`, and native C# helper actually called `SetScrollPercent` without any real zero-interference acceptance. Such a provider may activate its app, so a watcher detecting it afterward is not sufficient.
+
+**FIX**: Computer Use rejects `scroll` while retaining separate `scroll_native_list`; TS lease throws `DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED` before a native call; native policy rejects both generic scroll actions even with forged requests and removes `SetScrollPercent`. Guarded metadata snapshots no longer query `ValuePattern` or `ScrollPattern`, publish `canSetValue=false` and `canScrollTopBottom=false`, and **mint no generic UIA mutation capability**. Native HWND Edit, Button and exact-index ListBox are unchanged. A future safe scroll implementation would require its **own live acceptance and explicit new authorization**, not re-enabling this transport by accident.
+
+**Evidence**: .NET helper Release build 0 warnings/errors; TypeScript build PASS; Desktop2 candidate/lease and observer suite **90/90 PASS**; C# static contracts **21/21 PASS**; offline no-observer, release identity, and forbidden action tests PASS. Previously unsafe mock tests asserting generic UIA scroll success were replaced by fail-closed expectations. No new GUI app was started: host available RAM fell to **~457 MB**, below mandatory 1200MiB GUI preflight. Read-only inspection of installed Microsoft Notepad / Registry Editor / MMC / Winver command paths established candidates but did **not** establish zero-focus behavior or interaction compatibility. All third-party apps remain UNVERIFIED / production Computer Use RED.
 
 ## Primary evidence
 - Native WinForms Edit: test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md

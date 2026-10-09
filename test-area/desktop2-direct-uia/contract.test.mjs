@@ -33,21 +33,22 @@ test('live observer is mandatory before and after each UIA action',()=>{
   assert.match(perform,/ObserverGuard\.AssertLive\(request\.ObserverReady\)/);
   assert.match(perform,/ctx\.VerifyTarget\(hwnd, request\.ProcessId, targetId\)/);
   assert.doesNotMatch(perform,/\bpattern\.SetValue\s*\(/);
-  assert.match(perform,/Guard\(\);\s*pattern\.SetScrollPercent\(ScrollPattern\.NoScroll, percent\);\s*Guard\(\)/);
+  assert.doesNotMatch(perform,/SetScrollPercent|\.SetValue\s*\(/);
   assert.match(source,/ready\.ProcessId <= 0/);
   assert.match(source,/PASSIVE_OBSERVER_WRONG_PROCESS/);
   assert.match(source,/PASSIVE_OBSERVER_PID_REUSED/);
   assert.match(source,/DESKTOP_SWITCH_TRIPWIRE_LATCHED/);
 });
 
-test('real-Desktop2 direct UIA ValuePattern mutation is quarantined, read-only metadata and scroll are separate',()=>{
+test('real-Desktop2 ValuePattern and ScrollPattern mutations are both quarantined',()=>{
   for(const required of [
-    'ValuePattern.Pattern','ScrollPattern.Pattern',
-    'pattern.SetScrollPercent(ScrollPattern.NoScroll, percent)',
-    'pattern.Current.VerticalScrollPercent',
+    'DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED',
     'DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT',
     'INVOKE_DISABLED_UNTIL_DESKTOP2_POPUP_ACTIVATION_ACCEPTANCE'
   ]) assert.ok(source.includes(required),required);
+  assert.doesNotMatch(source,/SetScrollPercent\s*\(/);
+  assert.doesNotMatch(source,/TryGetCurrentPattern\(ScrollPattern\.Pattern/);
+  assert.doesNotMatch(source,/TryGetCurrentPattern\(ValuePattern\.Pattern/);
   assert.doesNotMatch(source,/\bValuePattern\s+pattern[\s\S]*?\.SetValue\s*\(/);
   assert.doesNotMatch(source,/\bpattern\.SetValue\s*\(/);
   assert.doesNotMatch(source,/\bInvokePattern\.Invoke\s*\(/);
@@ -56,7 +57,7 @@ test('real-Desktop2 direct UIA ValuePattern mutation is quarantined, read-only m
 });
 
 test('no request value in successful output or event logging',()=>{
-  assert.match(source,/uiaReadbackConfirmed = true/);
+  assert.match(source,/uiaReadbackConfirmed = false/);
   assert.match(source,/appEventConfirmed = false/);
   assert.doesNotMatch(source,/appStateConfirmed = true/);
   assert.doesNotMatch(source,/Console\.WriteLine\([^)]*request\.Value/);
@@ -239,8 +240,9 @@ test('quarantined UIA ValuePattern is never queried or advertised by semantic tr
  const lease=readFileSync(path.join(dir,'..','..','src','desktop2-direct-uia-lease.ts'),'utf8');
  assert.doesNotMatch(tree,/ValuePattern\.Pattern|valuePattern\.Current\.IsReadOnly/);
  assert.match(tree,/const bool canSet = false/);
- assert.match(tree,/if \(canScroll\)/);
- assert.match(lease,/c\.canSetValue !== false \|\| c\.canScrollTopBottom !== true/);
+ assert.match(tree,/const bool canScroll = false/);
+ assert.doesNotMatch(tree,/TryGetCurrentPattern\s*\(/);
+ assert.match(lease,/c\.canSetValue !== false \|\| c\.canScrollTopBottom !== false/);
  assert.match(lease,/Desktop2 UIA edit capability is quarantined/);
  const native=readFileSync(path.join(dir,'DirectUia.NativeEdit.cs'),'utf8');
  assert.match(native,/return new \{ operation = "set-native-edit"/);
@@ -270,8 +272,25 @@ test('Computer Use cannot mint forged UIA edit or re-enable ValuePattern from an
  const candidate=readFileSync(path.join(dir,'..','..','src','desktop2-computer-use-candidate.ts'),'utf8');
  const snapshot=candidate.slice(candidate.indexOf('async snapshotWindow('),candidate.indexOf('async snapshotNativeWindow('));
  assert.match(snapshot,/item\.canSetValue !== false/);
- assert.match(snapshot,/item\.canScrollTopBottom !== true/);
+ assert.match(snapshot,/item\.canScrollTopBottom !== false/);
  const dispatch=candidate.slice(candidate.indexOf('async dispatch(input: Desktop2ComputerAction)'));
  assert.match(dispatch,/\|\| action\.type === 'set_value'/);
  assert.match(dispatch,/this\.semanticObservations\.delete\(input\.computerObservationId\)/);
+});
+
+test('unverified generic UIA ScrollPattern is blocked at native helper, lease and Computer Use permit boundary',()=>{
+ const native=readFileSync(path.join(dir,'Program.cs'),'utf8');
+ const tree=readFileSync(path.join(dir,'DirectUia.SemanticSnapshot.cs'),'utf8');
+ const lease=readFileSync(path.join(dir,'..','..','src','desktop2-direct-uia-lease.ts'),'utf8');
+ const outer=readFileSync(path.join(dir,'..','..','src','desktop2-computer-use-candidate.ts'),'utf8');
+ assert.match(native,/DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED/);
+ assert.doesNotMatch(native,/SetScrollPercent/);
+ assert.doesNotMatch(native,/TryGetCurrentPattern/);
+ assert.ok(tree.includes('const bool canScroll = false'));
+ assert.doesNotMatch(tree,/TryGetCurrentPattern/);
+ assert.ok(lease.includes("throw new Error('DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED')"));
+ assert.ok(lease.includes('UNAPPROVED_UIA_MUTATION_RESULT'));
+ assert.ok(outer.includes("|| action.type === 'scroll'"));
+ assert.ok(outer.includes('item.canScrollTopBottom !== false'));
+ assert.ok(outer.includes("action.type === 'scroll_native_list' && !allowed.canScrollNativeList"));
 });

@@ -48,22 +48,19 @@ internal static partial class DirectUia
                     // actionable UIA edit capability or probe ValuePattern here.
                     // Native Win32 Edit lives in a separate guarded HWND transport.
                     const bool canSet = false;
-                    bool canScroll = element.TryGetCurrentPattern(ScrollPattern.Pattern,
-                        out object? scrollRaw)
-                        && scrollRaw is ScrollPattern scrollPattern
-                        && scrollPattern.Current.VerticallyScrollable;
-                    if (canScroll)
-                    {
-                        // A duplicate AutomationId may target the wrong
-                        // control; fail the entire snapshot, never guess.
-                        if (!seen.Add(id))
-                            throw new InvalidOperationException("UIA_SNAPSHOT_DUPLICATE_AUTOMATION_ID");
-                        if (results.Count >= MaxReturnedControls)
-                            throw new InvalidOperationException("UIA_SNAPSHOT_CONTROL_BUDGET_EXCEEDED");
-                        results.Add(new SemanticRow(
-                            id, info.ControlType.ProgrammaticName, info.ClassName,
-                            canSet, canScroll));
-                    }
+                    // Even read-only ScrollPattern discovery can invoke
+                    // an untrusted provider. Keep metadata-only rows; do
+                    // not suggest an actionable UIA scroll capability.
+                    const bool canScroll = false;
+                    // A duplicate AutomationId may target the wrong
+                    // control; fail the entire snapshot, never guess.
+                    if (!seen.Add(id))
+                        throw new InvalidOperationException("UIA_SNAPSHOT_DUPLICATE_AUTOMATION_ID");
+                    if (results.Count >= MaxReturnedControls)
+                        throw new InvalidOperationException("UIA_SNAPSHOT_CONTROL_BUDGET_EXCEEDED");
+                    results.Add(new SemanticRow(
+                        id, info.ControlType.ProgrammaticName, info.ClassName,
+                        canSet, canScroll));
                 }
             }
             // Stop at the first untraversable depth; do not imply unique

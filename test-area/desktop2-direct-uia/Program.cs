@@ -16,8 +16,7 @@ internal sealed class SemanticPolicy
     public static bool Permitted(string? action) =>
         action is "inspect" or "inspect-tree" or "inspect-native-edits"
             or "set-native-edit" or "inspect-native-buttons" or "click-native-button"
-            or "inspect-native-lists" or "scroll-native-list"
-            or "scroll-top" or "scroll-bottom";
+            or "inspect-native-lists" or "scroll-native-list";
 
     public static void Demand(string? action)
     {
@@ -26,6 +25,8 @@ internal sealed class SemanticPolicy
         // AFTER the irreversible activation and app text mutation.
         if (action == "set-value")
             throw new InvalidOperationException("DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT");
+        if (action is "scroll-top" or "scroll-bottom")
+            throw new InvalidOperationException("DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED");
         if (action == "invoke")
             throw new InvalidOperationException("INVOKE_DISABLED_UNTIL_DESKTOP2_POPUP_ACTIVATION_ACCEPTANCE");
         if (!Permitted(action))
@@ -341,6 +342,8 @@ internal static partial class DirectUia
     {
         if (request.Action == "set-value")
             throw new InvalidOperationException("DIRECT_UIA_VALUEPATTERN_QUARANTINED_AFTER_FOREGROUND_THEFT");
+        if (request.Action is "scroll-top" or "scroll-bottom")
+            throw new InvalidOperationException("DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED");
         IntPtr hwnd = new(request.Hwnd);
         Guid targetId = Guid.ParseExact(request.DesktopId, "D");
         void Guard()
@@ -386,8 +389,10 @@ internal static partial class DirectUia
                 operation = "inspect",
                 elementControlType = element.Current.ControlType.ProgrammaticName,
                 className = element.Current.ClassName,
-                hasValuePattern = element.TryGetCurrentPattern(ValuePattern.Pattern, out _),
-                hasScrollPattern = element.TryGetCurrentPattern(ScrollPattern.Pattern, out _),
+                // No provider-pattern probes in read-only metadata inspection.
+                // Untrusted providers can execute arbitrary code even on inquiry.
+                hasValuePattern = false,
+                hasScrollPattern = false,
                 allowedToInvoke = false,
                 uiaReadbackConfirmed = false,
                 appEventConfirmed = false
@@ -395,32 +400,15 @@ internal static partial class DirectUia
             Guard();
             return snapshot;
         }
-        if (request.Action is "scroll-top" or "scroll-bottom")
-        {
-            if (!element.TryGetCurrentPattern(ScrollPattern.Pattern, out object? raw) || raw is not ScrollPattern pattern
-                || !pattern.Current.VerticallyScrollable)
-                throw new InvalidOperationException("VERTICAL_SCROLLPATTERN_REQUIRED");
-            double percent = request.Action == "scroll-top" ? 0.0 : 100.0;
-            Guard();
-            pattern.SetScrollPercent(ScrollPattern.NoScroll, percent);
-            Guard();
-            double observed = pattern.Current.VerticalScrollPercent;
-            Guard();
-            if (double.IsNaN(observed) || Math.Abs(observed - percent) > 1)
-                throw new InvalidOperationException("VERTICAL_SCROLL_READBACK_MISMATCH");
-            return new { operation = request.Action, target = request.AutomationId,
-                scrollPercent = observed, uiaReadbackConfirmed = true,
-                appEventConfirmed = false };
-        }
         throw new InvalidOperationException("UIA_ACTION_FAIL_CLOSED");
     }
 
     // Offline self-test touches no windows, UIA clients, VDA or observer process.
     private static object SelfTest()
     {
-        bool[] allow = new[] {"inspect", "inspect-tree", "scroll-top", "scroll-bottom"}
+        bool[] allow = new[] {"inspect", "inspect-tree", "inspect-native-edits", "inspect-native-buttons", "inspect-native-lists"}
             .Select(SemanticPolicy.Permitted).ToArray();
-        bool[] deny = new[] {"set-value", "invoke", "click", "drag", "send-keys", "focus", "hover", "wheel", "paste"}
+        bool[] deny = new[] {"set-value", "scroll-top", "scroll-bottom", "invoke", "click", "drag", "send-keys", "focus", "hover", "wheel", "paste"}
             .Select(SemanticPolicy.Permitted).ToArray();
         bool owner0 = false, owner1 = false, ownerNull = false;
         try { SemanticPolicy.DemandOwnerDesktop(0); owner0 = true; } catch {}

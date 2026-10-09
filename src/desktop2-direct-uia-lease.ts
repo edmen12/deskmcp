@@ -162,8 +162,10 @@ export class Desktop2DirectUiaLeaseCoordinator {
       return { action:'scroll-native-list', automationId,
         topIndex:action.topIndex, expectedPreviousTopIndex:action.expectedPreviousTopIndex };
     }
-    if (action.type === 'scroll' && (action.to === 'top' || action.to === 'bottom')) {
-      return { action: action.to === 'top' ? 'scroll-top' : 'scroll-bottom', automationId };
+    if (action.type === 'scroll') {
+      // UIA ScrollPattern.SetScrollPercent has no real zero-foreground
+      // Desktop2 acceptance. Native HWND ListBox scroll is separate.
+      throw new Error('DIRECT_UIA_SCROLLPATTERN_NOT_LIVE_ACCEPTED');
     }
     throw new Error('Unverified Desktop2 native Computer Use action.');
   }
@@ -220,7 +222,7 @@ export class Desktop2DirectUiaLeaseCoordinator {
           || seen.has(c.automationId)
           || typeof c.controlType !== 'string' || c.controlType.length > 90
           || typeof c.className !== 'string' || c.className.length > 260
-          || c.canSetValue !== false || c.canScrollTopBottom !== true) {
+          || c.canSetValue !== false || c.canScrollTopBottom !== false) {
         // The former ValuePattern mutation is quarantined after actual
         // Desktop1 foreground theft. Reject even a forged "canSetValue"
         // response instead of issuing a one-use mutation capability.
@@ -402,12 +404,9 @@ export class Desktop2DirectUiaLeaseCoordinator {
         throw new Error('Native Button message dispatch unconfirmed.');
       return {messageDispatched:true,appEventConfirmed:false,foregroundSafetyUnproven:true};
     }
-    if (!result || typeof result !== 'object'
-        || (result as { uiaReadbackConfirmed?: unknown }).uiaReadbackConfirmed !== true
-        || (result as { appEventConfirmed?: unknown }).appEventConfirmed !== false) {
-      throw new Error('Native UIA readback not confirmed; app-level callback is not proven.');
-    }
-    return { uiaReadbackConfirmed: true, appEventConfirmed: false };
+    // All approved mutation types have explicit native HWND acknowledgements
+    // above. A future UIA response is NEVER an implicit success fallback.
+    throw new Error('UNAPPROVED_UIA_MUTATION_RESULT');
   }
 }
 
