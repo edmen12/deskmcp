@@ -63,6 +63,24 @@ The candidate now **rejects any `canSetValue !== false`**, requires a guarded UI
 
 **Verified**: TypeScript compilation PASS, focused Computer Use/lease tests **47/47 PASS**, all eight Desktop2 source tests **90/90 PASS**, native source contracts **20/20 PASS**, `git diff --check` PASS. **No new real GUI test in this change** because host free RAM repeatedly dropped to ~380–507 MB despite brief recovery; the added-ListBox-fixture Edit/Button E2E regression remains OPEN. No lease started, no target/app foreground operations, and no upgrade/restart/merge/push to production. WPF UIA ValuePattern and generic third-party Computer Use remain RED.
 
+## 2026-10-09 19:35–19:36 MYT — post-ListBox Edit/Button live regression + memory safety gate
+
+**SUPERSEDES ONLY the older OPEN note** above about re-running Edit/Button on the extended Edit/Button/ListBox fixture. The post-ListBox regression has now been tested on a **real Windows virtual Desktop2**; it is no longer OPEN for that self-owned WinForms fixture. It remains unproven for arbitrary non-owned apps, or other UI frameworks.
+
+New acceptance harness safety gate: `test-area/desktop2-real-acceptance/resource-preflight.mjs` requires **three consecutive Windows physical available-memory samples >=1200 MiB**, without an environment override, before observer startup and again immediately before any owned GUI fixture spawn. Invalid data and low/unstable memory fail closed; no process killing or retry. Its deterministic unit tests are **4/4 PASS** (low-memory, falling/invalid sample, stable samples, compulsory call ordering). This protects the user's Desktop1 when the Windows 16GiB host has heavy Chrome/ChatGPT/WSL memory pressure; it does not prove arbitrary Windows apps are focus-safe.
+
+Fresh REAL Desktop2 stages on **updated ListBox-containing WinForms fixture**:
+- `write`: exact Edit `WM_SETTEXT` readback, one independent app `TextChanged`, no Button click or ListBox change.
+- `deny-stale`: wrong expected old Edit text rejected before mutation, zero app Edit/Button/ListBox changes.
+- `button-click`: one `BM_CLICK`, exactly one independent app `Click`, no Edit or ListBox change.
+
+Each of the three stage `result.json` and separate passive WinEvent/VDA observer event logs was **reread**: `pass=true`, `desktopBefore=desktopAfter=1`, `tripwire=false`, zero observer alarm rows, zero app focus events. All fixture/observer helper processes exited and Agent Desktop2 lease was explicitly stopped; Desktop2 free. Verified raw directories retained under ignored `runs/`:
+- `native-write-2026-10-09T11-35-30-261Z/`
+- `native-deny-stale-2026-10-09T11-35-47-499Z/`
+- `native-button-click-2026-10-09T11-36-02-400Z/`
+
+WPF `ValuePattern.SetValue` foreground theft remains **PROHIBITED**; no generic WinUI/WPF/Electron mouse/drag/scroll enablement, no production MCP registration or install, no automatic desktop switching. These app-class specific tests **cannot certify universal no-interference**.
+
 ## Primary evidence
 - Native WinForms Edit: test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md
 - Native WinForms PushButton: test-area/desktop2-real-acceptance/native-winforms-button-findings-20261009.md

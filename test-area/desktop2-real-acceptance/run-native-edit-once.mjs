@@ -8,6 +8,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {requireSafeNativeGuiMemory} from './resource-preflight.mjs';
 import {AgentDesktopManager} from '../../dist/src/agent-desktop-state.js';
 import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
 import {resolveDeskMcpStateRoot} from '../../dist/src/data-root.js';
@@ -108,11 +109,17 @@ try{
     ||proof.control.desktopId?.toLowerCase()!==proof.binding.desktopId.toLowerCase())
     throw Error('OWNER_DESKTOP1_AND_ACTIVE_DESKTOP2_AGENT_LEASE_REQUIRED');
   result.desktopBefore=1;
+  // Protect the owner PC before spawning even the monitor subprocess.
+  // Low RAM must fail closed rather than slow or stall Desktop1.
+  const memory=await requireSafeNativeGuiMemory();
+  log('HOST_MEMORY_PREFLIGHT_PASS',memory);
   log('PREFLIGHT_PASS',{lease,desktopId:proof.binding.desktopId});
   await session.start();
   watch=await watcher.assertHealthy(lease);
   result.observerEventPath=watch.eventLog;
   log('OBSERVER_READY',{eventLog:watch.eventLog,readyFile:watch.readyFile});
+  // Recheck after observer launch; do not start a GUI under sudden pressure.
+  await requireSafeNativeGuiMemory();
   child=spawn(dotnet,[fixture,ready,release,app,'60000'],{
     cwd:root,shell:false,windowsHide:true,
     env:process.env,stdio:['ignore','ignore','pipe']
