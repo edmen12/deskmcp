@@ -268,6 +268,7 @@ internal static partial class Program
                     vda),
                 "window-info" => WindowInfo(ParseHwnd(Required(options, "hwnd")), vda),
                 "list-virtual-windows" => ListVirtualWindows(ParseDesktopId(Required(options, "desktop-id")), vda),
+                "probe-hidden-winver" => ProbeHiddenWinver(ParsePositiveInt(Required(options, "pid"), "pid"), Required(options, "started-utc"), vda),
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
