@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
 import { existsSync, writeFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,7 +13,7 @@ const desktopId='d81244e4-e0c5-456f-a707-2b685a00662c';
 const observerExe='C:\\fake\\DeskMCP.Desktop2SwitchObserver.exe';
 const vdaDll='C:\\fake\\VirtualDesktopAccessor.dll';
 
-function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean}={}) {
+function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolean;forgedReady?:boolean;forgedPump?:boolean;forgedShow?:boolean;observerExit?:'ack'|'silent'|'refuse'}={}) {
   const state={desktop:1,generation:7,active:true,hudReady:true,killed:false,
     pid:7171,readyPidMismatch:false,guardPresent:true,
     produceReady:options.ready!==false};
@@ -29,8 +30,17 @@ function fixture(options:{ready?:boolean;startupTimeoutMs?:number;strict?:boolea
   const native:Pick<AgentDesktopNativeBridge,'info'>={
     async info(){return {officialApi:true,virtualDesktopAccessor:true,currentDesktopNumber:state.desktop,desktopCount:2};}
   };
-  const child={pid:state.pid,exitCode:null as number|null,
-    kill(){state.killed=true;child.exitCode=1;return true;}};
+  const child=Object.assign(new EventEmitter(),{
+    pid:state.pid,exitCode:null as number|null,signalCode:null as NodeJS.Signals|null,
+    kill(){
+      state.killed=true;
+      if(options.observerExit==='refuse')return false;
+      if(options.observerExit==='silent')return true;
+      child.exitCode=1;
+      child.emit('exit',1,null);
+      return true;
+    }
+  });
   const launch=(_exe:string,args:readonly string[])=>{
     launches.push([...args]);
     const [, ,events,ready,tripwire,watch]=args;
@@ -111,6 +121,7 @@ test('stop terminates owned observer, removes authorization files but preserves 
  const t=fixture();const s=await t.supervisor.start(leaseId);
  const result=await t.supervisor.stop();
  assert.equal(result.stopped,true);
+ assert.equal(result.exitConfirmed,true);
  assert.equal(result.preservedLog,s.eventLog);
  assert.equal(t.state.killed,true);
  assert.equal(existsSync(s.readyFile),false);
@@ -178,4 +189,43 @@ test('external launch aborts if strict top-level window-show hook is not ready',
  const t=fixture({strict:true,forgedShow:true});
  await assert.rejects(t.supervisor.start(leaseId),/ready identity/);
  assert.equal(t.state.killed,true);
+});
+
+test('observer stop rejects missing exit acknowledgement and blocks new sessions',async()=>{
+ const t=fixture({observerExit:'silent'});
+ const s=await t.supervisor.start(leaseId);
+ await assert.rejects(t.supervisor.stop(),/OBSERVER_PROCESS_EXIT_UNCONFIRMED/);
+ assert.equal(t.state.killed,true);
+ assert.equal(existsSync(s.readyFile),false);
+ assert.ok(existsSync(s.eventLog));
+ await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
+ await assert.rejects(t.supervisor.start(leaseId),/already active/);
+ // Deliberately retain this failed observer incident directory for diagnosis.
+ await rm(s.directory,{recursive:true,force:true});
+});
+
+test('observer stop fails closed when native child refuses termination',async()=>{
+ const t=fixture({observerExit:'refuse'});
+ const s=await t.supervisor.start(leaseId);
+ await assert.rejects(t.supervisor.stop(),/OBSERVER_PROCESS_EXIT_UNCONFIRMED/);
+ assert.equal(existsSync(s.readyFile),false);
+ await assert.rejects(t.supervisor.start(leaseId),/already active/);
+ await rm(s.directory,{recursive:true,force:true});
+});
+
+test('bad ready plus unconfirmed process exit retains observer lease identity',async()=>{
+ const t=fixture({strict:true,forgedReady:true,observerExit:'silent'});
+ await assert.rejects(t.supervisor.start(leaseId),
+   /OBSERVER_STARTUP_FAILURE_CLEANUP_UNCONFIRMED/);
+ assert.equal(t.state.killed,true);
+ await assert.rejects(t.supervisor.start(leaseId),/already active/);
+ await assert.rejects(t.supervisor.assertHealthy(leaseId),/stopped, missing or latched/);
+});
+
+test('startup timeout with refused watcher kill must not permit a second observer',async()=>{
+ const t=fixture({ready:false,startupTimeoutMs:150,observerExit:'refuse'});
+ await assert.rejects(t.supervisor.start(leaseId),
+   /OBSERVER_STARTUP_FAILURE_CLEANUP_UNCONFIRMED/);
+ assert.ok(t.state.killed);
+ await assert.rejects(t.supervisor.start(leaseId),/already active/);
 });

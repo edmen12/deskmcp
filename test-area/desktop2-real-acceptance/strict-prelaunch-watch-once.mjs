@@ -32,7 +32,8 @@ const manager=new AgentDesktopManager(resolveDeskMcpStateRoot('agent-desktop'),n
 // Never call manager.init(). Production owns live lease state.
 const watcher=new Desktop2ObserverLifecycle(manager,native,observerExe,vda,undefined,15000,true);
 const result={pass:false,strictArmed:false,before:null,after:null,latched:false,
-  eventLog:null,foregroundEvents:0,error:null,launchedExternalGui:false};
+  eventLog:null,foregroundEvents:0,observerExitConfirmed:false,
+  messagePumpReady:false,error:null,launchedExternalGui:false};
 let session;
 try{
  await requireSafeNativeGuiMemory();
@@ -52,19 +53,31 @@ try{
  result.pass=true;
 }catch(e){result.error=e instanceof Error?e.message:String(e)}
 finally{
+ try{
+   const closed=await watcher.stop();
+   result.observerExitConfirmed=closed.exitConfirmed===true;
+ }catch(e){
+   result.error=result.error||('WATCHER_STOP_FAILED:'+String(e));
+ }
  if(session){
    result.latched=fs.existsSync(session.tripwireFile);
-   const raw=await readFile(session.eventLog,'utf8').catch(()=>'');
+   const raw=await readFile(session.eventLog,'utf8').catch(()=>{
+     result.pass=false;result.error=result.error||'OBSERVER_EVENT_LOG_MISSING';
+     return '';
+   });
    for(const line of raw.split(/\r?\n/)){
      if(!line)continue;
-     try{if(JSON.parse(line).kind==='FOREGROUND_CHANGED')result.foregroundEvents++;}
-     catch{result.pass=false;result.error='OBSERVER_LOG_CORRUPT';}
+     try{
+       const x=JSON.parse(line);
+       if(x.kind==='FOREGROUND_CHANGED')result.foregroundEvents++;
+       if(x.kind==='READY_AFTER_MESSAGE_PUMP')result.messagePumpReady=true;
+       if(x.latchedAbort===true)result.latched=true;
+     }catch{result.pass=false;result.error='OBSERVER_LOG_CORRUPT';}
    }
  }
- await watcher.stop().catch(()=>undefined);
  result.after=(await native.info().catch(()=>({currentDesktopNumber:null}))).currentDesktopNumber;
- result.pass=result.pass&&!result.latched&&result.after===1
-   &&result.foregroundEvents===0;
+ result.pass=result.pass&&result.observerExitConfirmed&&result.messagePumpReady
+   &&!result.latched&&result.after===1&&result.foregroundEvents===0;
  await writeFile(path.join(out,'result.json'),JSON.stringify(result,null,2));
  console.log(JSON.stringify({...result,runDirectory:out}));
 }

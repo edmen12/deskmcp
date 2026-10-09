@@ -126,11 +126,17 @@ finally{
     result.error=result.error||'OWNED_WINVER_TERMINATION_NOT_CONFIRMED';
   // The native watcher is now stopped (and its writer flushed) before
   // observing the final alarm ledger, not after an early partial read.
-  await watcher.stop().catch(e=>{
+  let observerExited=false;
+  try{
+    const ended=await watcher.stop();
+    observerExited=ended.exitConfirmed===true;
+  }catch(e){
     result.error=result.error||('WATCHER_STOP_FAILED:'+String(e));
+  }
+  if(!observerExited){
+    result.error=result.error||'WATCHER_EXIT_UNCONFIRMED';
     result.pass=false;
-  });
-  await wait(100);
+  }
   if(session){
     result.tripwire=fs.existsSync(session.tripwireFile);
     const raw=await readFile(session.eventLog,'utf8').catch(()=>{

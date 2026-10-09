@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -10,7 +11,8 @@ import type { AgentDesktopNativeBridge } from './agent-desktop-native.js';
 // Source-only candidate. Does not start automatically with DeskMCP or MCP.
 type Lease = Pick<AgentDesktopManager,'assertLease'>;
 type Host = Pick<AgentDesktopNativeBridge,'info'>;
-type Launched = Pick<ChildProcess,'pid'|'exitCode'|'kill'>;
+type Launched = Pick<ChildProcess,'pid'|'exitCode'|'signalCode'|'kill'>
+  & Pick<EventEmitter,'once'|'off'>;
 export type ObserverLaunch = (exe:string,args:readonly string[])=>Launched;
 
 interface Ready {
@@ -144,15 +146,19 @@ export class Desktop2ObserverLifecycle {
       this.tick.unref?.();
       return session;
     } catch(e) {
-      if(this.tick)clearInterval(this.tick);
-      this.tick=undefined;
-      this.child?.kill();
-      this.child=undefined;
-      this.session=undefined;
-      this.generation=undefined;
-      // Retain logs/tripwire if any were created; remove a totally empty run.
-      if(!existsSync(session.eventLog)&&!existsSync(session.tripwireFile))
+      // Startup failures (forged Ready, hook failure, timeout) need the same
+      // owned-process exit confirmation as normal stop. Otherwise a late
+      // observer can outlive this session and overlap the next trial.
+      let cleanupFailed:unknown;
+      try{await this.stop();}
+      catch(error){cleanupFailed=error;}
+      // Leave any incident evidence (or unconfirmed child) untouched.
+      if(!cleanupFailed && !existsSync(session.eventLog)
+          && !existsSync(session.tripwireFile))
         await rm(dir,{recursive:true,force:true}).catch(()=>undefined);
+      if(cleanupFailed)
+        throw new Error('OBSERVER_STARTUP_FAILURE_CLEANUP_UNCONFIRMED',
+          {cause:cleanupFailed});
       throw e;
     }
   }
@@ -182,19 +188,49 @@ export class Desktop2ObserverLifecycle {
     finally{if(this.healthInFlight===check)this.healthInFlight=undefined;}
   }
 
-  async stop():Promise<{readonly stopped:boolean;readonly preservedLog?:string}> {
+  async stop():Promise<{readonly stopped:boolean;readonly exitConfirmed:boolean;readonly preservedLog?:string}> {
     const child=this.child,session=this.session;
-    if(this.tick) clearInterval(this.tick);
-    this.tick=undefined;this.child=undefined;this.session=undefined;
-    this.generation=undefined;
+    if(this.tick)clearInterval(this.tick);
+    this.tick=undefined;
     this.reason='stopped';
-    child?.kill();
-    if(session) {
-      // Incident timeline and tripwire are NEVER silently deleted. Logs are
-      // intentionally not returned as arbitrary user-selected file paths.
-      await rm(session.readyFile,{force:true}).catch(()=>undefined);
-      await rm(session.targetFile,{force:true}).catch(()=>undefined);
+    // Revoke input authorization BEFORE attempting to stop the process.
+    // Keep child/session identity if termination cannot be confirmed, so
+    // another session cannot be started over an orphaned native observer.
+    if(session)await rm(session.readyFile,{force:true});
+    let exitConfirmed=!child || child.exitCode!==null || child.signalCode!==null;
+    if(child && !exitConfirmed){
+      exitConfirmed=await new Promise<boolean>(resolve=>{
+        let resolved=false;
+        const finish=(ok:boolean)=>{
+          if(resolved)return;
+          resolved=true;
+          clearTimeout(timeout);
+          child.off('exit',exited);
+          resolve(ok);
+        };
+        const exited=()=>finish(true);
+        const timeout=setTimeout(()=>finish(false),2000);
+        child.once('exit',exited);
+        try{
+          if(child.exitCode!==null || child.signalCode!==null){
+            finish(true);
+          }else if(!child.kill()){
+            finish(child.exitCode!==null || child.signalCode!==null);
+          }else if(child.exitCode!==null || child.signalCode!==null){
+            finish(true);
+          }
+        }catch{finish(false);}
+      });
     }
-    return {stopped:Boolean(child),...(session?{preservedLog:session.eventLog}:{})};
+    if(!exitConfirmed){
+      this.reason='OBSERVER_PROCESS_EXIT_UNCONFIRMED';
+      throw new Error(this.reason);
+    }
+    this.child=undefined;
+    this.session=undefined;
+    this.generation=undefined;
+    if(session)await rm(session.targetFile,{force:true});
+    return {stopped:Boolean(child),exitConfirmed,
+      ...(session?{preservedLog:session.eventLog}:{})};
   }
 }

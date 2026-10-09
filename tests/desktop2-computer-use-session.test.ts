@@ -28,7 +28,7 @@ function fixture(){
    if(!state.healthy)throw new Error('latched tripwire');
    return state.changed?{...observerSession,readyFile:'C:\\attacker\\ready.json'}:observerSession;
   },
-  async stop(){state.stopped=true;return {stopped:true};}
+  async stop(){state.stopped=true;return {stopped:true,exitConfirmed:true};}
  };
  const actions:Pick<Desktop2ComputerUseCandidate,'dispatch'>={
   async dispatch(input){
@@ -106,7 +106,7 @@ test('concurrent starts are denied and stop racing startup cannot rearm a revoke
  const observer:Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>={
   async start(){launches++;await ready;return observerSession;},
   async assertHealthy(){return observerSession;},
-  async stop(){stops++;return {stopped:true};}
+  async stop(){stops++;return {stopped:true,exitConfirmed:true};}
  };
  const session=new Desktop2ComputerUseSession(lease,
   {async list(){return [];}},
@@ -129,7 +129,7 @@ test('session issues no caller-controlled lease or observer path for protected e
  const observer:Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>={
   async start(){return observerSession;},
   async assertHealthy(){return observerSession;},
-  async stop(){return {stopped:true};}
+  async stop(){return {stopped:true,exitConfirmed:true};}
  };
  const session=new Desktop2ComputerUseSession(lease,
   {async list(){return [];}},
@@ -162,7 +162,7 @@ test('stop revokes new UIA immediately but keeps observer alive until in-flight 
  const observer:Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>={
   async start(){return observerSession;},
   async assertHealthy(){return observerSession;},
-  async stop(){stops++;return {stopped:true};}
+  async stop(){stops++;return {stopped:true,exitConfirmed:true};}
  };
  const session=new Desktop2ComputerUseSession(lease,{async list(){return [];}},
   observer,{async dispatch(){started();await unblock;return {uiaReadbackConfirmed:true,appEventConfirmed:false};}});
