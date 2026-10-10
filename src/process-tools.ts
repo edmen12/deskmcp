@@ -238,7 +238,7 @@ export function registerProcessTools(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When any Agent Desktop control lease is active, agent_desktop_lease_id is mandatory for every process launch (even a hidden shell). DeskMCP creates the process directly inside that isolated Desktop Object and fails closed if the lease is invalid or placement verification fails. process_lifetime=job is only allowed with Agent Desktop and is intended for GUI launchers whose shell exits while owned descendants remain alive.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When any Agent Desktop control lease is active, agent_desktop_lease_id is mandatory for every process launch (even a hidden shell). DeskMCP creates the process inside an isolated Win32 Desktop Object, NOT the real Windows Win+Tab virtual Desktop 2. A lease-bound process launch therefore does NOT prove that any window is visible on virtual Desktop 2; use the separate native VDA inventory and validated virtual-desktop placement before making that claim. It fails closed if the lease is invalid or placement verification fails. process_lifetime=job is only allowed with Agent Desktop and is intended for GUI launchers whose shell exits while owned descendants remain alive.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -259,7 +259,7 @@ export function registerProcessTools(
           'root ends owned descendants when the shell exits. job keeps the owned Windows job alive until all descendants exit and is only allowed with Agent Desktop.'
         ),
         agent_desktop_lease_id: z.string().uuid().optional().describe(
-          'Bind this owned process tree to an active Agent Desktop lease. On Windows, the process tree is created directly inside a lease-scoped isolated Win32 desktop object instead of being moved after launch.'
+          'Bind this owned process tree to an active Agent Desktop lease. On Windows this launches inside a private Win32 Desktop Object; it does not place a window on the human-visible Win+Tab virtual Desktop 2. Never treat this tool result as real Desktop2 GUI placement proof.'
         )
       }),
       annotations: {

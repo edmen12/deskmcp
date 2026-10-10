@@ -385,7 +385,7 @@ export function registerComputerUseTools(
     'desktop_ui_windows',
     {
       title: 'List Desktop UI Windows',
-      description: 'List Windows desktop windows for semantic computer use. Returns opaque window_id capabilities instead of raw HWND/PID targets. Requires Full Control or Fully Unlocked.',
+      description: 'List Windows desktop windows for semantic computer use. With agent_desktop_lease_id, enumerates the lease private Win32 Desktop Object, NOT the real Win+Tab virtual Desktop 2. Its window_id is not proof of virtual Desktop2 placement. Returns opaque window_id capabilities instead of raw HWND/PID targets. Requires Full Control or Fully Unlocked.',
       inputSchema: z.object({
         app: z.string().min(1).max(256).optional(),
         include_untitled: z.boolean().optional().default(false),
@@ -415,7 +415,7 @@ export function registerComputerUseTools(
     'desktop_ui_snapshot',
     {
       title: 'Snapshot Desktop UI',
-      description: 'Capture a target Windows app window with a fresh computer_observation_id. Returns an optional semantic UI Automation tree and PNG screenshot without foregrounding the window. Take a fresh snapshot before every action.',
+      description: 'Capture a target Windows app window with a fresh computer_observation_id. Lease-scoped snapshots inspect the private Win32 Desktop Object, NOT the real Windows virtual Desktop 2; do not use this tool as virtual Desktop2 proof. Returns an optional semantic UI Automation tree and PNG screenshot without foregrounding the window. Take a fresh snapshot before every action.',
       inputSchema: z.object({
         window_id: z.string().uuid().optional(),
         app: z.string().min(1).max(256).optional(),
