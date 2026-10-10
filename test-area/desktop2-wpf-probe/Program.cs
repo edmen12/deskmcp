@@ -123,20 +123,13 @@ sealed class Probe: Window {
     using var writer=new StreamWriter(server,new UTF8Encoding(false),4096,true){AutoFlush=true};
     string reply;
     try{
-     var line=await reader.ReadLineAsync(cancellation);
-     if(line is null||line.Length>4096)throw new InvalidOperationException("INVALID_COMMAND_LENGTH");
-     using var doc=JsonDocument.Parse(line);
-     var command=doc.RootElement;
-     var given=command.GetProperty("token").GetString()??"";
-     if(given.Length!=token.Length||
-       !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given),Encoding.UTF8.GetBytes(token)))
-       throw new InvalidOperationException("INVALID_FIXTURE_CAPABILITY");
-     var sequence=command.GetProperty("sequence").GetInt64();
-     if(sequence!=lastSequence+1)throw new InvalidOperationException("STALE_OR_REPLAYED_COMMAND");
-     lastSequence=sequence;
-     var action=command.GetProperty("action").GetString()??"";
-     var expected=command.TryGetProperty("expected",out var before)?before.GetString():null;
-     var value=command.TryGetProperty("value",out var proposed)?proposed.GetString():null;
+     var authorized=OwnedWpfCommandPolicy.Authorize(
+       await reader.ReadLineAsync(cancellation),token,lastSequence);
+     lastSequence=authorized.Sequence;
+     var sequence=authorized.Sequence;
+     var action=authorized.Action;
+     var expected=authorized.Expected;
+     var value=authorized.Value;
      reply=await Dispatcher.InvokeAsync(()=>{
       if(!uncloaked)throw new InvalidOperationException("FIXTURE_STILL_CLOAKED");
       if(Native.GetForegroundWindow()==rootHwnd)throw new InvalidOperationException("WPF_ROOT_HAS_FOREGROUND");
@@ -187,11 +180,18 @@ sealed class Probe: Window {
 static class Program {
  [STAThread]static int Main(string[] args){
   try{
+   if(args.Length==1&&args[0]=="--self-test-command-policy")return OwnedWpfCommandPolicy.SelfTest();
+   if(args.Length==3&&args[0]=="--self-test-pipe")
+    return OwnedWpfPipeSelfTest.Run(args[1],args[2]).GetAwaiter().GetResult();
    if(args.Length!=4&&args.Length!=6)throw new Exception("need ready/release/events/lifetime [pipe/token]");
    if(args.Length==6&&(args[4].Length<10||args[5].Length<32))throw new Exception("INVALID_PIPE_CAPABILITY");
    new Application().Run(new Probe(args[0],args[1],args[2],int.Parse(args[3]),
      args.Length==6?args[4]:"",args.Length==6?args[5]:""));
    return 0;
-  }catch(Exception e){if(args.Length>2)File.AppendAllText(args[2],"PROBE_ERROR "+e+"\n");return 2;}
+  }catch(Exception e){
+   if(args.Length>=4)File.AppendAllText(args[2],"PROBE_ERROR "+e.GetType().Name+" "+e.Message+"\n");
+   else Console.Error.WriteLine("HEADLESS_TEST_ERROR "+e.GetType().Name+" "+e.Message);
+   return 2;
+  }
  }
 }

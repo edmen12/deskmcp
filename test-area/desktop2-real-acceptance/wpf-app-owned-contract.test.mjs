@@ -5,14 +5,16 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const app=await readFile(path.join(here,'../desktop2-wpf-probe/Program.cs'),'utf8');
+const policy=await readFile(path.join(here,'../desktop2-wpf-probe/OwnedWpfCommandPolicy.cs'),'utf8');
 const runner=await readFile(path.join(here,'run-wpf-app-owned-once.mjs'),'utf8');
 
 test('WPF actions execute on the owned Dispatcher and not through UIAutomation',()=>{
  assert.match(app,/Dispatcher\.InvokeAsync/);
  assert.match(app,/PipeOptions\.CurrentUserOnly/);
- assert.match(app,/CryptographicOperations\.FixedTimeEquals/);
- assert.match(app,/STALE_OR_REPLAYED_COMMAND/);
- assert.match(app,/STALE_OR_INVALID_EDIT/);
+ assert.match(app,/OwnedWpfCommandPolicy\.Authorize/);
+ assert.match(policy,/CryptographicOperations\.FixedTimeEquals/);
+ assert.match(policy,/STALE_OR_REPLAYED_COMMAND/);
+ assert.match(policy,/STALE_OR_INVALID_EDIT/);
  assert.match(app,/Native\.GetForegroundWindow\(\)==rootHwnd/);
  assert.doesNotMatch(app,/ValuePattern\.SetValue|SendInput\(|SetForegroundWindow\(|SwitchDesktop\(/);
 });

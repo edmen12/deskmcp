@@ -1,7 +1,7 @@
 // Source-only WPF fixture-owned Dispatcher pipe acceptance. NOT a generic WPF
 // control path. Never fall back to UIA ValuePattern, SendInput or desktop switch.
 import fs from 'node:fs';
-import net from 'node:net';
+import {sendOwnedWpfPipeCommand} from './wpf-app-owned-pipe.mjs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {randomBytes,randomUUID} from 'node:crypto';
@@ -81,24 +81,12 @@ async function readyFile(deadlineMs){
  }
  throw Error('WPF_READY_TIMEOUT');
 }
-function command(sequence,action,extra={}){
- return new Promise((resolve,reject)=>{
-  const socket=net.createConnection('\\\\.\\pipe\\'+pipe);
-  let completed=false,buffer='';
-  const timeout=setTimeout(()=>fail(new Error('PIPE_COMMAND_TIMEOUT')),7000);
-  function fail(e){if(completed)return;completed=true;clearTimeout(timeout);socket.destroy();reject(e);}
-  function ok(value){if(completed)return;completed=true;clearTimeout(timeout);socket.end();resolve(value);}
-  socket.on('error',fail);
-  socket.on('connect',()=>socket.write(JSON.stringify({token,sequence,action,...extra})+'\n'));
-  socket.on('data',chunk=>{
-   buffer+=chunk.toString('utf8');
-   if(buffer.length>4096)return fail(new Error('PIPE_REPLY_TOO_LARGE'));
-   if(buffer.includes('\n')){
-    try{ok(JSON.parse(buffer.slice(0,buffer.indexOf('\n'))));}
-    catch(e){fail(e);}
-   }
-  });
-  socket.on('end',()=>{if(!completed)fail(new Error('PIPE_ENDED_WITHOUT_ACK'));});
+async function command(sequence,action,extra={}){
+ return sendOwnedWpfPipeCommand({
+  pipe,token,sequence,action,extra,
+  // Re-arm evidence before any ENOENT-only reconnect; never resend after
+  // an established connection because app callbacks could already run.
+  onBeforeReconnect:()=>guard('PIPE_ENDPOINT_RECONNECT_NO_DELIVERY')
  });
 }
 try{

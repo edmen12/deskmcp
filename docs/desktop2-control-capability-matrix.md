@@ -1,5 +1,5 @@
 # Real Windows virtual Desktop2 — Computer Use capability gate
-Updated 2026-10-09 (Asia/Kuala_Lumpur)
+Updated 2026-10-10 (Asia/Kuala_Lumpur)
 
 **Global production Computer Use status: RED. Do not connect candidate native transports to installed production MCP until class-specific release approvals and real application regression coverage exist.**
 
@@ -12,7 +12,8 @@ Updated 2026-10-09 (Asia/Kuala_Lumpur)
 | Native System-style WinForms PushButton BM_CLICK | One owned opt-in Form, BUTTON_WM_F5 and APP_BUTTON_CLICK=1, no focus alarm | Fixture verified | Candidate only; exact native BS_PUSHBUTTON/BS_DEFPUSHBUTTON, child PID/parent, lease/observer, one-use permit |
 | Native Win32/WinForms ListBox LB_SETTOPINDEX | 2026-10-09 19:18–19:19 MYT fresh real Desktop2: guarded discovery, top index 0→20 app-observed once, wrong old index denied; 0 foreground/desktop alarms | Fixture verified | Candidate only; standard non-owner-drawn/non-multicolumn/nonvirtual ListBox, bounded 512-item list and exact expected previous top index, fresh lease/observer/control capability. **Not a generic wheel/scroll replacement** |
 | Default owner-drawn WinForms Button | Exact class existed but style filter excluded it in live read-only acceptance | DENIED | Never auto-fallback to SetActiveWindow or global click |
-| WPF app-owned Dispatcher + current-user named pipe | 2026-10-10 exact WPF .NET 10 Release build 0 warnings/errors, 4/4 source contracts; RAM 490MiB below 1200MiB gate so no new live GUI | **SOURCE VERIFIED / LIVE BLOCKED** | Owned opt-in fixture only; random one-shot capability, monotonic command sequence, compare-old for edit, app callback/readback and foreground observer required. No arbitrary app access |\n| WPF Button UIA Invoke | No proven zero-interference Click on exact candidate chain | RED | Not enabled |
+| WPF app-owned Dispatcher + current-user named pipe | 2026-10-10 .NET 10 Release 0 warnings/errors; app-owned authorization executable self-test 12 rejections PASS; true Windows Node↔.NET headless named pipe 3 accepted/3 denied and 8/8 consecutive full round trips PASS; 4/4 source contract checks. Actual GUI preflight 1057/1054/1050MiB <1200MiB; real Desktop2 effects NOT tested | **SOURCE VERIFIED / LIVE BLOCKED** | Owned opt-in fixture only; random one-shot capability, monotonic command sequence, compare-old for edit, app callback/readback and foreground observer required. No arbitrary app access |
+| WPF Button UIA Invoke | No proven zero-interference Click on exact candidate chain | RED | Not enabled |
 | WinUI/XAML controls | No real zero-interference coverage | RED | Not enabled |
 | Electron/WebView/browser UI | No genuine Desktop2 app-specific transport acceptance | RED | Not enabled |
 | WPF/WinForms UIA ScrollPattern | No real zero-foreground acceptance; older candidate exposed a callable SetScrollPercent transport | **PROHIBITED** | Now blocked at outer Computer Use, TS lease and native C# policy; SetScrollPercent implementation removed; metadata snapshot reports canScrollTopBottom=false. Distinct verified native WinForms ListBox LB_SETTOPINDEX remains separate |
