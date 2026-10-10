@@ -227,6 +227,12 @@ function browserLaunchCommand(
     'about:blank'
   ];
   const processArgs = args.map(value => psSingleQuoted(`"${value}"`)).join(',');
+  // REAL Win+Tab Desktop2 visible Chrome remains source-only experimental:
+  // 2026-10-10 passive WinEvent attributed actual Desktop1 foreground theft
+  // to its Chrome window during startup, despite --start-minimized. An
+  // experimental Start-Process -WindowStyle Hidden prevented this native
+  // process-tree mover from finding a stable *visible* HWND (and was reverted).
+  // Do not promote this launcher as zero-interference before safer bootstrap.
   return `$browserArgs = @(${processArgs}); $browserProcess = Start-Process -FilePath ${psSingleQuoted(executable)} -ArgumentList $browserArgs -PassThru; $browserProcess.WaitForExit(); exit $browserProcess.ExitCode`;
 }
 

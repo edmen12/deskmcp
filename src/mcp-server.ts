@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { registerAgentDesktopTools } from './agent-desktop-tools.js';
+import { AgentDesktopNativeBridge } from './agent-desktop-native.js';
+import { registerRealVirtualDesktop2InventoryTool } from './desktop2-real-inventory-tools.js';
 import type { ArtifactStore } from './artifact-store.js';
 import { registerArtifactTools } from './artifact-tools.js';
 import type { BrowserRuntime } from './browser-runtime.js';
@@ -52,6 +54,12 @@ export function createDesktopMcpServer(
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
     if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
     if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore);
+    // Explicit staged opt-in only. Never grant private-object window IDs or
+    // register an unverified real D2 input/mutation endpoint.
+    if (agentDesktop && process.env.DESKTOP_MCP_REAL_D2_INVENTORY_EXPERIMENT === '1') {
+      registerRealVirtualDesktop2InventoryTool(server, policy, agentDesktop,
+        new AgentDesktopNativeBridge());
+    }
     if (browser) registerBrowserTools(server, policy, audit, browser);
     if (skillStore) registerSkillTools(server, policy, audit, skillStore);
   } else {
