@@ -1,5 +1,10 @@
 using System;
 using System.IO;
+using System.IO.Pipes;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -17,6 +22,8 @@ static class Native {
  private static extern IntPtr GetWindowLongPtr(IntPtr hwnd,int offset);
  [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW",SetLastError=true)]
  private static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int offset,IntPtr value);
+ internal static bool HasNoActivate(IntPtr hwnd)=>hwnd!=IntPtr.Zero &&
+   (GetWindowLongPtr(hwnd,-20).ToInt64()&0x08000000L)!=0;
  internal static void MakeNonActivating(IntPtr hwnd){
   if(hwnd==IntPtr.Zero)throw new ArgumentException("Non-activating HWND is required");
   const int GwlExstyle=-20;
@@ -41,8 +48,10 @@ sealed class Probe: Window {
  readonly int life;
  bool uncloaked=false,popupStarted=false;
  int clicks=0;
+ long lastSequence=0;
+ readonly CancellationTokenSource commandStop=new();
  void Log(string msg)=>File.AppendAllText(events,DateTime.UtcNow.ToString("O")+" "+msg+"\n");
- public Probe(string readyPath,string releasePath,string eventPath,int ms){
+ public Probe(string readyPath,string releasePath,string eventPath,int ms,string pipeName="",string pipeToken=""){
   ready=readyPath;release=releasePath;events=eventPath;life=ms;oldForeground=Native.GetForegroundWindow();
   Title="DeskMCP Desktop2 WPF Probe";Width=550;Height=465;Left=250;Top=200;ShowActivated=false;ShowInTaskbar=true;WindowStartupLocation=WindowStartupLocation.Manual;
   var panel=new StackPanel {Margin=new Thickness(12)};
@@ -86,8 +95,11 @@ sealed class Probe: Window {
   });
   Loaded+=(_,_)=> {
    Native.DwmGetWindowAttribute(rootHwnd,14,out int cloakState,4);
-   File.WriteAllText(ready,JsonSerializer.Serialize(new {hwnd=rootHwnd.ToInt64(),pid=Environment.ProcessId,dwmCloaked=cloakState,initialForeground=oldForeground.ToInt64(),afterForeground=Native.GetForegroundWindow().ToInt64()}));
+   File.WriteAllText(ready,JsonSerializer.Serialize(new {hwnd=rootHwnd.ToInt64(),pid=Environment.ProcessId,dwmCloaked=cloakState,rootNoActivate=Native.HasNoActivate(rootHwnd),initialForeground=oldForeground.ToInt64(),afterForeground=Native.GetForegroundWindow().ToInt64()}));
+   if(pipeName.Length>0 && pipeToken.Length>=32)
+    _=Task.Run(()=>ServeCommands(pipeName,pipeToken,edit,btn,scrollBtn,viewer,commandStop.Token));
   };
+  Closed+=(_,_)=>commandStop.Cancel();
   timer.Tick+=(_,_)=>{
    if(Environment.TickCount64-since>life){timer.Stop();Close();return;}
    if(!uncloaked&&File.Exists(release)&&File.ReadAllText(release).Trim()=="UN-CLOAK-AFTER-VERIFIED-DESKTOP2"){
@@ -96,6 +108,63 @@ sealed class Probe: Window {
    }
   };
   timer.Start();
+ }
+ // Fixture-owned control channel. Not a general-purpose third-party WPF transport.
+ // The command is dispatched inside the app's own UI Dispatcher, never through UIA
+ // ValuePattern, SendInput, SetForegroundWindow, or a shared clipboard.
+ async Task ServeCommands(string pipeName,string token,TextBox edit,Button btn,Button scrollButton,
+                          ScrollViewer viewer,CancellationToken cancellation){
+  while(!cancellation.IsCancellationRequested){
+   try{
+    using var server=new NamedPipeServerStream(pipeName,PipeDirection.InOut,1,
+      PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
+    await server.WaitForConnectionAsync(cancellation);
+    using var reader=new StreamReader(server,Encoding.UTF8,false,4096,true);
+    using var writer=new StreamWriter(server,new UTF8Encoding(false),4096,true){AutoFlush=true};
+    string reply;
+    try{
+     var line=await reader.ReadLineAsync(cancellation);
+     if(line is null||line.Length>4096)throw new InvalidOperationException("INVALID_COMMAND_LENGTH");
+     using var doc=JsonDocument.Parse(line);
+     var command=doc.RootElement;
+     var given=command.GetProperty("token").GetString()??"";
+     if(given.Length!=token.Length||
+       !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(given),Encoding.UTF8.GetBytes(token)))
+       throw new InvalidOperationException("INVALID_FIXTURE_CAPABILITY");
+     var sequence=command.GetProperty("sequence").GetInt64();
+     if(sequence!=lastSequence+1)throw new InvalidOperationException("STALE_OR_REPLAYED_COMMAND");
+     lastSequence=sequence;
+     var action=command.GetProperty("action").GetString()??"";
+     var expected=command.TryGetProperty("expected",out var before)?before.GetString():null;
+     var value=command.TryGetProperty("value",out var proposed)?proposed.GetString():null;
+     reply=await Dispatcher.InvokeAsync(()=>{
+      if(!uncloaked)throw new InvalidOperationException("FIXTURE_STILL_CLOAKED");
+      if(Native.GetForegroundWindow()==rootHwnd)throw new InvalidOperationException("WPF_ROOT_HAS_FOREGROUND");
+      string actual;
+      switch(action){
+       case "edit":
+        if(expected is null||value is null||value.Length>128||
+           !string.Equals(edit.Text,expected,StringComparison.Ordinal))
+         throw new InvalidOperationException("STALE_OR_INVALID_EDIT");
+        edit.Text=value;actual=edit.Text;break;
+       case "button":
+        btn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,btn));
+        actual=clicks.ToString();break;
+       case "scroll":
+        scrollButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,scrollButton));
+        actual=viewer.VerticalOffset.ToString(System.Globalization.CultureInfo.InvariantCulture);break;
+       default:throw new InvalidOperationException("UNSUPPORTED_APP_OWNED_ACTION");
+      }
+      Log("APP_OWNED_ACK="+sequence+":"+action);
+      return JsonSerializer.Serialize(new {ok=true,sequence,action,actual});
+     }).Task;
+    }catch(Exception error){
+     reply=JsonSerializer.Serialize(new {ok=false,error=error.Message});
+    }
+    await writer.WriteLineAsync(reply.AsMemory(),cancellation);
+   }catch(OperationCanceledException){break;}
+   catch(Exception error){Log("APP_OWNED_PIPE_ERROR="+error.GetType().Name);}
+  }
  }
  void ShowCloakedPopup(){
   if(popupStarted)return;popupStarted=true;
@@ -118,8 +187,10 @@ sealed class Probe: Window {
 static class Program {
  [STAThread]static int Main(string[] args){
   try{
-   if(args.Length!=4)throw new Exception("need ready/release/events/lifetime");
-   new Application().Run(new Probe(args[0],args[1],args[2],int.Parse(args[3])));
+   if(args.Length!=4&&args.Length!=6)throw new Exception("need ready/release/events/lifetime [pipe/token]");
+   if(args.Length==6&&(args[4].Length<10||args[5].Length<32))throw new Exception("INVALID_PIPE_CAPABILITY");
+   new Application().Run(new Probe(args[0],args[1],args[2],int.Parse(args[3]),
+     args.Length==6?args[4]:"",args.Length==6?args[5]:""));
    return 0;
   }catch(Exception e){if(args.Length>2)File.AppendAllText(args[2],"PROBE_ERROR "+e+"\n");return 2;}
  }
