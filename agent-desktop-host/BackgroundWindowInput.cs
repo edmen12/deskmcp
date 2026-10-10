@@ -30,6 +30,8 @@ internal static class BackgroundWindowInput
     private const uint GaRoot = 2;
     private const uint SmtoAbortIfHung = 0x0002;
     private const uint TimeoutMs = 450;
+    private const int GwlExStyle = -20;
+    private const long WsExNoActivate = 0x08000000L;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Point { public int X; public int Y; public Point(int x, int y) { X=x; Y=y; } }
@@ -59,6 +61,8 @@ internal static class BackgroundWindowInput
     private static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, EntryPoint="GetWindowLongPtrW", SetLastError=true)]
+    private static extern IntPtr GetWindowLongPtr(IntPtr hwnd,int index);
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
@@ -69,6 +73,29 @@ internal static class BackgroundWindowInput
     private static extern IntPtr SendMessageTimeoutW(
         IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam,
         uint flags, uint timeout, out IntPtr result);
+
+    internal static bool EligibleNoActivateStyle(long exStyle)
+        =>(exStyle & WsExNoActivate)!=0;
+
+    internal static object SelfTestRootSafety()
+    {
+        bool protectedRoot=EligibleNoActivateStyle(WsExNoActivate);
+        bool ordinaryDenied=!EligibleNoActivateStyle(0);
+        bool topmostOnlyDenied=!EligibleNoActivateStyle(0x00000008L);
+        bool toolWindowOnlyDenied=!EligibleNoActivateStyle(0x00000080L);
+        return new {
+            pass=protectedRoot&&ordinaryDenied&&topmostOnlyDenied&&toolWindowOnlyDenied,
+            protectedRoot,ordinaryDenied,topmostOnlyDenied,toolWindowOnlyDenied
+        };
+    }
+
+    private static void AssertNonActivatingRoot(IntPtr root)
+    {
+        // Virtual Desktop2 shares the Windows input desktop with Desktop1.
+        // Never deliver background WM input to an ordinary activatable root.
+        if(!EligibleNoActivateStyle(GetWindowLongPtr(root,GwlExStyle).ToInt64()))
+            throw new InvalidOperationException("BACKGROUND_INPUT_ROOT_NOACTIVATE_REQUIRED");
+    }
 
     private static IntPtr Params(int x, int y)
     {
@@ -123,6 +150,7 @@ internal static class BackgroundWindowInput
         GetWindowThreadProcessId(root, out uint rootPid);
         if (childPid != unchecked((uint)expectedProcessId) || rootPid != childPid)
             throw new InvalidOperationException("HWND owner PID mismatch or cross-process child window.");
+        AssertNonActivatingRoot(root);
         Type managerType = Type.GetTypeFromCLSID(new Guid("AA509086-5CA9-4C25-8F95-589D3C07B48A"), throwOnError: true)!;
         IVirtualDesktopManager manager = (IVirtualDesktopManager)Activator.CreateInstance(managerType)!;
         try
@@ -209,6 +237,7 @@ internal static class BackgroundWindowInput
                 root,expectedProcessId);
             if(currentDesktopNumber()!=0 || !IsWindow(hwnd) || !IsWindow(root))
                 throw new InvalidOperationException("BACKGROUND_INPUT_DESKTOP_OR_WINDOW_CHANGED");
+            AssertNonActivatingRoot(root);
             GetWindowThreadProcessId(hwnd,out uint liveChild);
             GetWindowThreadProcessId(root,out uint liveRoot);
             if(liveChild!=(uint)expectedProcessId || liveRoot!=liveChild)

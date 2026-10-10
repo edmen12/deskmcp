@@ -297,6 +297,7 @@ internal static partial class Program
                 "self-test" => SelfTest(vda),
                 "self-test-hidden-move" => HiddenMoveSelfTest(),
                 "self-test-strict-observer-guard" => StrictObserverGuardSelfTest(),
+                "self-test-background-root" => BackgroundWindowInput.SelfTestRootSafety(),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };
             Console.Out.Write(JsonSerializer.Serialize(result));

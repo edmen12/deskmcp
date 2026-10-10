@@ -191,3 +191,22 @@ test('native background message refuses any request lacking exact active target 
  assert.match(checked,/target.GetProperty\("desktopIndex"\).GetInt32\(\)!=1/);
  assert.match(checked,/state.GetProperty\("strictForegroundArmed"\).GetBoolean\(\)/);
 });
+
+test('candidate background input rejects ordinary activatable root windows instead of risking Desktop1 focus',()=>{
+ const r=run(['self-test-background-root']);
+ assert.equal(r.status,0,r.stderr);
+ const verdict=JSON.parse(r.stdout);
+ assert.equal(verdict.pass,true);
+ for(const key of ['protectedRoot','ordinaryDenied','topmostOnlyDenied','toolWindowOnlyDenied'])
+   assert.equal(verdict[key],true,key);
+ const src=readFileSync(path.join(worktree,'agent-desktop-host','BackgroundWindowInput.cs'),'utf8');
+ assert.match(src,/WsExNoActivate = 0x08000000L/);
+ assert.match(src,/GetWindowLongPtr\(root,GwlExStyle\)/);
+ assert.match(src,/AssertNonActivatingRoot\(root\)/);
+ const dispatcher=src.indexOf('switch (kind)');
+ const rootGuard=src.indexOf('AssertNonActivatingRoot(root)');
+ const messageGuard=src.lastIndexOf('AssertNonActivatingRoot(root)',dispatcher);
+ assert.ok(rootGuard>0 && messageGuard>rootGuard && dispatcher>messageGuard,
+   'initial and per-message WS_EX_NOACTIVATE checks precede dispatch');
+ assert.match(src,/BACKGROUND_INPUT_ROOT_NOACTIVATE_REQUIRED/);
+});
