@@ -192,6 +192,34 @@ export class Desktop2ObserverLifecycle {
     finally{if(this.healthInFlight===check)this.healthInFlight=undefined;}
   }
 
+  // Candidate-only authority minted from the CURRENT HUD lease and the
+  // same real native watcher this object launched. Callers cannot choose a
+  // PID, executable, Ready/tripwire or desktop GUID.
+  async targetBackgroundAuthority(leaseId:string):Promise<{
+    readonly desktopId:string;readonly readyFile:string;
+    readonly tripwireFile:string;readonly exePath:string;readonly pid:number;
+  }> {
+    if(this.strictPrelaunch)
+      throw new Error('Background actions require a live exact-target observer, not launch-only SHOW mode.');
+    const session=await this.assertHealthy(leaseId);
+    const child=this.child;
+    const live=await this.leases.assertLease(leaseId);
+    if(!child || !Number.isSafeInteger(child.pid) || (child.pid??0)<1
+      || child.exitCode!==null || child.signalCode!==null
+      || this.session!==session || !existsSync(session.targetFile)
+      || !live.control.active
+      || live.control.desktopNumber!==2
+      || live.control.leaseId?.toLowerCase()!==leaseId.toLowerCase()
+      || !live.control.desktopId
+      || live.binding.desktopId.toLowerCase()!==live.control.desktopId.toLowerCase())
+      throw new Error('Strict background observer or matching HUD authority disappeared.');
+    await this.assertHealthy(leaseId);
+    return {
+      desktopId:live.binding.desktopId,readyFile:session.readyFile,
+      tripwireFile:session.tripwireFile,exePath:this.observerExe,pid:child.pid!
+    };
+  }
+
   async stop():Promise<{readonly stopped:boolean;readonly exitConfirmed:boolean;readonly preservedLog?:string}> {
     const child=this.child,session=this.session;
     if(this.tick)clearInterval(this.tick);

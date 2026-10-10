@@ -1,6 +1,8 @@
 import type { ComputerWindow } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
 import type { Desktop2DirectUiaLeaseCoordinator, Desktop2UiaAction, Desktop2SemanticControl } from './desktop2-direct-uia-lease.js';
+import type { Desktop2MessageAction } from './desktop2-background-input.js';
+import type { AgentDesktopNativeBridge } from './agent-desktop-native.js';
 
 // Candidate handoff from the ACTUAL Computer Use one-time observation/window
 // capability registries. Not registered as a production MCP tool.
@@ -21,7 +23,8 @@ export class Desktop2ComputerUseCandidate {
   constructor(
     private readonly runtime: RegistryRuntime,
     private readonly leaseNative: LeaseNativeAdapter,
-    private readonly listLiveWindowsPassively: () => Promise<readonly ComputerWindow[]>
+    private readonly listLiveWindowsPassively: () => Promise<readonly ComputerWindow[]>,
+    private readonly backgroundNative?: Pick<AgentDesktopNativeBridge,'backgroundWindowMessage'>
   ) {}
 
   // Called only through Desktop2ComputerUseSession after observer+lease
@@ -224,6 +227,48 @@ export class Desktop2ComputerUseCandidate {
         observerReadyFile:input.observerReadyFile,controls:controls.map(c=>({...c}))
       });
       return {computerObservationId,controls};
+    });
+  }
+
+  // Source-only: exactly one verified window observation → one native
+  // message action. Dispatch acknowledgement is NOT app callback/readback.
+  // The independent native observer is reverified on EACH WM* message.
+  async backgroundMessage(input:{
+    windowId:string;computerObservationId:string;
+    agentDesktopLeaseId:string;observerReadyFile:string;
+    authority:{desktopId:string;readyFile:string;tripwireFile:string;
+      exePath:string;pid:number};
+    action:Desktop2MessageAction;
+  }):Promise<{acceptedByWindowProcedure:boolean;confirmedAppState:false;
+    hostInputWasNotUsed:boolean;desktopNumber:number}> {
+    return this.runtime.coordinator.exclusive(async()=>{
+      if(!this.backgroundNative)
+        throw new Error('Protected source-only background provider unavailable.');
+      const observed=this.runtime.observations.peekLease(
+        input.computerObservationId,input.windowId);
+      if(!observed || observed.toLowerCase()!==input.agentDesktopLeaseId.toLowerCase()
+        ||input.authority.readyFile!==input.observerReadyFile)
+        throw new Error('Background messages require an existing lease-bound window observation.');
+      const target=this.runtime.windows.resolve(
+        input.windowId,await this.listLiveWindowsPassively());
+      if(target.title?.startsWith('DeskMCP Agent Desktop'))
+        throw new Error('Cannot interact with safety HUD.');
+      const effective=this.runtime.observations.consume(
+        input.computerObservationId,input.windowId,Date.now(),
+        input.agentDesktopLeaseId);
+      if(effective?.toLowerCase()!==input.agentDesktopLeaseId.toLowerCase())
+        throw new Error('Background window observation expired or lease revoked.');
+      // Invalidate all cached window actions before the potentially mutable WM.
+      this.runtime.observations.advance(input.windowId,false);
+      const actual=await this.backgroundNative.backgroundWindowMessage(
+        target.hwnd,target.processId,input.authority.desktopId,
+        input.action,input.authority);
+      if(!actual ||actual.acceptedByWindowProcedure!==true
+        ||actual.confirmedAppState!==false||actual.hostInputWasNotUsed!==true
+        ||actual.desktopNumber!==2)
+        throw new Error('Native message dispatch cannot confirm actual app action.');
+      return {acceptedByWindowProcedure:true,confirmedAppState:false,
+        hostInputWasNotUsed:true,desktopNumber:2};
     });
   }
 

@@ -1,13 +1,15 @@
 import type { ComputerWindow } from './computer-use-backend.js';
 import type { Desktop2ComputerAction, Desktop2ComputerUseCandidate } from './desktop2-computer-use-candidate.js';
 import type { Desktop2WindowInventory } from './desktop2-window-inventory.js';
+import type { Desktop2MessageAction } from './desktop2-background-input.js';
 import type { Desktop2ObserverLifecycle, Desktop2ObserverSession } from './desktop2-observer-lifecycle.js';
 
 // Candidate composition; NOT an externally registered MCP endpoint.
 // The requester cannot supply their own observer ready path or lease ID.
 type Passive = Pick<Desktop2WindowInventory,'list'>;
-type Observer = Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>;
-type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'|'snapshotNativeWindow'|'snapshotNativeButtons'|'snapshotNativeLists'>>;
+type Observer = Pick<Desktop2ObserverLifecycle,'start'|'assertHealthy'|'stop'>
+  & Partial<Pick<Desktop2ObserverLifecycle,'targetBackgroundAuthority'>>;
+type Actions = Pick<Desktop2ComputerUseCandidate,'dispatch'> & Partial<Pick<Desktop2ComputerUseCandidate,'discoverWindows'|'snapshotWindow'|'snapshotNativeWindow'|'snapshotNativeButtons'|'snapshotNativeLists'|'backgroundMessage'>>;
 type UserAction = Omit<Desktop2ComputerAction,'agentDesktopLeaseId'|'observerReadyFile'>;
 
 export class Desktop2ComputerUseSession {
@@ -143,6 +145,30 @@ export class Desktop2ComputerUseSession {
       });
       await this.checked();
       return output;
+    });
+  }
+
+  // This is a source-only guarded message transport, not an assertion that
+  // the application acted. It never calls SendInput, focus or clipboard.
+  async backgroundMessage(input:{windowId:string;computerObservationId:string;
+    action:Desktop2MessageAction;}):Promise<{
+      acceptedByWindowProcedure:boolean;confirmedAppState:false;
+      hostInputWasNotUsed:boolean;desktopNumber:number;
+    }> {
+    return this.withMonitorHeld(async()=>{
+      const watched=await this.checked();
+      if(!this.observer.targetBackgroundAuthority||!this.actions.backgroundMessage)
+        throw new Error('No guarded Desktop2 background message transport is available.');
+      const authority=await this.observer.targetBackgroundAuthority(this.leaseId);
+      if(authority.readyFile!==watched.readyFile
+        ||authority.tripwireFile!==watched.tripwireFile)
+        throw new Error('Background observer authority no longer matches this lease.');
+      const outcome=await this.actions.backgroundMessage({
+        ...input,agentDesktopLeaseId:this.leaseId,
+        observerReadyFile:watched.readyFile,authority
+      });
+      await this.checked();
+      return outcome;
     });
   }
 

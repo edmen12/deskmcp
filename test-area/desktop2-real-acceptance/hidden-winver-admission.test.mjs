@@ -173,3 +173,21 @@ test('forged strict ready file for a real Node PID cannot impersonate the native
   assert.match(denied.stderr,/HIDDEN_MOVE_OBSERVER_PID_OR_EXE_MISMATCH/);
  }finally{rmSync(temp,{recursive:true,force:true});}
 });
+
+test('native background message refuses any request lacking exact active target watcher authority',()=>{
+ const state=run(['desktop-info','--desktop-number','2']);
+ assert.equal(state.status,0,state.stderr);
+ const destination=JSON.parse(state.stdout);
+ const unsupported=run(['background-input',
+  '--hwnd','1','--pid',String(process.pid),'--desktop-id',destination.desktopId,
+  '--action','text','--text','NOT_SENT']);
+ assert.equal(unsupported.status,1,unsupported.stderr);
+ assert.match(unsupported.stderr,/Missing --observer-ready/);
+ const native=readFileSync(path.join(worktree,'agent-desktop-host','BackgroundWindowInput.cs'),'utf8');
+ const checked=readFileSync(path.join(worktree,'agent-desktop-host','Program.TargetObserverGuard.cs'),'utf8');
+ assert.match(native,/Program.AssertTargetObserverLive\(/);
+ assert.match(checked,/BACKGROUND_TARGET_WATCH_IDENTITY_MISMATCH/);
+ assert.match(checked,/BACKGROUND_TARGET_WATCHER_EXITED_OR_TRIPPED/);
+ assert.match(checked,/target.GetProperty\("desktopIndex"\).GetInt32\(\)!=1/);
+ assert.match(checked,/state.GetProperty\("strictForegroundArmed"\).GetBoolean\(\)/);
+});

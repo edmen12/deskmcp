@@ -178,3 +178,48 @@ test('stop revokes new UIA immediately but keeps observer alive until in-flight 
  assert.equal(stops,1);
  await assert.rejects(session.dispatch({phase:'arm',windowId:'window',computerObservationId:'obs'}),/not active/);
 });
+
+test('background messages are unavailable without an owned strict observer, even with an active session',async()=>{
+ const t=fixture();await t.session.start();
+ await assert.rejects(t.session.backgroundMessage({
+   windowId:'window',computerObservationId:'observation',
+   action:{type:'click',x:12,y:12}
+ }),/No guarded Desktop2 background/);
+ await t.session.stop();
+});
+test('strict observer mints non-forgeable background identity, while post-action tripwire denies success',async()=>{
+ let healthy=true;let nativeCalls=0;
+ const authority={desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c',
+   readyFile:observerSession.readyFile,tripwireFile:observerSession.tripwireFile,
+   exePath:'C:\\candidate\\DeskMCP.Desktop2SwitchObserver.exe',pid:22380};
+ const observer:Pick<Desktop2ObserverLifecycle,
+   'start'|'assertHealthy'|'stop'|'targetBackgroundAuthority'>={
+    async start(){return observerSession;},
+    async assertHealthy(){if(!healthy)throw Error('watcher tripped');return observerSession;},
+    async targetBackgroundAuthority(){if(!healthy)throw Error('watcher tripped');return authority;},
+    async stop(){return {stopped:true,exitConfirmed:true};}
+ };
+ const passive:Pick<Desktop2WindowInventory,'list'>={async list(){return [];}};
+ const actions:Pick<Desktop2ComputerUseCandidate,'dispatch'|'backgroundMessage'>={
+   async dispatch(){return {accepted:true};},
+   async backgroundMessage(req){
+     nativeCalls++;
+     assert.equal(req.agentDesktopLeaseId,lease);
+     assert.deepEqual(req.authority,authority);
+     assert.equal(req.observerReadyFile,observerSession.readyFile);
+     return {acceptedByWindowProcedure:true,confirmedAppState:false,
+       hostInputWasNotUsed:true,desktopNumber:2};
+   }
+ };
+ const s=new Desktop2ComputerUseSession(lease,passive,observer,actions);
+ await s.start();
+ const req={windowId:'owned-window',computerObservationId:'valid-observation',
+   action:{type:'drag' as const,x:5,y:7,toX:40,toY:29}};
+ const ok=await s.backgroundMessage(req);
+ assert.equal(ok.confirmedAppState,false);
+ assert.equal(nativeCalls,1);
+ healthy=false;
+ await assert.rejects(s.backgroundMessage(req),/watcher tripped/);
+ assert.equal(nativeCalls,1);
+ await s.stop();
+});

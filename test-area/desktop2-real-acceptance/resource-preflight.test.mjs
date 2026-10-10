@@ -162,9 +162,60 @@ test('owned WinForms cleanup confirms the GUI exits BEFORE stopping native watch
    'the owned GUI must exit before watcher teardown and final verdict');
  assert.match(src,/ownedGuiExitConfirmed:false,observerExitConfirmed:false/);
  assert.match(src,/result\.observerExitConfirmed=Boolean\(watch\)/);
- assert.match(src,/&&result\.observerExitConfirmed&&!trip&&last\.currentDesktopNumber===1/);
+ assert.match(src,/&&result\.observerExitConfirmed&&result\.leaseHeldThroughTeardown/);
+ assert.match(src,/&&!trip&&last\.currentDesktopNumber===1/);
  assert.match(src,/OWNED_GUI_EXIT_UNCONFIRMED/);
  assert.match(src,/SESSION_STOP_FAILED/);
  assert.match(src,/child\.exitCode!==null \|\| child\.signalCode!==null/);
  assert.doesNotMatch(src,/if\(child && child\.exitCode===null\)child\.kill\(\)/);
+});
+
+test('owned Desktop2 GUI matrix dispatches all bound message types with actual root WndProc witness',()=>{
+ const here=path.dirname(fileURLToPath(import.meta.url));
+ const script=fs.readFileSync(path.join(here,'run-native-edit-once.mjs'),'utf8');
+ const fixture=fs.readFileSync(path.join(here,'../desktop2-native-edit-probe/Program.cs'),'utf8');
+ assert.match(script,/stage==='background-matrix'/);
+ assert.match(script,/new Desktop2ComputerUseCandidate\(runtime,direct,\(\)=>inventory\.list\(\),native\)/);
+ assert.match(script,/await session\.backgroundMessage\(/);
+ assert.match(script,/await session\.discoverWindows\(\)/);
+ assert.match(script,/result\.backgroundActions\.push\(action\.type\)/);
+ assert.match(script,/BACKGROUND_WINDOW_PROCEDURE_MESSAGES_NOT_RECEIVED/);
+ assert.match(script,/appStateConfirmed:false/);
+ for(const kind of ['move','click','right-click','double-click','drag','wheel','text','key'])
+   assert.ok(script.includes("type:'"+kind+"'"),kind);
+ for(const win32 of ['0x0200','0x0201','0x0202','0x0203','0x0204','0x0205','0x020A','0x0100','0x0101','0x0102'])
+   assert.ok(fixture.includes(win32),win32);
+ assert.doesNotMatch(script,/\bSendInput\(|\bSetForegroundWindow\(|\bSwitchDesktop\(/);
+});
+
+test('full desktop2 matrix demands actual edit/button/list application callbacks in addition to WM receipt',()=>{
+ const here=path.dirname(fileURLToPath(import.meta.url));
+ const src=fs.readFileSync(path.join(here,'run-native-edit-once.mjs'),'utf8');
+ assert.match(src,/stage==='full-matrix'/);
+ assert.match(src,/await session\.snapshotNativeWindow\(target\.windowId\)/);
+ assert.match(src,/await session\.snapshotNativeButtons\(target\.windowId\)/);
+ assert.match(src,/await session\.snapshotNativeLists\(target\.windowId\)/);
+ assert.match(src,/action:\{type:'set_native_edit'/);
+ assert.match(src,/action:\{type:'click_native_button'/);
+ assert.match(src,/action:\{type:'scroll_native_list'/);
+ assert.match(src,/FULL_MATRIX_EDIT_VALUE_NOT_READ_BACK/);
+ assert.match(src,/FULL_MATRIX_LIST_TOPINDEX_NOT_READ_BACK/);
+ assert.match(src,/stage==='write'\|\|stage==='full-matrix'/);
+ assert.match(src,/stage==='button-click'\|\|stage==='full-matrix'/);
+ assert.match(src,/stage==='list-scroll'\|\|stage==='full-matrix'/);
+ assert.match(src,/APP_TEXT_CHANGED_CALLBACK_MISSING_OR_EXTRA_CHARACTERS/);
+ assert.match(src,/NATIVE_BUTTON_REAL_CALLBACK_NOT_EXACTLY_ONCE/);
+ assert.match(src,/LISTBOX_REAL_TOPINDEX_CHANGE_NOT_CONFIRMED/);
+});
+
+test('Desktop2 GUI acceptance fails when HUD lease disappears before full owned GUI teardown',()=>{
+ const src=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
+  'run-native-edit-once.mjs'),'utf8');
+ const stopAt=src.indexOf('await session.stop()');
+ const checked=src.indexOf('result.leaseHeldThroughTeardown=Boolean(',stopAt);
+ const verdict=src.indexOf('result.pass=Boolean(result.pass&&result.ownedGuiExitConfirmed',checked);
+ assert.ok(stopAt>0&&checked>stopAt&&verdict>checked);
+ assert.match(src,/held\.control\.generation===expectedLeaseGeneration/);
+ assert.match(src,/HUD_LEASE_RELEASED_BEFORE_GUI_TEARDOWN/);
+ assert.match(src,/&&result.observerExitConfirmed&&result.leaseHeldThroughTeardown/);
 });

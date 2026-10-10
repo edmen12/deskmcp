@@ -103,7 +103,8 @@ internal static class BackgroundWindowInput
         string action,
         Dictionary<string, string> options,
         Func<Guid, int?> desktopNumberById,
-        Func<int?> currentDesktopNumber)
+        Func<int?> currentDesktopNumber,
+        string observerReady,string observerTripwire,string observerExe,int observerPid)
     {
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
             throw new ArgumentException("Target HWND is not a live window.");
@@ -198,61 +199,93 @@ internal static class BackgroundWindowInput
             throw new ArgumentException("Unsupported window-message input action.");
         }
 
+
+        void VerifyMoveAuthority()
+        {
+            // This process cannot trust a previous TS/HUD health check: the
+            // actual strict watcher may die during a multi-message drag.
+            Program.AssertTargetObserverLive(
+                observerReady,observerTripwire,observerExe,observerPid,
+                root,expectedProcessId);
+            if(currentDesktopNumber()!=0 || !IsWindow(hwnd) || !IsWindow(root))
+                throw new InvalidOperationException("BACKGROUND_INPUT_DESKTOP_OR_WINDOW_CHANGED");
+            GetWindowThreadProcessId(hwnd,out uint liveChild);
+            GetWindowThreadProcessId(root,out uint liveRoot);
+            if(liveChild!=(uint)expectedProcessId || liveRoot!=liveChild)
+                throw new InvalidOperationException("BACKGROUND_INPUT_TARGET_OWNER_CHANGED");
+            IVirtualDesktopManager recheck=(IVirtualDesktopManager)Activator.CreateInstance(managerType)!;
+            try {
+                if(recheck.GetWindowDesktopId(root)!=desktopId
+                    || recheck.IsWindowOnCurrentVirtualDesktop(root))
+                    throw new InvalidOperationException("BACKGROUND_INPUT_TARGET_LEFT_DESKTOP2");
+            } finally {
+                if(Marshal.IsComObject(recheck))Marshal.FinalReleaseComObject(recheck);
+            }
+        }
+        void DeliverVerified(IntPtr target,uint message,int param,IntPtr data)
+        {
+            VerifyMoveAuthority();
+            Deliver(target,message,param,data);
+            VerifyMoveAuthority();
+        }
+        void MoveVerified(IntPtr target,int px,int py,int held=0)
+            =>DeliverVerified(target,WmMouseMove,held,Params(px,py));
+
         // All validation occurs before ANY window input message is dispatched.
         switch (kind)
         {
             case "invoke-button":
-                Deliver(hwnd, BmClick, 0, IntPtr.Zero);
+                DeliverVerified(hwnd, BmClick, 0, IntPtr.Zero);
                 break;
             case "move":
-                Move(hwnd, x, y);
+                MoveVerified(hwnd, x, y);
                 break;
             case "click":
             case "right-click":
             case "double-click":
-                Move(hwnd, x, y);
+                MoveVerified(hwnd, x, y);
                 bool right = kind == "right-click";
                 uint down = right ? WmRButtonDown : WmLButtonDown;
                 uint up = right ? WmRButtonUp : WmLButtonUp;
                 int mask = right ? (int)MkRButton : (int)MkLButton;
-                Deliver(hwnd, down, mask, Params(x, y));
-                Deliver(hwnd, up, 0, Params(x, y));
+                DeliverVerified(hwnd, down, mask, Params(x, y));
+                DeliverVerified(hwnd, up, 0, Params(x, y));
                 if (kind == "double-click")
                 {
-                    Deliver(hwnd, WmLButtonDblClk, mask, Params(x, y));
-                    Deliver(hwnd, up, 0, Params(x, y));
+                    DeliverVerified(hwnd, WmLButtonDblClk, mask, Params(x, y));
+                    DeliverVerified(hwnd, up, 0, Params(x, y));
                 }
                 break;
             case "drag":
-                Move(hwnd, x, y);
-                Deliver(hwnd, WmLButtonDown, (int)MkLButton, Params(x, y));
+                MoveVerified(hwnd, x, y);
+                DeliverVerified(hwnd, WmLButtonDown, (int)MkLButton, Params(x, y));
                 try
                 {
                     for (int i = 1; i <= steps; i++)
                     {
                         int nx = x + (int)Math.Round((toX - x) * (double)i / steps);
                         int ny = y + (int)Math.Round((toY - y) * (double)i / steps);
-                        Move(hwnd, nx, ny, (int)MkLButton);
+                        MoveVerified(hwnd, nx, ny, (int)MkLButton);
                     }
                 }
                 finally
                 {
-                    Deliver(hwnd, WmLButtonUp, 0, Params(toX, toY));
+                    DeliverVerified(hwnd, WmLButtonUp, 0, Params(toX, toY));
                 }
                 break;
             case "wheel":
                 Point screenPoint = new(x, y);
                 if (!ClientToScreen(hwnd, ref screenPoint))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "ClientToScreen failed.");
-                Deliver(hwnd, WmMouseWheel, delta << 16, Params(screenPoint.X, screenPoint.Y));
+                DeliverVerified(hwnd, WmMouseWheel, delta << 16, Params(screenPoint.X, screenPoint.Y));
                 break;
             case "key":
-                Deliver(hwnd, WmKeyDown, vk, new IntPtr(1));
-                Deliver(hwnd, WmKeyUp, vk, new IntPtr(unchecked((int)0xC0000001)));
+                DeliverVerified(hwnd, WmKeyDown, vk, new IntPtr(1));
+                DeliverVerified(hwnd, WmKeyUp, vk, new IntPtr(unchecked((int)0xC0000001)));
                 break;
             case "text":
                 foreach (char c in text)
-                    Deliver(hwnd, WmChar, c, new IntPtr(1));
+                    DeliverVerified(hwnd, WmChar, c, new IntPtr(1));
                 break;
         }
 

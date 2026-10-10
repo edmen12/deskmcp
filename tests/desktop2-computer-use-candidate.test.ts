@@ -4,6 +4,7 @@ import { ComputerObservationRegistry } from '../src/computer-use-observation.js'
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
 import { Desktop2ComputerUseCandidate } from '../src/desktop2-computer-use-candidate.js';
 import type { ComputerWindow } from '../src/computer-use-backend.js';
+import type { AgentDesktopNativeBridge } from '../src/agent-desktop-native.js';
 import type { Desktop2DirectUiaLeaseCoordinator, Desktop2SemanticControl, Desktop2UiaAction } from '../src/desktop2-direct-uia-lease.js';
 
 const lease = 'a2519d05-1219-4c25-9a10-d1b35cef2812';
@@ -45,8 +46,16 @@ function fixture() {
     }];},
     async perform(scope,action) { performed++; seen.push({scope,action}); return {uiaReadbackConfirmed:true,appEventConfirmed:false}; }
   };
+  const backgroundSeen:unknown[]=[];
+  const backgroundNative:Pick<AgentDesktopNativeBridge,'backgroundWindowMessage'>={
+    async backgroundWindowMessage(hwnd,pid,desktopId,action,authority){
+      backgroundSeen.push({hwnd,pid,desktopId,action,authority});
+      return {acceptedByWindowProcedure:true,confirmedAppState:false,
+        hostInputWasNotUsed:true,desktopNumber:2};
+    }
+  };
   const adapter=new Desktop2ComputerUseCandidate(
-    {windows,observations,coordinator}, native, async()=>live
+    {windows,observations,coordinator}, native, async()=>live,backgroundNative
   );
   const input=(phase:'arm'|'perform',action?:Desktop2UiaAction)=>{
     const computerObservationId=observations.issue(windowId,Date.now(),lease);
@@ -54,7 +63,7 @@ function fixture() {
       observerReadyFile:'C:\\tmp\\observer.ready.json', ...(action?{action}:{})};
   };
   return { windows,observations,coordinator,windowId,adapter,input,
-    get invoked(){return {performed,armed};},seen,
+    get invoked(){return {performed,armed};},seen,backgroundSeen,
     setLive(value:readonly ComputerWindow[]) {live=value;},
     setSemanticControls(value:readonly Desktop2SemanticControl[]) {semanticControls=value;} };
 }
@@ -366,4 +375,43 @@ test('metadata-only UIA permit never becomes a ValuePattern or ScrollPattern wri
    action:{type:'scroll' as const,automationId:'Scroller',to:'top' as const}
  }),/fresh protected semantic control snapshot/);
  assert.equal(t.invoked.performed,0);
+});
+
+test('background click, text and drag consume one fresh live D2 observation, never invent app callback',async()=>{
+ const t=fixture();
+ const auth={desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c',
+   readyFile:'C:\\tmp\\observer.ready.json',tripwireFile:'C:\\tmp\\observer.tripwire.json',
+   exePath:'C:\\bin\\DeskMCP.Desktop2SwitchObserver.exe',pid:883};
+ const observed=t.input('arm');
+ const req={windowId:t.windowId,computerObservationId:observed.computerObservationId,
+   agentDesktopLeaseId:lease,observerReadyFile:auth.readyFile,
+   authority:auth,action:{type:'click' as const,x:50,y:70}};
+ const result=await t.adapter.backgroundMessage(req);
+ assert.deepEqual(result,{acceptedByWindowProcedure:true,
+   confirmedAppState:false,hostInputWasNotUsed:true,desktopNumber:2});
+ assert.equal(t.backgroundSeen.length,1);
+ assert.deepEqual(t.backgroundSeen[0],{hwnd:window.hwnd,pid:window.processId,
+   desktopId:auth.desktopId,action:req.action,authority:auth});
+ await assert.rejects(t.adapter.backgroundMessage(req),/observation/);
+ assert.equal(t.backgroundSeen.length,1);
+ const foreign=t.input('arm');
+ await assert.rejects(t.adapter.backgroundMessage({...req,
+   computerObservationId:foreign.computerObservationId,
+   agentDesktopLeaseId:otherLease}),/lease-bound/);
+ assert.equal(t.backgroundSeen.length,1);
+});
+test('background messages refuse changed window identity and forged watcher Ready before invoking native',async()=>{
+ const t=fixture();
+ const valid=t.input('arm');
+ const auth={desktopId:'d81244e4-e0c5-456f-a707-2b685a00662c',
+   readyFile:'C:\\tmp\\observer.ready.json',tripwireFile:'C:\\tmp\\tripwire.json',
+   exePath:'C:\\bin\\DeskMCP.Desktop2SwitchObserver.exe',pid:883};
+ const req={windowId:t.windowId,computerObservationId:valid.computerObservationId,
+   agentDesktopLeaseId:lease,observerReadyFile:auth.readyFile,
+   authority:auth,action:{type:'text' as const,text:'AgentD2'}};
+ await assert.rejects(t.adapter.backgroundMessage({...req,
+   observerReadyFile:'C:\\attacker\\fake.ready.json'}),/lease-bound/);
+ t.setLive([{...window,processId:window.processId+100}]);
+ await assert.rejects(t.adapter.backgroundMessage(req),/changed or closed/);
+ assert.equal(t.backgroundSeen.length,0);
 });

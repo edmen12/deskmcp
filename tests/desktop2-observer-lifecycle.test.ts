@@ -268,3 +268,26 @@ test('missing PID and refused kill retains old child, preventing observer overla
  assert.equal(t.state.killed,true);
  await assert.rejects(t.supervisor.start(leaseId),/already active/);
 });
+
+test('background transport requires an armed exact-target watcher and mints its own native PID and paths',async()=>{
+ await withSession(async(t,s)=>{
+   await assert.rejects(t.supervisor.targetBackgroundAuthority(leaseId),/observer or matching HUD authority disappeared/);
+   writeFileSync(s.targetFile,JSON.stringify({hwnd:14,processId:99,desktopIndex:1}));
+   const authority=await t.supervisor.targetBackgroundAuthority(leaseId);
+   assert.deepEqual(authority,{
+     desktopId,readyFile:s.readyFile,tripwireFile:s.tripwireFile,
+     exePath:observerExe,pid:t.state.pid
+   });
+   t.state.desktop=2;
+   await assert.rejects(t.supervisor.targetBackgroundAuthority(leaseId),/lost lease\/HUD\/owner Desktop1/);
+ });
+});
+test('launch-only strict observer cannot authorize arbitrary window messages',async()=>{
+ const t=fixture({strict:true});
+ const s=await t.supervisor.start(leaseId);
+ try{
+  writeFileSync(s.targetFile,JSON.stringify({hwnd:14,processId:99,desktopIndex:1}));
+  await assert.rejects(t.supervisor.targetBackgroundAuthority(leaseId),
+    /not launch-only SHOW mode/);
+ }finally{await t.supervisor.stop();await rm(s.directory,{recursive:true,force:true});}
+});

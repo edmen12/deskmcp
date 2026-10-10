@@ -93,5 +93,38 @@ test('background invoke-button uses only strict Win32/WinForms Button HWND and n
   assert.match(cs,/GetClassNameW\(hwnd/);
   assert.match(cs,/WindowsForms10\.BUTTON/);
   assert.match(cs,/hwnd == root \|\| !IsWindowEnabled\(hwnd\)/);
-  assert.match(cs,/Deliver\(hwnd, BmClick, 0, IntPtr.Zero\)/);
+  assert.match(cs,/DeliverVerified\(hwnd, BmClick, 0, IntPtr.Zero\)/);
+});
+
+test('background input native endpoint refuses observer-free mouse, keyboard, text and drag',async()=>{
+  const root=process.cwd();
+  const native=await readFile(path.join(root,'agent-desktop-host','BackgroundWindowInput.cs'),'utf8');
+  const program=await readFile(path.join(root,'agent-desktop-host','Program.cs'),'utf8');
+  const watcher=await readFile(path.join(root,'agent-desktop-host','Program.TargetObserverGuard.cs'),'utf8');
+  const bridge=await readFile(path.join(root,'src','agent-desktop-native.ts'),'utf8');
+  assert.match(program,/"background-input" => BackgroundWindowInput\.Apply/);
+  for(const flag of ['observer-ready','observer-tripwire','observer-exe','observer-pid']){
+    assert.match(program,new RegExp('Required\\(options, "'+flag+'"\\)|ParsePositiveInt\\(Required\\(options, "'+flag+'"\\)'));
+    assert.match(bridge,new RegExp(flag));
+  }
+  assert.match(native,/Program\.AssertTargetObserverLive\(/);
+  assert.match(watcher,/internal static void AssertTargetObserverLive/);
+  assert.match(watcher,/BACKGROUND_TARGET_WATCH_NOT_ARMED/);
+  assert.match(watcher,/BACKGROUND_TARGET_WATCH_IDENTITY_MISMATCH/);
+  assert.match(watcher,/!state.GetProperty\("messagePumpRunning"\).GetBoolean\(\)/);
+  assert.match(watcher,/state.GetProperty\("strictForegroundArmed"\).GetBoolean\(\)/);
+  assert.match(native,/void VerifyMoveAuthority\(/);
+  assert.match(native,/void DeliverVerified\(/);
+  assert.match(native,/void MoveVerified\(/);
+  assert.match(native,/Deliver\(target,message,param,data\)/);
+  // The only unguarded Deliver is private and cannot be dispatched from Apply
+  // without the Verified wrapper; all user actions must take the wrapper.
+  const actionBody=native.slice(native.indexOf('// All validation occurs before ANY window input message is dispatched.'));
+  assert.doesNotMatch(actionBody,/\bDeliver\(hwnd,|\bMove\(hwnd,/);
+  assert.match(actionBody,/DeliverVerified\(hwnd,/);
+  assert.match(actionBody,/MoveVerified\(hwnd,/);
+  assert.match(native,/BACKGROUND_INPUT_TARGET_LEFT_DESKTOP2/);
+  assert.match(native,/BACKGROUND_INPUT_TARGET_OWNER_CHANGED/);
+  assert.match(bridge,/Live strict Desktop2 observer identity is required before background input/);
+  assert.doesNotMatch(native,/\bSetForegroundWindow\s*\(|\bSendInput\s*\(|\bSwitchDesktop\s*\(/);
 });

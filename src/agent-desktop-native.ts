@@ -225,14 +225,29 @@ export class AgentDesktopNativeBridge {
     hwnd: number,
     expectedProcessId: number,
     desktopId: string,
-    action: Desktop2MessageAction
+    action: Desktop2MessageAction,
+    observer: {readonly readyFile:string;readonly tripwireFile:string;
+      readonly exePath:string;readonly pid:number}
   ): Promise<{
     readonly acceptedByWindowProcedure: boolean;
     readonly confirmedAppState: boolean;
     readonly desktopNumber: number;
     readonly hostInputWasNotUsed: boolean;
   }> {
-    const args = buildDesktop2BackgroundInputArgs(hwnd, expectedProcessId, desktopId, action);
+    // The host validates this independently on every native Win32 message.
+    // A checked HUD lease alone cannot prove the hooks survived until dispatch.
+    if(!observer || !Number.isSafeInteger(observer.pid) || observer.pid<=0
+       || !path.isAbsolute(observer.readyFile)
+       || !path.isAbsolute(observer.tripwireFile)
+       || !path.isAbsolute(observer.exePath))
+      throw new Error('Live strict Desktop2 observer identity is required before background input.');
+    const args = [
+      ...buildDesktop2BackgroundInputArgs(hwnd, expectedProcessId, desktopId, action),
+      '--observer-ready',observer.readyFile,
+      '--observer-tripwire',observer.tripwireFile,
+      '--observer-exe',observer.exePath,
+      '--observer-pid',String(observer.pid)
+    ];
     const info = await this.windowInfo(hwnd);
     if (info.desktopId.toLowerCase() !== desktopId.toLowerCase() || info.desktopNumber == null || info.desktopNumber < 2) {
       throw new Error('Target HWND is not assigned to the requested Windows virtual Desktop 2+.');

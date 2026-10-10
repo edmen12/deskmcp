@@ -43,7 +43,8 @@ internal sealed class EditFixture:Form
     }
     protected override void WndProc(ref Message message)
     {
-        if(message.Msg is 0x06 or 0x07 or 0x08 or 0x1c or 0x0102 or 0x0201 or 0x0202)
+        if(message.Msg is 0x06 or 0x07 or 0x08 or 0x1c or 0x0100 or 0x0101 or 0x0102
+            or 0x0200 or 0x0201 or 0x0202 or 0x0203 or 0x0204 or 0x0205 or 0x020A)
             Log("ROOT_WM_"+message.Msg.ToString("X")+" W="+message.WParam.ToInt64());
         base.WndProc(ref message);
     }

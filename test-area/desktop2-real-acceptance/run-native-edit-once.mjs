@@ -26,7 +26,7 @@ const root=path.resolve(here,'../..');
 const main=path.resolve(root,'../DeskMCP');
 const lease=process.argv[2],stage=process.argv[3],sentinel=process.argv[4];
 if(process.argv.length!==5||!['inspect','write','deny-stale','button-inspect','button-click',
-     'list-inspect','list-scroll','list-deny-stale'].includes(stage)
+     'list-inspect','list-scroll','list-deny-stale','background-matrix','full-matrix'].includes(stage)
    ||sentinel!=='OWNED_WINFORMS_NATIVE_EDIT_ONCE'
    ||!/^[0-9a-f]{8}-[0-9a-f-]{27}$/iu.test(lease??''))
   throw Error('EXPLICIT_TEST_LEASE_STAGE_AND_OWNED_FIXTURE_REQUIRED');
@@ -67,15 +67,17 @@ const runtime={
   windows:new ComputerWindowRegistry(),observations:new ComputerObservationRegistry(),
   coordinator:new ComputerUseCoordinator()
 };
-const computer=new Desktop2ComputerUseCandidate(runtime,direct,()=>inventory.list());
+const computer=new Desktop2ComputerUseCandidate(runtime,direct,()=>inventory.list(),native);
 const session=new Desktop2ComputerUseSession(lease,inventory,watcher,computer);
-let child,watch,trip=false;
+let child,watch,trip=false,expectedLeaseGeneration;
 const value='D2_NATIVE_WINFORMS_ONE_SHOT';
 const result={
   stage,pass:false,desktopBefore:undefined,desktopAfter:undefined,
   claimedForegroundSafety:false,tripwire:false,error:undefined,
   ownedGuiExitConfirmed:false,observerExitConfirmed:false,
+  leaseHeldThroughTeardown:false,
   observed:[],appCallbackCount:0,appButtonCallbackCount:0,appListTopChanges:[],
+  backgroundActions:[],backgroundAppWitnesses:[],
   appFocusEvents:[],observerEventPath:null,
   appEventPath:app,timelinePath:timeline
 };
@@ -112,6 +114,7 @@ try{
     ||proof.control.desktopId?.toLowerCase()!==proof.binding.desktopId.toLowerCase())
     throw Error('OWNER_DESKTOP1_AND_ACTIVE_DESKTOP2_AGENT_LEASE_REQUIRED');
   result.desktopBefore=1;
+  expectedLeaseGeneration=proof.control.generation;
   // Protect the owner PC before spawning even the monitor subprocess.
   // Low RAM must fail closed rather than slow or stall Desktop1.
   const memory=await requireSafeNativeGuiMemory();
@@ -123,7 +126,7 @@ try{
   log('OBSERVER_READY',{eventLog:watch.eventLog,readyFile:watch.readyFile});
   // Recheck after observer launch; do not start a GUI under sudden pressure.
   await requireSafeNativeGuiMemory();
-  child=spawn(dotnet,[fixture,ready,release,app,'60000'],{
+  child=spawn(dotnet,[fixture,ready,release,app,stage==='full-matrix'?'90000':'60000'],{
     cwd:root,shell:false,windowsHide:true,
     env:process.env,stdio:['ignore','ignore','pipe']
   });
@@ -187,6 +190,41 @@ try{
     throw Error('NATIVE_CHILD_CAPABILITY_NOT_SEMANTICALLY_VERIFIED');
   await guard('NATIVE_SNAPSHOT');
   log('NATIVE_CHILD_CAPABILITY_PASS',{controls:snap.controls});
+  if(stage==='background-matrix'||stage==='full-matrix'){
+    // One guarded target-mode observer, one real Desktop2 root window and
+    // a fresh single-use observation for EACH message action. The bridge
+    // deliberately says confirmedAppState=false: only fixture logs can prove
+    // that the app received each message.
+    const messages=[
+      {type:'move',x:315,y:185},
+      {type:'click',x:315,y:185},
+      {type:'right-click',x:315,y:185},
+      {type:'double-click',x:315,y:185},
+      {type:'drag',x:315,y:185,toX:345,toY:195,steps:4},
+      {type:'wheel',x:315,y:185,delta:-120},
+      {type:'text',text:'AGENT_BG'},
+      {type:'key',vk:65}
+    ];
+    for(const action of messages){
+      await guard('BACKGROUND_PRE_'+action.type);
+      const choices=(await session.discoverWindows()).filter(row=>
+        row.window.hwnd===first.hwnd && row.window.processId===first.pid);
+      if(choices.length!==1)throw Error('BACKGROUND_EXACT_FRESH_D2_TARGET_REQUIRED');
+      const candidate=choices[0];
+      const sent=await session.backgroundMessage({
+        windowId:candidate.windowId,
+        computerObservationId:candidate.computerObservationId,action
+      });
+      if(sent.acceptedByWindowProcedure!==true
+        ||sent.confirmedAppState!==false||sent.hostInputWasNotUsed!==true
+        ||sent.desktopNumber!==2)
+        throw Error('BACKGROUND_APP_ACK_WAS_INCORRECTLY_CLAIMED');
+      result.backgroundActions.push(action.type);
+      await guard('BACKGROUND_POST_'+action.type);
+    }
+    await sleep(350);
+    await guard('BACKGROUND_MATRIX_SETTLED');
+  }
   if(stage==='button-click'){
     // One native BM_CLICK, never SetActiveWindow or fallback global mouse.
     const clicked=await session.dispatch({
@@ -266,7 +304,65 @@ try{
     await sleep(280);
     await guard('POST_WRITE_SETTLE');
   }
+  if(stage==='full-matrix'){
+    // Real application-state witnesses on the same owned D2 window after
+    // generic root messages: TextChanged, Button.Click and ListBox.TopIndex.
+    const editSnap=await session.snapshotNativeWindow(target.windowId);
+    if(editSnap.controls.length!==1||editSnap.controls[0].canSetNativeValue!==true)
+      throw Error('FULL_MATRIX_NATIVE_EDIT_UNAVAILABLE');
+    const changed=await session.dispatch({
+      phase:'perform',windowId:target.windowId,
+      computerObservationId:editSnap.computerObservationId,
+      action:{type:'set_native_edit',
+        automationId:editSnap.controls[0].automationId,
+        value,expectedPreviousValue:''}
+    });
+    if(changed?.textReadbackConfirmed!==true)
+      throw Error('FULL_MATRIX_EDIT_VALUE_NOT_READ_BACK');
+    await guard('FULL_MATRIX_EDIT');
+    const buttonSnap=await session.snapshotNativeButtons(target.windowId);
+    if(buttonSnap.controls.length!==1||buttonSnap.controls[0].canClickNative!==true)
+      throw Error('FULL_MATRIX_NATIVE_BUTTON_UNAVAILABLE');
+    const clicked=await session.dispatch({
+      phase:'perform',windowId:target.windowId,
+      computerObservationId:buttonSnap.computerObservationId,
+      action:{type:'click_native_button',
+        automationId:buttonSnap.controls[0].automationId}
+    });
+    if(clicked?.messageDispatched!==true)
+      throw Error('FULL_MATRIX_BUTTON_MESSAGE_REJECTED');
+    await guard('FULL_MATRIX_BUTTON');
+    const listSnap=await session.snapshotNativeLists(target.windowId);
+    if(listSnap.controls.length!==1||listSnap.controls[0].canScrollNativeList!==true)
+      throw Error('FULL_MATRIX_NATIVE_LIST_UNAVAILABLE');
+    const scrolled=await session.dispatch({
+      phase:'perform',windowId:target.windowId,
+      computerObservationId:listSnap.computerObservationId,
+      action:{type:'scroll_native_list',
+        automationId:listSnap.controls[0].automationId,
+        topIndex:20,expectedPreviousTopIndex:0}
+    });
+    if(scrolled?.topIndexReadbackConfirmed!==true)
+      throw Error('FULL_MATRIX_LIST_TOPINDEX_NOT_READ_BACK');
+    await sleep(450);
+    await guard('FULL_MATRIX_NATIVE_CALLBACKS');
+  }
   const appText=await readFile(app,'utf8').catch(()=>'(missing)');
+  if(stage==='background-matrix'||stage==='full-matrix'){
+    const witness=['ROOT_WM_200','ROOT_WM_201','ROOT_WM_202',
+      'ROOT_WM_203','ROOT_WM_204','ROOT_WM_205','ROOT_WM_20A',
+      'ROOT_WM_100','ROOT_WM_101','ROOT_WM_102'];
+    result.backgroundAppWitnesses=witness.filter(message=>appText.includes(message));
+    if(result.backgroundActions.length!==8
+       ||result.backgroundAppWitnesses.length!==witness.length)
+      throw Error('BACKGROUND_WINDOW_PROCEDURE_MESSAGES_NOT_RECEIVED');
+    // This proves the Win32 WndProc saw the messages, NOT that arbitrary
+    // WPF/Electron/WinUI apps obey pointer/keyboard messages.
+    log('BACKGROUND_ROOT_WNDPROC_WITNESSED',{
+      messages:result.backgroundAppWitnesses,
+      appStateConfirmed:false
+    });
+  }
   result.appFocusEvents=appText.split(/\r?\n/).filter(line=>
     /\b(ROOT_WM_(6|7|8|1C)|EDIT_WM_(6|7|8|100|101|102)|BUTTON_WM_(6|7|8|100|101|102))\b/iu.test(line));
   result.appCallbackCount=appText.split(/\r?\n/).filter(line=>line.includes('APP_EDIT=')).length;
@@ -274,21 +370,21 @@ try{
   const clickCallbacks=appText.split(/\r?\n/).filter(line=>line.includes('APP_BUTTON_CLICK='));
   result.appButtonCallbackCount=clickCallbacks.length;
   result.appListTopChanges=appText.split(/\r?\n/).filter(line=>line.includes('APP_LIST_TOP='));
-  if(stage==='list-scroll' && (result.appListTopChanges.length!==1
+  if((stage==='list-scroll'||stage==='full-matrix') && (result.appListTopChanges.length!==1
       || !result.appListTopChanges[0].endsWith('APP_LIST_TOP=20')))
     throw Error('LISTBOX_REAL_TOPINDEX_CHANGE_NOT_CONFIRMED');
-  if(stage!=='list-scroll' && result.appListTopChanges.length!==0)
+  if(stage!=='list-scroll'&&stage!=='full-matrix' && result.appListTopChanges.length!==0)
     throw Error('LISTBOX_UNEXPECTED_SCROLL');
-  if(stage==='button-click'&&(clickCallbacks.length!==1
+  if((stage==='button-click'||stage==='full-matrix')&&(clickCallbacks.length!==1
       || !clickCallbacks[0].endsWith('APP_BUTTON_CLICK=1')))
     throw Error('NATIVE_BUTTON_REAL_CALLBACK_NOT_EXACTLY_ONCE');
-  if(stage!=='button-click'&&clickCallbacks.length!==0)
+  if(stage!=='button-click'&&stage!=='full-matrix'&&clickCallbacks.length!==0)
     throw Error('NATIVE_BUTTON_UNEXPECTED_CALLBACK');
   if(result.appFocusEvents.length)
     throw Error('APP_ACTIVATION_OR_KEYBOARD_FOCUS_EVENT_DETECTED');
-  if(stage==='write'&&(changes.length!==1 || !changes[0].endsWith('APP_EDIT=1:'+value)))
+  if((stage==='write'||stage==='full-matrix')&&(changes.length!==1 || !changes[0].endsWith('APP_EDIT=1:'+value)))
     throw Error('APP_TEXT_CHANGED_CALLBACK_MISSING_OR_EXTRA_CHARACTERS');
-  if(stage!=='write'&&changes.length!==0)
+  if(stage!=='write'&&stage!=='full-matrix'&&changes.length!==0)
     throw Error('NON_WRITING_NATIVE_OPERATION_CAUSED_APP_TEXT_CHANGE');
   await guard('FINAL');
   result.pass=true;
@@ -330,8 +426,23 @@ try{
   result.tripwire=trip;
   const last=await native.info().catch(()=>({currentDesktopNumber:null}));
   result.desktopAfter=last.currentDesktopNumber;
+  // External orchestrator MUST keep the exact HUD lease alive until both
+  // owned GUI and watcher have exited. Releasing it early invalidates PASS.
+  try{
+    const held=await leases.assertLease(lease);
+    result.leaseHeldThroughTeardown=Boolean(held.control.active
+      &&held.control.leaseId?.toLowerCase()===lease.toLowerCase()
+      &&held.control.desktopNumber===2
+      &&held.control.generation===expectedLeaseGeneration
+      &&held.control.desktopId?.toLowerCase()===held.binding.desktopId.toLowerCase());
+  }catch{
+    result.leaseHeldThroughTeardown=false;
+  }
+  if(!result.leaseHeldThroughTeardown)
+    result.error=result.error||'HUD_LEASE_RELEASED_BEFORE_GUI_TEARDOWN';
   result.pass=Boolean(result.pass&&result.ownedGuiExitConfirmed
-    &&result.observerExitConfirmed&&!trip&&last.currentDesktopNumber===1
+    &&result.observerExitConfirmed&&result.leaseHeldThroughTeardown
+    &&!trip&&last.currentDesktopNumber===1
     &&result.appFocusEvents.length===0&&!result.error);
   result.claimedForegroundSafety=result.pass; // ONLY owned one-off fixture
   await writeFile(path.join(out,'result.json'),JSON.stringify(result,null,2));
@@ -339,6 +450,7 @@ try{
     tripwire:result.tripwire,error:result.error,
     ownedGuiExitConfirmed:result.ownedGuiExitConfirmed,
     observerExitConfirmed:result.observerExitConfirmed,
+    leaseHeldThroughTeardown:result.leaseHeldThroughTeardown,
     appCallbackCount:result.appCallbackCount,
     appFocusEvents:result.appFocusEvents.length});
 }
