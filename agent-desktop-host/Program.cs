@@ -269,6 +269,7 @@ internal static partial class Program
                 "window-info" => WindowInfo(ParseHwnd(Required(options, "hwnd")), vda),
                 "list-virtual-windows" => ListVirtualWindows(ParseDesktopId(Required(options, "desktop-id")), vda),
                 "probe-hidden-winver" => ProbeHiddenWinver(ParsePositiveInt(Required(options, "pid"), "pid"), Required(options, "started-utc"), vda),
+                "probe-hidden-chrome" => ProbeHiddenChrome(ParsePositiveInt(Required(options, "pid"), "pid"), Required(options, "started-utc"), vda),
                 "move-owned-hidden-winver" => MoveOwnedHiddenWinver(
                     ParseHwnd(Required(options, "hwnd")),
                     ParsePositiveInt(Required(options, "pid"), "pid"),
