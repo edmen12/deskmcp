@@ -86,7 +86,7 @@ Each binding is shown separately in Settings:
 
 Use **Unbind** only on an idle or unavailable binding. A controlling desktop shows **In Use** and must exit Agent Control first. DeskMCP identifies bindings by the stable Windows virtual-desktop GUID, so ordinary Desktop 2/3/4 renumbering does not change which desktop belongs to a lease.
 
-When an agent controls a desktop, the blue safety edge and **Exit Agent Control** HUD appear only while you are viewing that controlled desktop. Switching back to Desktop 1 hides the HUD without stopping the agent. Browser Automation started with an Agent Desktop lease keeps its page/login state for the lifetime of that lease and closes when Agent Control exits, is revoked, or its linked Task Room completes.
+When an agent controls a desktop, the blue safety edge and **Exit Agent Control** HUD appear only while you are viewing that controlled desktop. Switching back to Desktop 1 hides the HUD without stopping the agent. **You may also manually switch into a controlled Desktop 2/3 to sign in or interact with an app; Agent Control must not force you back to Desktop 1.** The blue HUD and Exit Agent Control button remain on that controlled desktop. Agent-initiated background operations must not switch your current desktop. Browser Automation started with an Agent Desktop lease keeps its page/login state for the lifetime of that lease and closes when Agent Control exits, is revoked, or its linked Task Room completes.
 
 ### Dynamic MCP OAuth
 
