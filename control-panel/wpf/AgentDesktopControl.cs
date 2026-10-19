@@ -337,7 +337,13 @@ internal sealed class AgentDesktopOverlay : IDisposable
 
         IntPtr edgeHwnd = new WindowInteropHelper(edgeWindow).EnsureHandle();
         edgeWindow.BeginAnimation(UIElement.OpacityProperty, null);
-        edgeWindow.Opacity = 0;
+        // Keep the top-level HWND at stable opacity. Changing Window.Opacity
+        // while the border pulses can make Windows lose its Virtual Desktop ID.
+        // Hide only the child visual until both safety windows are moved.
+        edgeWindow.Opacity = 1;
+        if (edgeWindow.Content is not UIElement edgeVisual)
+            throw new InvalidOperationException("Agent Desktop safety edge visual is missing.");
+        edgeVisual.Opacity = 0;
         IntPtr hudHwnd = new WindowInteropHelper(hudWindow).EnsureHandle();
         hudWindow.Opacity = 0;
         hudWindow.IsHitTestVisible = false;
@@ -397,21 +403,24 @@ internal sealed class AgentDesktopOverlay : IDisposable
             Focusable = false,
             IsHitTestVisible = false,
             Content = line,
-            Opacity = 0.72
+            Opacity = 1
         };
         return edge;
     }
 
     private static void StartEdgePulse(Window edge)
     {
-        edge.Opacity = 0.72;
+        if (edge.Content is not UIElement content)
+            throw new InvalidOperationException("Agent Desktop safety edge visual is missing.");
+        edge.Opacity = 1;
+        content.Opacity = 0.72;
         DoubleAnimation pulse = new DoubleAnimation(0.48, 0.92, TimeSpan.FromMilliseconds(1250))
         {
             AutoReverse = true,
             RepeatBehavior = RepeatBehavior.Forever,
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
         };
-        edge.BeginAnimation(UIElement.OpacityProperty, pulse);
+        content.BeginAnimation(UIElement.OpacityProperty, pulse);
     }
 
     private Window CreateHud(string taskLabel)
