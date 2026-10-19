@@ -537,3 +537,22 @@ test('Agent Desktop resolves a window to its active lease by actual virtual desk
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('Agent Desktop safety edge pulses only its visual content, keeping the VDA-owned HWND stable', async () => {
+  const source = await readFile(path.resolve('control-panel/wpf/AgentDesktopControl.cs'), 'utf8');
+  const edgePulse = source.split('private static void StartEdgePulse(')[1]?.split('private Window CreateHud(')[0];
+  assert.ok(edgePulse, 'Missing dedicated edge pulse function');
+  // The real Windows observer caught Edge returning Guid.Empty while HUD remained on Desktop 2.
+  // Never animate WPF Window.Opacity on the virtual-desktop-owned top-level HWND.
+  assert.doesNotMatch(edgePulse, /edge\.BeginAnimation\(UIElement\.OpacityProperty/u);
+  assert.match(edgePulse, /content\.BeginAnimation\(UIElement\.OpacityProperty/u);
+  assert.match(edgePulse, /edge\.Opacity\s*=\s*1/u);
+  const show = source.split('public async Task ShowOnDesktopAsync(')[1]?.split('private Window CreateEdge(')[0];
+  assert.ok(show);
+  assert.match(show, /edgeWindow\.Opacity\s*=\s*1/u);
+  assert.match(show, /edgeVisual\.Opacity\s*=\s*0/u);
+  assert.match(show, /AgentDesktopWindowMover\.MoveOwnWindow\(edgeWindow, desktopId\)/u);
+  assert.match(show, /StartEdgePulse\(edgeWindow\)/u);
+  assert.ok(show.indexOf('MoveOwnWindow(edgeWindow, desktopId)') < show.indexOf('StartEdgePulse(edgeWindow)'),
+    'The test edge must not pulse before it is on Desktop 2');
+});
