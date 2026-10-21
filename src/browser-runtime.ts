@@ -391,6 +391,9 @@ export class BrowserRuntime {
   private cdpPromise: Promise<BrowserCdpDriver> | undefined;
   private readonly browserEngine: BrowserRuntimeInfo['engine'];
   private mutationChain: Promise<void> = Promise.resolve();
+  // Ego-style Space boundary: a session cannot observe a half-completed action.
+  // Independent browser sessions retain parallel observation/action execution.
+  private readonly sessionOperationChains = new Map<string, Promise<void>>();
   private sessionReaper: NodeJS.Timeout | undefined;
 
   constructor(
@@ -474,6 +477,23 @@ export class BrowserRuntime {
     await previous;
     try { return await operation(); }
     finally { release(); }
+  }
+
+  private async serializeSessionOperation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const normalized = validateSessionId(sessionId);
+    const previous = this.sessionOperationChains.get(normalized) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    this.sessionOperationChains.set(normalized, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      if (this.sessionOperationChains.get(normalized) === current) {
+        this.sessionOperationChains.delete(normalized);
+      }
+      release();
+    }
   }
 
   private cleanupExpiredObservations(now = Date.now()): void {
@@ -646,7 +666,7 @@ export class BrowserRuntime {
           if (!processActive || record.agentDesktopPlacementFailures >= AGENT_DESKTOP_REAPER_MAX_CONSECUTIVE_FAILURES) {
             const detail = error instanceof Error ? error.message : String(error);
             process.stderr.write(`[DeskMCP] Agent Desktop browser placement failed ${record.agentDesktopPlacementFailures} consecutive time(s); disposing session ${record.sessionId}: ${detail}\n`);
-            await this.disposeRecord(record);
+            await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record));
           }
         }
       }
@@ -656,7 +676,7 @@ export class BrowserRuntime {
         !record.agentDesktopLeaseId && now - record.lastActivityAt >= this.directSessionIdleTimeoutMs
       );
       for (const record of idleDirectSessions) {
-        try { await this.disposeRecord(record); }
+        try { await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record)); }
         catch { /* Keep ownership if termination fails; retry on the next reaper pass. */ }
       }
     });
@@ -876,7 +896,7 @@ export class BrowserRuntime {
     readonly page_id: string;
     readonly pages: readonly BrowserPageSummary[];
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       const pageId = await (await this.driver()).createPage(record.port, url, timeoutMs);
@@ -888,7 +908,7 @@ export class BrowserRuntime {
         page_id: pageId,
         pages: await (await this.driver()).listPages(record.port, timeoutMs)
       };
-    });
+    }));
   }
 
   async selectPage(sessionId: string, pageId: string, timeoutMs = 5000): Promise<{
@@ -898,7 +918,7 @@ export class BrowserRuntime {
     readonly pages: readonly BrowserPageSummary[];
     readonly observation_required_before_next_action: true;
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
@@ -912,7 +932,7 @@ export class BrowserRuntime {
         pages: await (await this.driver()).listPages(record.port, timeoutMs),
         observation_required_before_next_action: true
       };
-    });
+    }));
   }
 
   async closePage(sessionId: string, pageId: string, timeoutMs = 5000): Promise<{
@@ -921,7 +941,7 @@ export class BrowserRuntime {
     readonly closed: true;
     readonly pages: readonly BrowserPageSummary[];
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
@@ -934,7 +954,7 @@ export class BrowserRuntime {
         closed: true,
         pages: await (await this.driver()).listPages(record.port, timeoutMs)
       };
-    });
+    }));
   }
 
   async handleDialog(
@@ -949,7 +969,7 @@ export class BrowserRuntime {
     readonly handled: true;
     readonly observation_required_before_next_action: true;
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
@@ -962,10 +982,14 @@ export class BrowserRuntime {
         handled: true,
         observation_required_before_next_action: true
       };
-    });
+    }));
   }
 
   async find(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
+    return this.serializeSessionOperation(sessionId, () => this.findUnlocked(sessionId, pageId, options));
+  }
+
+  private async findUnlocked(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
@@ -981,6 +1005,10 @@ export class BrowserRuntime {
   }
 
   async snapshot(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
+    return this.serializeSessionOperation(sessionId, () => this.snapshotUnlocked(sessionId, pageId, options));
+  }
+
+  private async snapshotUnlocked(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
@@ -1006,6 +1034,17 @@ export class BrowserRuntime {
   }
 
   async download(
+    sessionId: string,
+    pageId: string | undefined,
+    browserObservationId: string,
+    selector: string | undefined,
+    ref: string | undefined,
+    options: BrowserSnapshotOptions = {}
+  ): Promise<BrowserSnapshotResult> {
+    return this.serializeSessionOperation(sessionId, () => this.downloadUnlocked(sessionId, pageId, browserObservationId, selector, ref, options));
+  }
+
+  private async downloadUnlocked(
     sessionId: string,
     pageId: string | undefined,
     browserObservationId: string,
@@ -1062,11 +1101,21 @@ export class BrowserRuntime {
       await rm(tempPath, { force: true }).catch(() => undefined);
     }
 
-    const fresh = await this.snapshot(record.sessionId, effectivePageId, options);
+    const fresh = await this.snapshotUnlocked(record.sessionId, effectivePageId, options);
     return { ...fresh, download: artifact };
   }
 
   async act(
+    sessionId: string,
+    pageId: string | undefined,
+    browserObservationId: string,
+    actions: readonly BrowserAction[],
+    options: BrowserSnapshotOptions = {}
+  ): Promise<BrowserSnapshotResult> {
+    return this.serializeSessionOperation(sessionId, () => this.actUnlocked(sessionId, pageId, browserObservationId, actions, options));
+  }
+
+  private async actUnlocked(
     sessionId: string,
     pageId: string | undefined,
     browserObservationId: string,
@@ -1088,18 +1137,18 @@ export class BrowserRuntime {
     const effectivePageId = await (await this.driver()).act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
     await this.refreshAgentDesktopPlacement(record);
 
-    return this.snapshot(record.sessionId, effectivePageId, options);
+    return this.snapshotUnlocked(record.sessionId, effectivePageId, options);
   }
 
   async close(sessionId: string): Promise<{ session_id: string; closed: boolean }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const normalized = validateSessionId(sessionId);
       const record = this.sessions.get(normalized);
       if (!record) return { session_id: normalized, closed: false };
       await this.disposeRecord(record);
       return { session_id: normalized, closed: true };
-    });
+    }));
   }
 
   async closeAll(): Promise<void> {
@@ -1109,7 +1158,7 @@ export class BrowserRuntime {
     }
     await this.serializeMutation(async () => {
       const records = [...this.sessions.values()];
-      for (const record of records) await this.disposeRecord(record);
+      for (const record of records) await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record));
     });
   }
 }

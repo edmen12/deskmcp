@@ -430,6 +430,82 @@ test('browser observations are one-shot and reject stale page state', async t =>
   await browser.closeAll();
 });
 
+
+class GatedActionDriver extends FakeCdpDriver {
+  readonly actionEntered: Promise<void>;
+  private signalEntered!: () => void;
+  private resume!: () => void;
+  readonly releaseAction: () => void;
+  constructor() {
+    super();
+    this.actionEntered = new Promise(resolve => { this.signalEntered = resolve; });
+    const resumePromise = new Promise<void>(resolve => { this.resume = resolve; });
+    this.releaseAction = () => this.resume();
+    this.waitForRelease = resumePromise;
+  }
+  private readonly waitForRelease: Promise<void>;
+  override async act(port: number, pageId: string | undefined, actions: readonly BrowserAction[]): Promise<string> {
+    this.signalEntered();
+    await this.waitForRelease;
+    return super.act(port, pageId, actions);
+  }
+}
+
+test('same-session snapshot waits for in-flight action while independent browser sessions remain parallel', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const driver = new GatedActionDriver();
+  const controller = new FakeProcessController(path.join(root, 'browser'));
+  const { browser } = await configuredRuntime(root, controller, driver);
+  const first = await browser.start({ profile_id: 'gate-first' });
+  const second = await browser.start({ profile_id: 'gate-second' });
+  const observed = await browser.snapshot(first.session_id, first.page_id, { screenshot: false });
+  const inFlight = browser.act(first.session_id, first.page_id, observed.browser_observation_id, [{ type: 'click', selector: '#link' }], { screenshot: false });
+  await driver.actionEntered;
+
+  let firstSnapshotSettled = false;
+  const queuedSnapshot = browser.snapshot(first.session_id, first.page_id, { screenshot: false }).then(value => {
+    firstSnapshotSettled = true;
+    return value;
+  });
+  const unrelated = await browser.snapshot(second.session_id, second.page_id, { screenshot: false });
+  assert.equal(unrelated.session_id, second.session_id);
+  assert.equal(firstSnapshotSettled, false, 'same-session snapshot must not interleave with action');
+
+  driver.releaseAction();
+  await inFlight;
+  await queuedSnapshot;
+  assert.equal(firstSnapshotSettled, true);
+  await browser.closeAll();
+});
+
+
+test('closing a browser session waits for its in-flight action instead of terminating the owned process', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const driver = new GatedActionDriver();
+  const controller = new FakeProcessController(path.join(root, 'browser'));
+  const { browser } = await configuredRuntime(root, controller, driver);
+  const session = await browser.start({ profile_id: 'gate-close' });
+  const observed = await browser.snapshot(session.session_id, session.page_id, { screenshot: false });
+  const inFlight = browser.act(session.session_id, session.page_id, observed.browser_observation_id, [{ type: 'fill', selector: '#input', value: 'hello' }], { screenshot: false });
+  await driver.actionEntered;
+
+  let closedSettled = false;
+  const close = browser.close(session.session_id).then(value => {
+    closedSettled = true;
+    return value;
+  });
+  await Promise.resolve();
+  assert.equal(controller.terminated.length, 0);
+  assert.equal(closedSettled, false);
+  driver.releaseAction();
+  await inFlight;
+  assert.equal((await close).closed, true);
+  assert.equal(controller.terminated.length, 1);
+  await browser.closeAll();
+});
+
 test('one browser observation authorizes at most one mutating action', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
