@@ -177,6 +177,25 @@ try {
   const bAction = await runtime.act(started2.session_id,started2.page_id,b.browser_observation_id,[{type:'fill',selector:'#field',value:'independent'}],{screenshot:false});
   requireCondition(bAction.session_id === started2.session_id, 'second session remains usable');
   facts.checks.push({check:'other browser session survives first session close',pass:true});
+
+  console.log('STEP=workflow_real_edge');
+  const workflowStarting = await runtime.snapshot(started2.session_id, started2.page_id, {screenshot:false});
+  const workflow = await runtime.runGuardedWorkflow(started2.session_id, started2.page_id, workflowStarting.browser_observation_id, [
+    { action:{type:'fill',selector:'#field',value:'workflow-real-edge'},expected_url:url },
+    { action:{type:'click',selector:'#go'},expected_url:url,after_text:'Clicked: workflow-real-edge' }
+  ]);
+  requireCondition(workflow.completed_steps === 2 && workflow.final_snapshot.text.includes('Clicked: workflow-real-edge'),
+    'two-step real Chromium workflow must produce actual final DOM effect');
+  facts.checks.push({check:'real Edge two-step bounded workflow: fresh observation for each mutation and DOM confirmation',pass:true});
+
+  const workflowNegativeStarting = await runtime.snapshot(started2.session_id, started2.page_id,{screenshot:false});
+  await assert.rejects(runtime.runGuardedWorkflow(started2.session_id,started2.page_id,workflowNegativeStarting.browser_observation_id,[
+    {action:{type:'fill',selector:'#field',value:'should-not-be-clicked'},expected_url:url},
+    {action:{type:'click',selector:'#go'},expected_url:url+'wrong'}
+  ]), error => error?.name==='BrowserWorkflowInterrupted' && error.completed_steps===1 && error.step_index===1 && error.dispatch_uncertain===false);
+  const verifyNoRepeat = await runtime.snapshot(started2.session_id,started2.page_id,{screenshot:false});
+  requireCondition(verifyNoRepeat.text.includes('Clicked: workflow-real-edge'), 'guard mismatch must not click');
+  facts.checks.push({check:'real Edge wrong URL guard prevents later click after prior fill',pass:true});
   const [remainingId] = controller.processes.keys();
   requireCondition(Boolean(remainingId) && controller.processes.size === 1, 'second owned browser process remains');
   await controller.terminate(remainingId);

@@ -506,6 +506,189 @@ test('closing a browser session waits for its in-flight action instead of termin
   await browser.closeAll();
 });
 
+
+test('guarded browser workflow performs two fresh-observation mutations without requiring repeated MCP roundtrips', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const { browser, cdp } = await configuredRuntime(root);
+  const session = await browser.start({ profile_id: 'guarded-two' });
+  const observed = await browser.snapshot(session.session_id, session.page_id, { screenshot: false });
+  const result = await browser.runGuardedWorkflow(session.session_id, session.page_id, observed.browser_observation_id, [
+    { action: { type: 'fill', selector: '#input', value: 'hello' }, expected_url: 'https://example.com/' },
+    { action: { type: 'click', selector: '#go' }, expected_url: 'https://example.com/', expected_text: 'Browser snapshot', after_text: 'Browser snapshot' }
+  ]);
+  assert.equal(result.completed_steps, 2);
+  assert.equal(result.final_snapshot.session_id, session.session_id);
+  assert.equal(cdp.actions.length, 2);
+  assert.deepEqual(cdp.actions.map(batch => batch[0]?.type), ['fill', 'click']);
+  await assert.rejects(
+    browser.act(session.session_id, session.page_id, observed.browser_observation_id, [{type:'click',selector:'#go'}], { screenshot:false }),
+    /consumed|expired|unknown/i
+  );
+  await browser.closeAll();
+});
+
+test('guarded browser workflow stops before a mismatched page guard; later clicks are not sent', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const { browser, cdp } = await configuredRuntime(root);
+  const session = await browser.start({ profile_id: 'guarded-stop' });
+  const first = await browser.snapshot(session.session_id, session.page_id, { screenshot: false });
+  await assert.rejects(
+    browser.runGuardedWorkflow(session.session_id, session.page_id, first.browser_observation_id, [
+      { action: { type: 'fill', selector: '#input', value: 'one' }, expected_url: 'https://example.com/' },
+      { action: { type: 'click', selector: '#go' }, expected_url: 'https://example.com/other' }
+    ]),
+    error => {
+      assert.ok(error instanceof Error);
+      const details = error as Error & {completed_steps: number; step_index: number; dispatch_uncertain: boolean};
+      assert.equal(details.name, 'BrowserWorkflowInterrupted');
+      assert.equal(details.completed_steps, 1);
+      assert.equal(details.step_index, 1);
+      assert.equal(details.dispatch_uncertain, false);
+      return true;
+    }
+  );
+  assert.deepEqual(cdp.actions.map(batch=>batch[0]?.type), ['fill']);
+  await browser.closeAll();
+});
+
+test('guarded browser workflow validates every future step before consuming the initial observation', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const { browser, cdp } = await configuredRuntime(root);
+  const session = await browser.start({ profile_id: 'guarded-validate' });
+  const observation = await browser.snapshot(session.session_id, session.page_id, { screenshot: false });
+  await assert.rejects(browser.runGuardedWorkflow(session.session_id, session.page_id, observation.browser_observation_id, [
+    { action: { type:'click', selector:'#go' }, expected_url:'https://example.com/' },
+    { action: { type:'click', selector:'#go' }, expected_url:'*' }
+  ]), /requires a bounded exact HTTP/);
+  const accepted = await browser.act(session.session_id, session.page_id, observation.browser_observation_id,
+    [{ type:'click', selector:'#go' }], { screenshot: false });
+  assert.ok(accepted.browser_observation_id);
+  assert.equal(cdp.actions.length, 1);
+  await browser.closeAll();
+});
+
+test('guarded browser workflow reports unknown delivery without automatically replaying a failing action', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  class AmbiguousDeliveryDriver extends FakeCdpDriver {
+    override async act(port: number, pageId: string | undefined, actions: readonly BrowserAction[]): Promise<string> {
+      await super.act(port,pageId,actions);
+      throw new Error('Injected transport disconnect after delivery');
+    }
+  }
+  const cdp = new AmbiguousDeliveryDriver();
+  const { browser } = await configuredRuntime(root, undefined, cdp);
+  const session = await browser.start({ profile_id: 'guarded-ambiguous' });
+  const observation = await browser.snapshot(session.session_id, session.page_id, { screenshot: false });
+  await assert.rejects(browser.runGuardedWorkflow(session.session_id,session.page_id,observation.browser_observation_id,[
+    { action: { type:'click', selector:'#go' },expected_url:'https://example.com/' },
+    { action: { type:'click', selector:'#go' },expected_url:'https://example.com/' }
+  ]), error => {
+    assert.ok(error instanceof Error);
+    const details = error as Error & {completed_steps: number; step_index: number; dispatch_uncertain: boolean};
+    assert.equal(details.name, 'BrowserWorkflowInterrupted');
+    assert.equal(details.completed_steps, 0);
+    assert.equal(details.step_index, 0);
+    assert.equal(details.dispatch_uncertain, true);
+    return true;
+  });
+  assert.equal(cdp.actions.length, 1, 'no unsafe replay after uncertain click delivery');
+  await browser.closeAll();
+});
+
+test('guarded browser workflow refuses a stale starting observation before any mutation', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });
+  const { browser, cdp } = await configuredRuntime(root);
+  const session = await browser.start({ profile_id: 'guarded-stale' });
+  const observation = await browser.snapshot(session.session_id, session.page_id, { screenshot: false });
+  cdp.stateTokenValue = 'changed-state';
+  await assert.rejects(browser.runGuardedWorkflow(session.session_id, session.page_id, observation.browser_observation_id, [
+    { action: {type:'click',selector:'#go'}, expected_url:'https://example.com/' }
+  ]), error => {
+    assert.ok(error instanceof Error);
+    const details = error as Error & {completed_steps: number; step_index: number; dispatch_uncertain: boolean};
+    assert.equal(details.name,'BrowserWorkflowInterrupted');
+    assert.equal(details.dispatch_uncertain,false);
+    assert.equal(details.completed_steps,0);
+    return true;
+  });
+  assert.equal(cdp.actions.length,0);
+  await browser.closeAll();
+});
+
+
+test('guarded workflow fails closed for snapshot refs and preserves the caller observation', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive:true, force:true })); });
+  const { browser, cdp } = await configuredRuntime(root);
+  const session = await browser.start({ profile_id:'guarded-no-ref' });
+  const observation = await browser.snapshot(session.session_id,session.page_id,{screenshot:false});
+  await assert.rejects(browser.runGuardedWorkflow(session.session_id,session.page_id,observation.browser_observation_id,[
+    {action:{type:'click',ref:'e1'},expected_url:'https://example.com/'}
+  ]), /requires a stable selector/);
+  await browser.act(session.session_id,session.page_id,observation.browser_observation_id,
+    [{type:'click',selector:'#go'}],{screenshot:false});
+  assert.equal(cdp.actions.length,1);
+  await browser.closeAll();
+});
+
+test('guarded workflow failed postcondition stops before dispatching later mutations', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive:true, force:true })); });
+  const { browser, cdp } = await configuredRuntime(root);
+  const session = await browser.start({ profile_id:'guarded-after-failure' });
+  const observation = await browser.snapshot(session.session_id,session.page_id,{screenshot:false});
+  await assert.rejects(browser.runGuardedWorkflow(session.session_id,session.page_id,observation.browser_observation_id,[
+    {action:{type:'fill',selector:'#input',value:'hello'},expected_url:'https://example.com/',after_text:'NOT_IN_PAGE'},
+    {action:{type:'click',selector:'#go'},expected_url:'https://example.com/'}
+  ]), error => {
+    assert.ok(error instanceof Error);
+    const details = error as Error & {completed_steps:number;step_index:number;dispatch_uncertain:boolean};
+    assert.equal(details.completed_steps,1);
+    assert.equal(details.step_index,0);
+    assert.equal(details.dispatch_uncertain,false);
+    assert.match(details.message,/Never automatically replay/i);
+    return true;
+  });
+  assert.deepEqual(cdp.actions.map(batch=>batch[0]?.type),['fill']);
+  await browser.closeAll();
+});
+
+test('guarded workflow owns one session gate across both mutations while unrelated sessions remain usable', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive:true,force:true })); });
+  const driver = new GatedActionDriver();
+  const controller = new FakeProcessController(path.join(root,'browser'));
+  const { browser } = await configuredRuntime(root,controller,driver);
+  const first = await browser.start({profile_id:'workflow-lock-one'});
+  const second = await browser.start({profile_id:'workflow-lock-two'});
+  const observed = await browser.snapshot(first.session_id,first.page_id,{screenshot:false});
+  const running = browser.runGuardedWorkflow(first.session_id,first.page_id,observed.browser_observation_id,[
+    {action:{type:'fill',selector:'#input',value:'start'},expected_url:'https://example.com/'},
+    {action:{type:'click',selector:'#go'},expected_url:'https://example.com/'}
+  ]);
+  await driver.actionEntered;
+  let sameSessionFinished=false;
+  const queued=browser.snapshot(first.session_id,first.page_id,{screenshot:false}).then(value=>{
+    sameSessionFinished=true;
+    return value;
+  });
+  const other=await browser.snapshot(second.session_id,second.page_id,{screenshot:false});
+  assert.equal(other.session_id,second.session_id);
+  assert.equal(sameSessionFinished,false);
+  driver.releaseAction();
+  const outcome=await running;
+  assert.equal(outcome.completed_steps,2);
+  await queued;
+  assert.equal(sameSessionFinished,true);
+  assert.deepEqual(driver.actions.map(batch=>batch[0]?.type),['fill','click']);
+  await browser.closeAll();
+});
+
 test('one browser observation authorizes at most one mutating action', async t => {
   const root = await tempRoot();
   t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive: true, force: true })); });

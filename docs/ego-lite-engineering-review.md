@@ -31,6 +31,25 @@ The published Ego Lite repository contains the agent SDK and Skill, not the brow
 - Test-owned process inventory after run: **0**; fresh temporary profiles deleted; two earlier failed-test/probe directories separately verified unowned and cleaned. An earlier Chrome headless test did not produce a CDP port and was stopped through its own DeskMCP process session; this environment result is **BLOCKED**, not evidence the DeskMCP browser engine is broken.
 - Long-running multi-agent stress, Chrome-specific success, visible Windows Virtual Desktop 2, user handoff, installed DeskMCP runtime and full production E2E remain **OPEN**. No install, restart, merge, push, Production change or use of the personal Chrome profile.
 
+## Guarded workflow candidate (2026-10-22, SOURCE + REAL EDGE E2E VERIFIED)
+
+- BrowserRuntime.runGuardedWorkflow() is internal candidate-only; NOT registered as an MCP tool and does not change the 27 default tool schemas. No installed Gateway uses it.
+- Bounded declarative steps (1-5), only click, fill, set_checked, select. Each requires exact HTTP(S) expected_url, optional expected_text and after_text; no navigation, uploads, raw JavaScript or system-key actions.
+- Starts from unconsumed page-scoped browser_observation_id. Holds per-session FIFO gate; before every action checks fresh snapshot guard and existing stale-token logic, then produces a new snapshot for the next action. The first user-supplied observation is used exactly once.
+- Disallows snapshot element refs in compiled multi-step sequence; only bounded nonempty stable selector strings allowed. Never reinterprets old refs after DOM changes.
+- Invalid future steps rejected before caller observation consumed; stale initial state, mismatching guards and postconditions fail closed. No replay after ambiguous dispatch. Fresh internal observations invalidated on error; already executed steps are never automatically rolled back.
+- Current tests: TypeScript build PASS; Browser suite 64/64 PASS; repeatable real Microsoft Edge local headless fixture 10/10 scoped checks PASS, including fill/click DOM callback and wrong-URL preventing later click. Not a general website reliability guarantee.
+- Open: independent code/security review, approval and auditing at an eventual MCP entrypoint, cancellation/deadline semantics, multi-hour crash and profile soak, controlled human takeover. Do not expose a tool or merge based on local tests alone.
+
+## Human takeover boundary: DESIGN ONLY, not implemented
+
+1. Ownership states: agent-owned -> pause requested -> human-owned -> locally confirmed resume requested -> agent-owned. Human-owned sessions must block Agent snapshots and mutations, protecting credentials entered by people.
+2. Handoff drains in-flight operations through session gate before ownership changes, invalidates all Agent observations and pending action authorization. Late Agent requests fail.
+3. Only a trusted LOCAL DeskMCP Control Panel/HUD event can confirm resume. A remote MCP caller must never set humanConfirmed, fake a resume, or reuse an old observation. After resume the Agent must get a fresh snapshot.
+4. Visible interactive browser belongs to an Agent Desktop lease and dedicated profile. A user may switch to Agent Desktop to sign in; the Agent must never automatically switch or steal foreground Desktop 1.
+5. HUD/lease/browser-process loss, UAC, lock screen and user Exit Agent Control all fail closed. Human-owned sessions require a deliberate idle lifetime rule, not the short Agent idle cleanup.
+6. Real Windows native UI, foreground and desktop watcher, audit events and rejection tests are required before implementation can be approved. No user takeover E2E is claimed.
+
 ## Next proposed experiments
 
 1. Real-browser concurrency with isolated test-only profiles and crash/reaper conditions. No personal Chrome profile.

@@ -137,6 +137,72 @@ export interface BrowserFindResult extends Omit<BrowserFindData, 'state_token'> 
   readonly browser_observation_id: string;
 }
 
+/** Experimental, not exposed as an MCP tool until safety/audit review. */
+export type BrowserGuardedWorkflowAction = Extract<BrowserAction, { readonly type: 'click' | 'fill' | 'select' | 'set_checked' }>;
+
+export interface BrowserGuardedWorkflowStep {
+  readonly action: BrowserGuardedWorkflowAction;
+  /** Exact URL observed immediately before this step. No wildcard origins or paths. */
+  readonly expected_url: string;
+  /** Optional additional visible page text, verified against each fresh snapshot. */
+  readonly expected_text?: string;
+  /** Optional positive page text verification after this step is dispatched. */
+  readonly after_text?: string;
+}
+
+export interface BrowserGuardedWorkflowResult {
+  readonly completed_steps: number;
+  readonly final_snapshot: BrowserSnapshotResult;
+}
+
+export class BrowserWorkflowInterrupted extends Error {
+  constructor(
+    readonly step_index: number,
+    readonly completed_steps: number,
+    readonly dispatch_uncertain: boolean,
+    reason: string
+  ) {
+    super('Browser guarded workflow stopped at step ' + (step_index + 1) + ': ' + reason + '. Never automatically replay this workflow.');
+    this.name = 'BrowserWorkflowInterrupted';
+  }
+}
+
+function validateGuardedWorkflow(steps: readonly BrowserGuardedWorkflowStep[]): void {
+  if (!Array.isArray(steps) || steps.length < 1 || steps.length > 5) {
+    throw new Error('Guarded browser workflows require 1 to 5 explicit steps.');
+  }
+  for (const [index, step] of steps.entries()) {
+    if (!step || !step.action || !['click','fill','select','set_checked'].includes(step.action.type)) {
+      throw new Error('Guarded browser step ' + (index + 1) + ' has an unsupported action.');
+    }
+    if (typeof step.expected_url !== 'string' || step.expected_url.length > 8192 ||
+      !/^https?:\/\//u.test(step.expected_url)) {
+      throw new Error('Guarded browser step ' + (index + 1) + ' requires a bounded exact HTTP(S) expected_url.');
+    }
+    const action = step.action;
+    // A precompiled multi-step plan must not carry element refs across DOM
+    // mutations. Refs belong to one observation and can change identity.
+    if (action.ref !== undefined || typeof action.selector !== 'string' ||
+      action.selector.trim().length === 0 || action.selector.length > 4096) {
+      throw new Error('Guarded browser step ' + (index + 1) + ' requires a stable selector, never a snapshot ref.');
+    }
+    for (const key of ['expected_text','after_text'] as const) {
+      const value = step[key];
+      if (value !== undefined && (typeof value !== 'string' || value.length < 1 || value.length > 512)) {
+        throw new Error('Guarded browser step ' + (index + 1) + ' has an invalid ' + key + '.');
+      }
+    }
+    if (action.type === 'fill' || action.type === 'select') {
+      if (typeof action.value !== 'string' || action.value.length > (action.type === 'fill' ? 65536 : 4096)) {
+        throw new Error('Guarded browser step ' + (index + 1) + ' has an invalid value.');
+      }
+    }
+    if (action.type === 'set_checked' && typeof action.checked !== 'boolean') {
+      throw new Error('Guarded browser step ' + (index + 1) + ' must provide checked.');
+    }
+  }
+}
+
 interface BrowserSessionRecord {
   readonly sessionId: string;
   readonly processSessionId: string;
@@ -1138,6 +1204,61 @@ export class BrowserRuntime {
     await this.refreshAgentDesktopPlacement(record);
 
     return this.snapshotUnlocked(record.sessionId, effectivePageId, options);
+  }
+
+  /**
+   * Candidate-only bounded workflow. This never authorizes multiple mutations with
+   * an old observation: each step consumes exactly one fresh observation and runs
+   * inside the existing session operation gate. Failures are terminal and must
+   * never be retried automatically (a partially dispatched click is ambiguous).
+   */
+  async runGuardedWorkflow(
+    sessionId: string,
+    pageId: string | undefined,
+    initialObservationId: string,
+    steps: readonly BrowserGuardedWorkflowStep[]
+  ): Promise<BrowserGuardedWorkflowResult> {
+    validateGuardedWorkflow(steps);
+    return this.serializeSessionOperation(sessionId, async () => {
+      await this.reconcile();
+      const record = this.session(sessionId);
+      const initial = this.consumeObservation(record.sessionId, pageId, initialObservationId);
+      await this.refreshAgentDesktopPlacement(record);
+      const token = await (await this.driver()).stateToken(record.port, initial.pageId, 5000);
+      if (token !== initial.stateToken) {
+        throw new BrowserWorkflowInterrupted(0, 0, false, 'initial observation is stale');
+      }
+      let completed = 0;
+      let snapshot = await this.snapshotUnlocked(record.sessionId, initial.pageId, {
+        screenshot: false, max_text_chars: 30000, timeout_ms: 10000
+      });
+      try {
+        for (const [index, step] of steps.entries()) {
+          if (snapshot.page_id !== initial.pageId) {
+            throw new BrowserWorkflowInterrupted(index, completed, false, 'page target changed');
+          }
+          if (snapshot.url !== step.expected_url || (step.expected_text && !snapshot.text.includes(step.expected_text))) {
+            throw new BrowserWorkflowInterrupted(index, completed, false, 'required page state does not match');
+          }
+          try {
+            snapshot = await this.actUnlocked(record.sessionId, initial.pageId, snapshot.browser_observation_id, [step.action], {
+              screenshot: false, max_text_chars: 30000, timeout_ms: 10000
+            });
+          } catch {
+            throw new BrowserWorkflowInterrupted(index, completed, true, 'action failed or its result could not be observed');
+          }
+          completed++;
+          if (step.after_text && !snapshot.text.includes(step.after_text)) {
+            throw new BrowserWorkflowInterrupted(index, completed, false, 'post-action text check failed');
+          }
+        }
+        return { completed_steps: completed, final_snapshot: snapshot };
+      } catch (error) {
+        // Never leave a fresh, unused observation from a failed internal workflow.
+        this.invalidatePageObservations(record.sessionId, initial.pageId);
+        throw error;
+      }
+    });
   }
 
   async close(sessionId: string): Promise<{ session_id: string; closed: boolean }> {
