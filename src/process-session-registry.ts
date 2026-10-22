@@ -51,7 +51,9 @@ export class ProcessSessionRegistry {
     const active = new Set(activePids);
     let changed = 0;
     for (const session of this.sessions.values()) {
-      const next = active.has(session.pid);
+      // Completion is terminal for this opaque capability. A stale backend
+      // listing must never re-activate a completed process (or a reused PID).
+      const next = session.active && active.has(session.pid);
       if (next === session.active) continue;
       session.active = next;
       changed += 1;
@@ -159,6 +161,42 @@ export class ProcessSessionRegistry {
 
   pendingSize(): number {
     return this.startReservations.size;
+  }
+
+  capacityStatus(now = Date.now()): {
+    limit: number;
+    active: number;
+    starting: number;
+    available: number;
+    completedRetained: number;
+    activeOverHour: number;
+    activeOverDay: number;
+    oldestActiveMinutes: number;
+  } {
+    let active = 0, completedRetained = 0, activeOverHour = 0, activeOverDay = 0;
+    let oldestActiveMs = 0;
+    for (const session of this.sessions.values()) {
+      if (!session.active) {
+        completedRetained++;
+        continue;
+      }
+      active++;
+      const duration = Math.max(0, now - session.createdAt);
+      if (duration >= 60 * 60 * 1000) activeOverHour++;
+      if (duration >= 24 * 60 * 60 * 1000) activeOverDay++;
+      oldestActiveMs = Math.max(oldestActiveMs, duration);
+    }
+    const starting = this.startReservations.size;
+    return {
+      limit: this.maxSessions,
+      active,
+      starting,
+      available: Math.max(0, this.maxSessions - active - starting),
+      completedRetained,
+      activeOverHour,
+      activeOverDay,
+      oldestActiveMinutes: Math.floor(oldestActiveMs / 60_000)
+    };
   }
 
   ownedSessions(): ReadonlyArray<{ id: string; pid: number; active: boolean }> {

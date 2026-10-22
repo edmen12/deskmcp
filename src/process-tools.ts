@@ -227,6 +227,44 @@ export function registerProcessTools(
   agentDesktop?: AgentDesktopManager,
   crossToolGuard?: BrowserCrossToolGuard
 ): void {
+  // This tool reads only the in-memory Gateway session registry. It must
+  // remain usable even when all 32 process slots are occupied: no shell,
+  // ProcessHost, or native process discovery is invoked to produce it.
+  server.registerTool(
+    'desktop_process_capacity',
+    {
+      title: 'Inspect Owned Process Capacity',
+      description: 'Read current Gateway process-session occupancy without starting a process. Duration buckets are observational, not termination criteria. This does not inspect OS process trees or infer that old sessions are stuck.',
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => auditedProcessCall(
+      audit,
+      policy,
+      crossToolGuard,
+      'desktop_process_capacity',
+      undefined,
+      'Process capacity inspection denied or failed',
+      async () => {
+        requireFullControl(policy);
+        const status = sessions.capacityStatus();
+        return {
+          text: JSON.stringify({
+            ...status,
+            interpretation: 'Active means the owned ProcessHost has not completed; age is not a failure signal.',
+            diagnostics: 'Read only. No process spawned. No sessions terminated.'
+          }),
+          isError: false
+        };
+      }
+    )
+  );
+
   server.registerTool(
     'desktop_start_process',
     {
