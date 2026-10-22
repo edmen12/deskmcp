@@ -14,11 +14,11 @@ Scope: independent candidate worktree; no installed/Production change.
 - BrowserHandoffBoundary adds irreversible 'revoked' state (cannot be resumed by the existing local port).
 - BrowserRuntime detects HUD/lease invalidation during a human-controlled or pending session, revokes ownership and skips automatic window-placement attempts, rather than merely detaching Agent Desktop and allowing an ordinary resume.
 - Browser process disappearance also revokes the pending/human state before reclaiming browser resources.
-- Browser regression 81/81 PASS and Fast 153/153 PASS; real Edge agent-only regression 10/10 PASS. These do NOT establish trusted native user presence or genuine Desktop 2 Human Takeover.
+- Browser regression 83/83 PASS and Fast 153/153 PASS; real Edge agent-only regression 10/10 PASS. These do NOT establish trusted native user presence or genuine Desktop 2 Human Takeover.
 
 ## Priority follow-up
 
-1. Treat post-teardown recovery separately from handback: once the owned browser process, profile and lock are verified disposed, retire that old Session ID without re-enabling it; unrelated generic tools may resume. If cleanup fails, remain quarantined.
+1. IMPLEMENTED candidate teardown recovery: confirmed process exit and successful profile/lock cleanup transitions `revoked` to terminal `retired`. This releases unrelated tools from global quarantine without reviving the old Browser Session ID. Native liveness query errors no longer count as confirmed exits. Browser tests cover tombstone and unknown liveness. If cleanup fails, remain quarantined. This is NOT trusted human handback.
 2. Trusted local confirmation requires native Control Panel/HUD interaction and a platform user-presence mechanism; naive WPF click or same-user named pipe is insufficient by itself. Consider Windows Hello/OS-brokered confirmation only after capability and accessibility testing.
 3. Revalidate a fresh lease + healthy HUD + window ownership + user confirmation AT THE MOMENT of handback, not only during the reaper heartbeat.
 4. No secret-bearing form fields should be returned to Agent just because the Session reverts to 'agent'. Need sanitization and explicit handback privacy UX.

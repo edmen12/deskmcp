@@ -4,7 +4,7 @@
  * It must only be retained by a future authenticated native Control Panel adapter.
  * Never register local accept/resume methods as remote MCP tools.
  */
-export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human' | 'revoked';
+export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human' | 'revoked' | 'retired';
 
 export interface BrowserHandoffStatus {
   readonly state: BrowserHandoffState;
@@ -16,6 +16,8 @@ export interface BrowserHandoffAgentPort {
   request(sessionId: string): BrowserHandoffStatus;
   /** Irreversible tombstone after lease/HUD/browser ownership loss. Never a remote MCP action. */
   revokeIfReserved(sessionId: string): BrowserHandoffStatus;
+  /** Runtime-only: call after verified process exit, successful lock and profile cleanup. */
+  retireVerifiedClosed(sessionId: string): BrowserHandoffStatus;
   status(sessionId: string): BrowserHandoffStatus;
   /** Coarse fail-closed cross-tool quarantine during any pending/human ownership. */
   anySessionReserved(): boolean;
@@ -53,7 +55,11 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
     const current = agentStatus(sessionId);
     if (current.state !== expected) throw new Error('Invalid browser handoff transition.');
     // Revoke first. A failed revocation must never hand access back to Agent.
-    if (next === 'agent') {
+    if (next === 'retired') {
+      // Previously revoked, dead Session IDs must never be revived. There is
+      // no live observation left to invalidate, and no local approval implied.
+      records.set(sessionId, { state: next, epoch: current.epoch + 1 });
+    } else if (next === 'agent') {
       revokeObservations(sessionId);
       records.set(sessionId, { state: next, epoch: current.epoch + 1 });
     } else {
@@ -70,7 +76,8 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
   };
   const agent: BrowserHandoffAgentPort = Object.freeze({
     status: agentStatus,
-    anySessionReserved: () => [...records.values()].some(value => value.state !== 'agent'),
+    anySessionReserved: () => [...records.values()].some(value =>
+      value.state === 'handoff-requested' || value.state === 'human' || value.state === 'revoked'),
     epoch: (sessionId: string) => agentStatus(sessionId).epoch,
     assertAgentAccess: (sessionId: string) => {
       if (agentStatus(sessionId).state !== 'agent') {
@@ -80,13 +87,14 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
     request: (sessionId: string) => transition(sessionId, 'agent', 'handoff-requested'),
     revokeIfReserved: (sessionId: string) => {
       const current = agentStatus(sessionId);
-      if (current.state === 'agent' || current.state === 'revoked') return current;
+      if (current.state === 'agent' || current.state === 'revoked' || current.state === 'retired') return current;
       // Revoke first, even if invalidation callback raises. Never transition
       // back to agent from this state without a separate local recovery design.
       records.set(sessionId, { state: 'revoked', epoch: current.epoch + 1 });
       revokeObservations(sessionId);
       return agentStatus(sessionId);
-    }
+    },
+    retireVerifiedClosed: (sessionId: string) => transition(sessionId, 'revoked', 'retired')
   });
   const local: BrowserHandoffLocalPort = Object.freeze({
     accept: (sessionId: string) => transition(sessionId, 'handoff-requested', 'human'),

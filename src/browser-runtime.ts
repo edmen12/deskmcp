@@ -723,6 +723,11 @@ export class BrowserRuntime {
     this.profilesInUse.delete(record.profileId);
     this.handoffAgent?.revokeIfReserved(record.sessionId);
     this.invalidateSessionObservations(record.sessionId);
+    // Owned browser process ended, profile was removed if ephemeral, and lock
+    // was released. Release the global quarantine, not the retired Session ID.
+    if (this.handoffAgent?.status(record.sessionId).state === 'revoked') {
+      this.handoffAgent.retireVerifiedClosed(record.sessionId);
+    }
   }
 
   private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {
@@ -834,16 +839,27 @@ export class BrowserRuntime {
     for (const [sessionId, record] of [...this.sessions]) {
       let active = false;
       try { active = await this.processController.active(record.processSessionId); }
-      catch { active = false; }
+      catch { continue; /* Unknown native liveness does NOT prove browser process exit. */ }
       if (active) continue;
       this.sessions.delete(sessionId);
       this.profilesInUse.delete(record.profileId);
       this.handoffAgent?.revokeIfReserved(sessionId);
       this.invalidateSessionObservations(sessionId);
+      let completed = false;
       try {
         await record.profileLock.release();
+        if (!record.persistentProfile) {
+          if (this.handoffAgent?.status(sessionId).state === 'revoked') {
+            await removeBrowserProfileDirectory(record.profileDir);
+          } else {
+            await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
+          }
+        }
+        completed = true;
       } finally {
-        if (!record.persistentProfile) await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
+        if (completed && this.handoffAgent?.status(sessionId).state === 'revoked') {
+          this.handoffAgent.retireVerifiedClosed(sessionId);
+        }
       }
     }
   }

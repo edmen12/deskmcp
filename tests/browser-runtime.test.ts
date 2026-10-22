@@ -727,7 +727,9 @@ test('disappeared browser process revokes requested human handoff and prevents f
   await browser.requestLocalBrowserHandoff(session.session_id);
   controller.activeIds.clear();
   await browser.list();
-  assert.equal(authority.agent.status(session.session_id).state,'revoked');
+  assert.equal(authority.agent.status(session.session_id).state,'retired');
+  assert.equal(authority.agent.anySessionReserved(),false,'old closed sessions may release global tool quarantine');
+  assert.throws(()=>authority.agent.assertAgentAccess(session.session_id),/human control/i);
   assert.throws(()=>authority.local.accept(session.session_id),/Invalid browser handoff transition/);
   assert.throws(()=>authority.local.reject(session.session_id),/Invalid browser handoff transition/);
   await browser.closeAll();
@@ -746,6 +748,24 @@ test('failed observation revocation cannot restore a revoked human session', () 
   assert.equal(boundary.agent.status(id).state,'revoked');
   assert.throws(()=>boundary.local.resume(id),/Invalid browser handoff transition/);
   assert.throws(()=>boundary.agent.assertAgentAccess(id),/human control/i);
+});
+
+test('retiring a verified closed handoff preserves a permanent terminal epoch', () => {
+  const id='99999999-9999-4999-8999-999999999999';
+  const authority=createBrowserHandoffBoundary(()=>undefined);
+  authority.agent.request(id);
+  authority.local.accept(id);
+  assert.equal(authority.agent.anySessionReserved(),true);
+  authority.agent.revokeIfReserved(id);
+  assert.equal(authority.agent.anySessionReserved(),true);
+  const retired=authority.agent.retireVerifiedClosed(id);
+  assert.equal(retired.state,'retired');
+  assert.equal(authority.agent.anySessionReserved(),false);
+  assert.equal(retired.epoch,4);
+  assert.throws(()=>authority.local.resume(id),/Invalid browser handoff transition/);
+  assert.throws(()=>authority.agent.request(id),/Invalid browser handoff transition/);
+  assert.throws(()=>authority.agent.assertAgentAccess(id),/human control/i);
+  assert.throws(()=>authority.agent.retireVerifiedClosed(id),/Invalid browser handoff transition/);
 });
 
 test('candidate handoff requires a dedicated visible lease and rejects invalid local transitions', async t => {
@@ -1232,6 +1252,32 @@ test('browser close keeps profile ownership when owned process termination fails
   assert.equal(closed.closed, true);
   const replacement = await browser.start({ profile_id: 'termination-failure' });
   await browser.close(replacement.session_id);
+});
+
+test('browser reconciliation preserves profile ownership when native process liveness cannot be checked', async t => {
+  const root = await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  class UncertainController extends FakeProcessController {
+    queryBroken=false;
+    override async active(id:string):Promise<boolean> {
+      if(this.queryBroken)throw new Error('INJECTED_NATIVE_LIVENESS_UNAVAILABLE');
+      return super.active(id);
+    }
+  }
+  const controller=new UncertainController(path.join(root,'browser'));
+  const {browser}=await configuredRuntime(root,controller);
+  const session=await browser.start({profile_id:'unknown-liveness'});
+  controller.queryBroken=true;
+  const list=await browser.list();
+  assert.equal(list.length,1,'unknown must not be treated as exited');
+  assert.equal(list[0]?.session_id,session.session_id);
+  const conflict=await browser.start({profile_id:'some-other-profile'});
+  await browser.close(conflict.session_id);
+  await assert.rejects(browser.start({profile_id:'unknown-liveness'}),/already in use/i);
+  controller.queryBroken=false;
+  controller.activeIds.clear();
+  assert.equal((await browser.list()).length,0);
+  await browser.closeAll();
 });
 
 test('browser reconciliation removes sessions whose owned process has disappeared', async t => {
