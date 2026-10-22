@@ -180,6 +180,31 @@ internal static class AgentDesktopWindowMover
         }
     }
 
+    // Read-only diagnostic: never authorizes, repairs or switches desktops.
+    public static string DescribeOwnWindowDesktop(Window window)
+    {
+        if (window == null) return "missing";
+        IntPtr hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero) return "hwnd=missing";
+        try
+        {
+            IVirtualDesktopManager manager = CreateManager();
+            try
+            {
+                Guid actual = manager.GetWindowDesktopId(hwnd);
+                return "hwnd=" + hwnd.ToInt64().ToString() + ",desktop=" + actual.ToString("D");
+            }
+            finally
+            {
+                if (Marshal.IsComObject(manager)) Marshal.FinalReleaseComObject(manager);
+            }
+        }
+        catch (Exception error)
+        {
+            return "hwnd=" + hwnd.ToInt64().ToString() + ",probe=" + error.GetType().Name;
+        }
+    }
+
     private static IVirtualDesktopManager CreateManager()
     {
         Type type = Type.GetTypeFromCLSID(ClsidVirtualDesktopManager, true);
@@ -345,7 +370,14 @@ internal sealed class AgentDesktopOverlay : IDisposable
             throw new InvalidOperationException("Agent Desktop safety edge visual is missing.");
         edgeVisual.Opacity = 0;
         IntPtr hudHwnd = new WindowInteropHelper(hudWindow).EnsureHandle();
-        hudWindow.Opacity = 0;
+        // A layered WPF Window.Opacity update can invalidate its Virtual
+        // Desktop ownership. Keep the top-level HWND stable just like the
+        // blue edge, hiding only the child visual until verified placement.
+        hudWindow.BeginAnimation(UIElement.OpacityProperty, null);
+        hudWindow.Opacity = 1;
+        if (hudWindow.Content is not UIElement hudVisual)
+            throw new InvalidOperationException("Agent Desktop safety HUD visual is missing.");
+        hudVisual.Opacity = 0;
         hudWindow.IsHitTestVisible = false;
 
         edgeWindow.Show();
@@ -364,8 +396,8 @@ internal sealed class AgentDesktopOverlay : IDisposable
         if (!stillAuthorized()) throw new InvalidOperationException("Agent Desktop control changed before the safety HUD became visible.");
 
         StartEdgePulse(edgeWindow);
+        hudVisual.Opacity = 1;
         hudWindow.IsHitTestVisible = true;
-        hudWindow.Opacity = 1;
         shown = true;
     }
 
@@ -528,6 +560,10 @@ internal sealed class AgentDesktopOverlay : IDisposable
         long style = GetWindowLongPtr(hwnd, GwlExStyle).ToInt64();
         SetWindowLongPtr(hwnd, GwlExStyle, new IntPtr(style));
     }
+
+    public string PlacementDiagnostics =>
+        "edge={" + AgentDesktopWindowMover.DescribeOwnWindowDesktop(edgeWindow) +
+        "} hud={" + AgentDesktopWindowMover.DescribeOwnWindowDesktop(hudWindow) + "}";
 
     public bool IsOnDesktop(Guid desktopId)
     {
@@ -1123,7 +1159,9 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             }
         }
         if (!safetyOverlay.IsOnDesktop(desktopId))
-            throw new InvalidOperationException("Agent Desktop safety HUD is not on its bound desktop.");
+            throw new InvalidOperationException(
+                "Agent Desktop safety HUD is not on its bound desktop. Expected=" +
+                desktopId.ToString("D") + "; " + safetyOverlay.PlacementDiagnostics);
     }
 
     private AgentDesktopControlPoolDocument UpdateControlDesktopNumbers(Dictionary<string, int> updates)
