@@ -901,6 +901,46 @@ test('retiring a verified closed handoff preserves a permanent terminal epoch', 
   assert.throws(()=>authority.agent.retireVerifiedClosed(id),/Invalid browser handoff transition/);
 });
 
+test('trusted local signer lease lookup requires an actually visible HUD on the correct bound Desktop 2', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'test fixture','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));await artifacts.init();
+  const lease='88888888-8888-4888-8888-888888888888';
+  const desktopId='55555555-5555-4555-8555-555555555555';
+  let hudVisible=false;
+  const desktop={
+    async assertLease(id:string){assert.equal(id,lease);return{};},
+    async isLeaseActive(id:string){return id===lease;},
+    async status(id:string){
+      assert.equal(id,lease);
+      return {
+        control:{active:true,leaseId:lease,desktopId,desktopNumber:2},
+        hud_ready:true,hud_visible:hudVisible
+      };
+    }
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const authority=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  const rootBrowser=path.join(root,'browser');
+  browser=new BrowserRuntime(rootBrowser,new FakeProcessController(rootBrowser),artifacts,
+    new FakeCdpDriver(),executable,desktop,undefined,authority.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'native-hud-boundary',agent_desktop_lease_id:lease});
+  await browser.requestLocalBrowserHandoff(session.session_id);
+  await assert.rejects(browser.assertLocalHandoffLease(session.session_id,lease),/visible live HUD/i);
+  await assert.rejects(browser.assertLocalHandoffLease(session.session_id,'77777777-7777-4777-8777-777777777777'),/not bound/i);
+  hudVisible=true;
+  const verified=await browser.assertLocalHandoffLease(session.session_id,lease);
+  assert.equal(verified.desktopId,desktopId);
+  authority.local.accept(session.session_id);
+  assert.equal((await browser.assertLocalHandoffLease(session.session_id,lease)).desktopId,desktopId);
+  authority.agent.revokeIfReserved(session.session_id);
+  await assert.rejects(browser.assertLocalHandoffLease(session.session_id,lease),/No pending or active human handoff/i);
+  await browser.closeAll();
+});
+
 test('candidate handoff requires a dedicated visible lease and rejects invalid local transitions', async t => {
   const root=await tempRoot();
   t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true})); });

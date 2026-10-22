@@ -5,6 +5,7 @@ export interface BrowserHumanChallenge {
   readonly challenge_id: string;
   readonly message: string;
   readonly expires_at: number;
+  readonly desktop_id: string;
 }
 export interface BrowserHumanResponse {
   readonly challenge_id: string;
@@ -14,6 +15,7 @@ export interface BrowserHumanResponse {
 type Pending = {
   sessionId: string;
   leaseId: string;
+  desktopId: string;
   action: BrowserHumanAction;
   epoch: number;
   message: string;
@@ -52,8 +54,8 @@ export class BrowserHumanProofVerifier {
     return new BrowserHumanProofVerifier(publicKey.export({type:'spki',format:'pem'}).toString(), now);
   }
 
-  issue(sessionId: string, leaseId: string, action: BrowserHumanAction, epoch: number): BrowserHumanChallenge {
-    if (!UUID.test(sessionId) || !UUID.test(leaseId) || !Number.isSafeInteger(epoch) || epoch < 0) {
+  issue(sessionId: string, leaseId: string, desktopId: string, action: BrowserHumanAction, epoch: number): BrowserHumanChallenge {
+    if (!UUID.test(sessionId) || !UUID.test(leaseId) || !UUID.test(desktopId) || !Number.isSafeInteger(epoch) || epoch < 0) {
       throw new Error('Invalid scoped human confirmation request.');
     }
     for (const [id, item] of this.pending) if (item.expiresAt <= this.now()) this.pending.delete(id);
@@ -62,10 +64,10 @@ export class BrowserHumanProofVerifier {
     const id = randomBytes(16).toString('hex');
     const expiresAt = this.now() + 60_000;
     const message = [
-      'deskmcp-browser-human-v1', sessionId, leaseId, action, String(epoch), id, String(expiresAt)
+      'deskmcp-browser-human-v2', sessionId, leaseId, desktopId, action, String(epoch), id, String(expiresAt)
     ].join('\n');
-    this.pending.set(id, { sessionId, leaseId, action, epoch, message, expiresAt });
-    return Object.freeze({challenge_id:id, message, expires_at:expiresAt});
+    this.pending.set(id, { sessionId, leaseId, desktopId, action, epoch, message, expiresAt });
+    return Object.freeze({challenge_id:id, message, expires_at:expiresAt, desktop_id:desktopId});
   }
 
   verify(sessionId: string, action: BrowserHumanAction, epoch: number, proof: BrowserHumanResponse | undefined): void {

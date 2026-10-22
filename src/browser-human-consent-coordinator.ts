@@ -17,12 +17,13 @@ export interface BrowserHumanNativeSigner {
   signChallenge(request: {
     readonly session_id: string;
     readonly lease_id: string;
+    readonly desktop_id: string;
     readonly action: BrowserHumanAction;
     readonly challenge: BrowserHumanChallenge;
   }): Promise<BrowserHumanResponse>;
 }
 export interface BrowserHumanLiveLeaseVerifier {
-  assertLeaseForSession(sessionId: string, leaseId: string): Promise<void>;
+  assertLeaseForSession(sessionId: string, leaseId: string): Promise<{readonly desktopId: string}>;
 }
 export class BrowserHumanConsentCoordinator {
   constructor(
@@ -36,19 +37,22 @@ export class BrowserHumanConsentCoordinator {
     const expected = action === 'accept' ? 'handoff-requested' : 'human';
     const state = this.boundary.agent.status(sessionId);
     if (state.state !== expected) throw new Error('Invalid browser handoff transition.');
-    await this.leaseVerifier.assertLeaseForSession(sessionId, leaseId);
+    const originalDesktop = await this.leaseVerifier.assertLeaseForSession(sessionId, leaseId);
     // Recheck AFTER the await. An unrelated lease shutdown/revocation must
     // not leave a new authorization challenge for the wrong ownership epoch.
     if (this.boundary.agent.epoch(sessionId) !== state.epoch ||
       this.boundary.agent.status(sessionId).state !== expected) {
       throw new Error('Browser control changed while authorizing the local user.');
     }
-    const challenge = this.verifier.issue(sessionId, leaseId, action, state.epoch);
+    const challenge = this.verifier.issue(sessionId, leaseId, originalDesktop.desktopId, action, state.epoch);
     try {
       const proof = await this.nativeSigner.signChallenge({
-        session_id: sessionId, lease_id: leaseId, action, challenge
+        session_id: sessionId, lease_id: leaseId, desktop_id: originalDesktop.desktopId, action, challenge
       });
-      await this.leaseVerifier.assertLeaseForSession(sessionId, leaseId);
+      const confirmedDesktop = await this.leaseVerifier.assertLeaseForSession(sessionId, leaseId);
+      if (confirmedDesktop.desktopId.toLowerCase() !== originalDesktop.desktopId.toLowerCase()) {
+        throw new Error('Native Desktop ownership changed during user confirmation.');
+      }
       // No await between verified native lease and cryptographic transition.
       return action === 'accept'
         ? this.boundary.local.accept(sessionId, proof)

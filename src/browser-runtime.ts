@@ -1380,6 +1380,40 @@ export class BrowserRuntime {
   }
 
   /**
+   * Candidate-only trusted local UI scope lookup. Caller receives no content,
+   * and cannot learn the target Desktop ID from arbitrary Agent-owned sessions.
+   * HUD visibility + lease heartbeat are BOTH required; merely leasing D2
+   * from Desktop 1 is not sufficient proof of a visible confirmation surface.
+   */
+  async assertLocalHandoffLease(sessionId: string, leaseId: string): Promise<{ readonly desktopId: string }> {
+    const record = this.session(validateSessionId(sessionId));
+    const ownership = this.handoffAgent?.status(record.sessionId);
+    if (!ownership || (ownership.state !== 'handoff-requested' && ownership.state !== 'human')) {
+      throw new Error('No pending or active human handoff for this browser session.');
+    }
+    if (!this.agentDesktop || record.agentDesktopLeaseId !== leaseId || record.headless) {
+      throw new Error('Browser handoff is not bound to the requested visible Agent Desktop lease.');
+    }
+    await this.agentDesktop.assertLease(leaseId);
+    const status = await this.agentDesktop.status(leaseId);
+    const control = status.control;
+    if (!control.active || control.leaseId?.toLowerCase() !== leaseId.toLowerCase() ||
+      !control.desktopId || !Number.isInteger(control.desktopNumber) ||
+      control.desktopNumber! < 2 || !status.hud_ready || !status.hud_visible) {
+      throw new Error('Human confirmation requires a visible live HUD on Desktop 2 or later.');
+    }
+    if (!await this.processController.active(record.processSessionId)) {
+      throw new Error('Owned browser exited before local user confirmation.');
+    }
+    await this.agentDesktop.assertLease(leaseId);
+    if (this.handoffAgent?.epoch(record.sessionId) !== ownership.epoch ||
+      this.handoffAgent.status(record.sessionId).state !== ownership.state) {
+      throw new Error('Browser ownership changed during native desktop confirmation.');
+    }
+    return { desktopId: control.desktopId };
+  }
+
+  /**
    * Internal-only privacy gate. Local handback moves human -> privacy-reset;
    * normal MCP reads and actions remain denied until all previously human
    * controlled pages are closed, leaving only a verified blank page.
