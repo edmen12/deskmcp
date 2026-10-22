@@ -632,6 +632,43 @@ test('BrowserRuntime local handoff shares the same gate as generic MCP operation
   await browser.closeAll();
 });
 
+test('BrowserRuntime refuses human handoff while a separately owned background process is active', async t => {
+  const { createBrowserHandoffProcessPreflight } = await import('../src/browser-process-handoff-preflight.js');
+  const root = await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const browserRoot=path.join(root,'browser');
+  const sessions=new ProcessSessionRegistry();
+  const job=sessions.register(4242);
+  let nativeListing='PID: 4242';
+  const preflight=createBrowserHandoffProcessPreflight({
+    async listProcessSessions(){return {isError:false,text:nativeListing};}
+  },sessions);
+  const leaseId='99999999-9999-4999-8999-999999999999';
+  const desktop={
+    async assertLease(id:string){assert.equal(id,leaseId);return {};},
+    async isLeaseActive(id:string){return id===leaseId;}
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(browserRoot,new FakeProcessController(browserRoot),artifacts,
+    new FakeCdpDriver(),executable,desktop,undefined,boundary.agent,preflight);
+  await browser.init();
+  const first=await browser.start({profile_id:'background-preflight',agent_desktop_lease_id:leaseId});
+  await assert.rejects(browser.requestLocalBrowserHandoff(first.session_id),/active Gateway-owned non-browser process/i);
+  assert.equal(boundary.agent.status(first.session_id).state,'agent');
+  assert.equal(sessions.isActive(job),true,'must not terminate background jobs without approval');
+  nativeListing='No active process sessions.';
+  const handoff=await browser.requestLocalBrowserHandoff(first.session_id);
+  assert.equal(handoff.state,'handoff-requested');
+  assert.equal(sessions.isActive(job),false);
+  boundary.local.reject(first.session_id);
+  await browser.closeAll();
+});
+
 test('candidate handoff requires a dedicated visible lease and rejects invalid local transitions', async t => {
   const root=await tempRoot();
   t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true})); });

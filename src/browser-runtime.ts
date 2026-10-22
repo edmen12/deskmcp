@@ -475,7 +475,8 @@ export class BrowserRuntime {
     private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
     private readonly agentDesktop?: AgentDesktopManager,
     private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
-    private readonly handoffAgent?: BrowserHandoffAgentPort
+    private readonly handoffAgent?: BrowserHandoffAgentPort,
+    private readonly ownedProcessHandoffPreflight?: (browserProcessSessionIds: readonly string[]) => Promise<void>
   ) {
     this.sharedCrossToolGuard = handoffAgent ? createBrowserCrossToolGuard(handoffAgent) : undefined;
     if (cdp) {
@@ -1330,6 +1331,12 @@ export class BrowserRuntime {
         throw new Error('Local handoff requires a visible browser with a valid dedicated Agent Desktop lease.');
       }
       await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+      if (this.ownedProcessHandoffPreflight) {
+        // Only exclude currently owned browser processes, never unrelated jobs.
+        const browserProcessIds = [...this.sessions.values()].map(session => session.processSessionId);
+        await this.ownedProcessHandoffPreflight(browserProcessIds);
+        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+      }
       const transition = this.handoffAgent!.request(record.sessionId);
       this.invalidateSessionObservations(record.sessionId);
       return { state: 'handoff-requested' as const, epoch: transition.epoch };
