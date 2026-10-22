@@ -6,6 +6,7 @@ NEVER exercises live --review-sign or creates Windows Hello credentials.
 from pathlib import Path
 import subprocess
 import time
+import ctypes
 
 EXE = Path(__file__).resolve().parents[1] / "runtime" / "ego-windows-hello-probe.exe"
 assert EXE.is_file(), "Compile test-area/build-ego-windows-hello-broker.cmd first."
@@ -40,6 +41,14 @@ tests = [
     ("invalid_gui_owner", ["--review-sign", "0"], VALID, 6),
     ("legacy_direct_sign_blocked", ["--sign"], VALID, 2),
 ]
+# Read an existing Windows desktop HWND without clicking, resizing, activating,
+# inspecting text, or changing any existing user's window. The system desktop
+# window cannot be owned by our direct parent WPF Panel process.
+ctypes.windll.user32.GetDesktopWindow.restype=ctypes.c_void_p
+system_owner=ctypes.windll.user32.GetDesktopWindow()
+assert system_owner, 'Win32 desktop owner HWND was unavailable'
+tests.append(('unrelated_system_window_owner', ['--review-sign',str(system_owner)], VALID, 7))
+
 for label, args, data, expected in tests:
     result = run(args, data)
     assert result.returncode == expected, (
@@ -49,4 +58,4 @@ for label, args, data, expected in tests:
 capability = run(["--check"], "")
 assert capability.returncode == 0 and b"HELLO_SUPPORTED" in capability.stdout
 print("PASS read-only Windows Hello capability probe")
-print("12/12 safety checks PASS. No Hello signature/PIN/enrollment executed.")
+print("13/13 safety checks PASS. No Hello signature/PIN/enrollment executed.")

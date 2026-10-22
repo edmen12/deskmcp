@@ -5,6 +5,8 @@
 #include <windows.h>
 #include <shobjidl.h>
 #include <cstdint>
+#include <tlhelp32.h>
+#include <cwchar>
 #include <regex>
 #include <chrono>
 #include <filesystem>
@@ -97,8 +99,55 @@ inline bool userIsOnSignedDesktop(const Challenge& challenge){
     FreeLibrary(module);
     return valid;
 }
+// Additional fail-closed process ownership check. It narrows the caller to
+// a direct-child native broker of the same-installation DeskMCP.exe WPF
+// process, with that process owning the review window. It is NOT a strong
+// Windows same-user trust boundary: debugger access, parent PID spoofing,
+// unsigned binary replacement and arbitrary same-user code remain threats.
+inline bool parentPanelOwnsReviewWindow(HWND owner) {
+    if (!owner || GetAncestor(owner,GA_ROOT)!=owner) return false;
+    DWORD windowPid=0;
+    if (!GetWindowThreadProcessId(owner,&windowPid) || !windowPid ||
+        windowPid==GetCurrentProcessId()) return false;
+    const DWORD pid=GetCurrentProcessId();
+    HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+    if(snapshot==INVALID_HANDLE_VALUE)return false;
+    PROCESSENTRY32W entry{};
+    entry.dwSize=sizeof(entry);
+    DWORD parentPid=0;
+    if(Process32FirstW(snapshot,&entry)) {
+        do {
+            if(entry.th32ProcessID==pid) { parentPid=entry.th32ParentProcessID; break; }
+        } while(Process32NextW(snapshot,&entry));
+    }
+    CloseHandle(snapshot);
+    if(!parentPid || parentPid!=windowPid)return false;
+    HANDLE parent=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,parentPid);
+    if(!parent)return false;
+    wchar_t actual[32768]{};
+    DWORD length=32768;
+    const BOOL resolved=QueryFullProcessImageNameW(parent,0,actual,&length);
+    DWORD parentSession=0, brokerSession=0;
+    const bool sameSession=ProcessIdToSessionId(parentPid,&parentSession) &&
+        ProcessIdToSessionId(pid,&brokerSession) && parentSession==brokerSession;
+    FILETIME parentCreate{},parentExit{},parentKernel{},parentUser{};
+    FILETIME childCreate{},childExit{},childKernel{},childUser{};
+    const bool times=GetProcessTimes(parent,&parentCreate,&parentExit,&parentKernel,&parentUser) &&
+        GetProcessTimes(GetCurrentProcess(),&childCreate,&childExit,&childKernel,&childUser);
+    CloseHandle(parent);
+    if(!resolved || !sameSession || !times ||
+        CompareFileTime(&parentCreate,&childCreate)>0)return false;
+    wchar_t own[32768]{};
+    if(!GetModuleFileNameW(nullptr,own,32768))return false;
+    const auto binary=std::filesystem::path(own);
+    const auto expected=binary.parent_path()/L"DeskMCP.exe";
+    // Caller must be the WPF panel installed alongside this native broker.
+    // Only the panel's installer may legitimately set this path.
+    return CompareStringOrdinal(actual,-1,expected.c_str(),-1,TRUE)==CSTR_EQUAL;
+}
 inline bool verifiedOwnerOnDesktop(HWND owner, const Challenge& challenge) {
-    if (!owner || !IsWindow(owner) || !IsWindowVisible(owner)) return false;
+    if (!owner || !IsWindow(owner) || !IsWindowVisible(owner) ||
+        !parentPanelOwnsReviewWindow(owner)) return false;
     IVirtualDesktopManager* manager=nullptr;
     if (FAILED(CoCreateInstance(CLSID_VirtualDesktopManager,nullptr,CLSCTX_INPROC_SERVER,
         IID_PPV_ARGS(&manager))) || !manager) return false;
