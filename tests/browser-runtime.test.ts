@@ -4,7 +4,28 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
-import { createBrowserHandoffBoundary } from '../src/browser-handoff-boundary.js';
+import { createBrowserHandoffBoundary as createProductionHandoffBoundary } from '../src/browser-handoff-boundary.js';
+
+/**
+ * TEST ONLY. Old lifecycle tests inject synthetic approval to isolate state
+ * machine behavior; signed verification is separately tested against real RSA.
+ * NEVER export this helper from production sources.
+ */
+const TEST_SYNTHETIC_PROOF = { challenge_id:'unit-only', signature_b64:'not-real', lease_id:'unit-only' };
+function createBrowserHandoffBoundary(revokeObservations: (sessionId: string) => void) {
+  const real = createProductionHandoffBoundary(revokeObservations, {
+    verify: () => undefined,
+    revokeSession: () => undefined
+  });
+  return {
+    ...real,
+    local: {
+      accept: (id: string) => real.local.accept(id, TEST_SYNTHETIC_PROOF),
+      reject: real.local.reject,
+      resume: (id: string) => real.local.resume(id, TEST_SYNTHETIC_PROOF)
+    }
+  };
+}
 import { createBrowserCrossToolGuard } from '../src/browser-cross-tool-guard.js';
 import { ArtifactStore } from '../src/artifact-store.js';
 import type {

@@ -1,7 +1,10 @@
+import type { BrowserHumanProofVerifier, BrowserHumanResponse, BrowserHumanAction } from './browser-human-proof.js';
+
 /**
  * Candidate-only in-process browser handoff boundary.
- * The "local" port is a privileged object capability, NOT proof of user presence.
- * It must only be retained by a future authenticated native Control Panel adapter.
+ * Local accept/resume now require a scoped one-time signature from a pinned key.
+ * This is NOT actual user attestation until the key is securely enrolled
+ * and OS-brokered Windows Hello signing is connected to the native local UI.
  * Never register local accept/resume methods as remote MCP tools.
  */
 export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human' | 'privacy-reset' | 'revoked' | 'retired';
@@ -23,10 +26,10 @@ export interface BrowserHandoffAgentPort {
   anySessionReserved(): boolean;
 }
 export interface BrowserHandoffLocalPort {
-  accept(sessionId: string): BrowserHandoffStatus;
+  accept(sessionId: string, proof: BrowserHumanResponse): BrowserHandoffStatus;
   reject(sessionId: string): BrowserHandoffStatus;
-  /** Human signals handback, but access remains denied pending browser privacy reset. */
-  resume(sessionId: string): BrowserHandoffStatus;
+  /** Signed user verification triggers privacy reset, not instant Agent read access. */
+  resume(sessionId: string, proof: BrowserHumanResponse): BrowserHandoffStatus;
 }
 
 /** Internal BrowserRuntime-only completion authority; never register as MCP tool. */
@@ -39,7 +42,8 @@ export interface BrowserHandoffBoundary {
   readonly runtime: BrowserHandoffRuntimePort;
   /**
    * Do not expose outside trusted native UI wiring.
-   * A caller holding this port has the ability to resume agent control.
+   * Holding this port alone cannot resume control; the signed local proof
+   * and post-human privacy reset are still required.
    */
   readonly local: BrowserHandoffLocalPort;
 }
@@ -51,7 +55,10 @@ type MutableState = { state: BrowserHandoffState; epoch: number };
  * before any transition can enable Agent access.
  * If the callback fails, ownership stays denied.
  */
-export function createBrowserHandoffBoundary(revokeObservations: (sessionId: string) => void): BrowserHandoffBoundary {
+export function createBrowserHandoffBoundary(
+  revokeObservations: (sessionId: string) => void,
+  proofVerifier: Pick<BrowserHumanProofVerifier, 'verify' | 'revokeSession'>
+): BrowserHandoffBoundary {
   const records = new Map<string, MutableState>();
   const agentStatus = (sessionId: string): BrowserHandoffStatus => {
     const row = records.get(sessionId);
@@ -79,7 +86,14 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
         throw error;
       }
     }
+    proofVerifier.revokeSession(sessionId);
     return agentStatus(sessionId);
+  };
+  const requireProof = (sessionId: string, expected: BrowserHandoffState,
+    action: BrowserHumanAction, proof: BrowserHumanResponse): void => {
+    const current = agentStatus(sessionId);
+    if (current.state !== expected) throw new Error('Invalid browser handoff transition.');
+    proofVerifier.verify(sessionId, action, current.epoch, proof);
   };
   const agent: BrowserHandoffAgentPort = Object.freeze({
     status: agentStatus,
@@ -98,15 +112,22 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
       // Revoke first, even if invalidation callback raises. Never transition
       // back to agent from this state without a separate local recovery design.
       records.set(sessionId, { state: 'revoked', epoch: current.epoch + 1 });
+      proofVerifier.revokeSession(sessionId);
       revokeObservations(sessionId);
       return agentStatus(sessionId);
     },
     retireVerifiedClosed: (sessionId: string) => transition(sessionId, 'revoked', 'retired')
   });
   const local: BrowserHandoffLocalPort = Object.freeze({
-    accept: (sessionId: string) => transition(sessionId, 'handoff-requested', 'human'),
+    accept: (sessionId: string, proof: BrowserHumanResponse) => {
+      requireProof(sessionId, 'handoff-requested', 'accept', proof);
+      return transition(sessionId, 'handoff-requested', 'human');
+    },
     reject: (sessionId: string) => transition(sessionId, 'handoff-requested', 'agent'),
-    resume: (sessionId: string) => transition(sessionId, 'human', 'privacy-reset')
+    resume: (sessionId: string, proof: BrowserHumanResponse) => {
+      requireProof(sessionId, 'human', 'resume', proof);
+      return transition(sessionId, 'human', 'privacy-reset');
+    }
   });
   const runtime: BrowserHandoffRuntimePort = Object.freeze({
     completePrivacyReset: (sessionId: string) => transition(sessionId, 'privacy-reset', 'agent')

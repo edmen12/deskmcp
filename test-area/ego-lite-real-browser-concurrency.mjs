@@ -7,7 +7,20 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { BrowserRuntime } from '../dist/src/browser-runtime.js';
-import { createBrowserHandoffBoundary } from '../dist/src/browser-handoff-boundary.js';
+import { createBrowserHandoffBoundary as createRealHandoffBoundary } from '../dist/src/browser-handoff-boundary.js';
+// Real Chromium but SYNTHETIC local approval/lease. NEVER claim Windows Hello E2E.
+const syntheticLocalProof={challenge_id:'edge-fixture-only',signature_b64:'not-real',lease_id:'edge-fixture-only'};
+function createBrowserHandoffBoundary(revoke) {
+  const real=createRealHandoffBoundary(revoke,{verify(){},revokeSession(){}});
+  return {
+    ...real,
+    local:{
+      accept:id=>real.local.accept(id,syntheticLocalProof),
+      reject:real.local.reject,
+      resume:id=>real.local.resume(id,syntheticLocalProof)
+    }
+  };
+}
 import { PlaywrightBrowserDriver } from '../dist/src/browser-playwright.js';
 import { ArtifactStore } from '../dist/src/artifact-store.js';
 
