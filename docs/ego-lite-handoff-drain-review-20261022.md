@@ -1,6 +1,6 @@
 # Ego Lite / DeskMCP — In-flight handoff barrier candidate (2026-10-22)
 
-Status: CANDIDATE / NOT COMMITTED YET. Source and tests are present in `review/ego-lite-session-gate-20261022` at `C:\Users\User\Desktop\DeskMCP-Ego-Lite-Review`. Do not merge or deploy.
+Status: CANDIDATE / COMMITTED as 69e2d47 on review/ego-lite-session-gate-20261022; NOT MERGED OR DEPLOYED. Source and tests are present in `review/ego-lite-session-gate-20261022` at `C:\Users\User\Desktop\DeskMCP-Ego-Lite-Review`. Do not merge or deploy.
 
 ## Actual changes
 
@@ -16,7 +16,7 @@ Status: CANDIDATE / NOT COMMITTED YET. Source and tests are present in `review/e
 - `npm run test:browser` 77/77 PASS, after one earlier intermittent existing idle-session cleanup assertion failed and passed when rerun in isolation and in the full suite.
 - `npm run test:fast` 148/148 PASS (includes 4/4 signed Artifact HTTP route tests).
 - Direct `node --test dist/tests/artifact-http.test.js`: 4/4 PASS.
-- Previous real isolated Microsoft Edge E2E: 10/10 PASS on earlier candidate. This latest barrier/HTTP modification has NOT been re-verified in real Edge due to DeskMCP Gateway process-session capacity.
+- Real isolated Microsoft Edge E2E rerun against the latest committed candidate: 10/10 PASS. Test-owned process count 0; temporary browser profile removed. This confirms the ordinary agent-only browser flow, NOT actual Human Takeover.
 - Full `npm run test:integration` still BLOCKED at `prepare-tests` because `dotnet.exe` is absent in the configured Windows test environment.
 - Attempt to launch last real Edge regression was BLOCKED with `Process session limit reached (32)`. Several known, finished test sessions were reviewed; no unrelated Agent process was terminated and Gateway was not restarted. Git commit also remains pending for this reason.
 
