@@ -779,3 +779,36 @@ test('handoff beginning during in-flight MCP read suppresses late response and a
     }});
   });
 });
+
+test('real MCP in-flight dynamic tool call must drain before browser handoff can transfer', async () => {
+  const boundary=createBrowserHandoffBoundary(()=>undefined);
+  const guard=createBrowserCrossToolGuard(boundary.agent);
+  let signal!:()=>void;
+  let release!:()=>void;
+  const entered=new Promise<void>(resolve=>{signal=resolve;});
+  const waiting=new Promise<void>(resolve=>{release=resolve;});
+  let callbackStarted=false;
+  await withBrowserClient('full-control',async(client)=>{
+    const activeRead=client.callTool({name:'desktop_mcp_tool_search',arguments:{query:'blocking'}});
+    await entered;
+    const transfer=guard.withHandoffBarrier(async()=>{
+      callbackStarted=true;
+      return boundary.agent.request(SESSION_ID);
+    },1500);
+    assert.equal(callbackStarted,false);
+    const denied=await client.callTool({name:'desktop_policy_status',arguments:{}});
+    assert.equal(denied.isError,true);
+    assert.match(contentText(denied),/quarantine/i);
+    assert.equal(callbackStarted,false);
+    release();
+    const old=await activeRead;
+    assert.equal(old.isError,true,'in-flight result must be withheld during handoff');
+    assert.match(contentText(old),/quarantine/i);
+    const transferResult=await transfer;
+    assert.equal(transferResult.state,'handoff-requested');
+    assert.equal(callbackStarted,true);
+    boundary.local.reject(SESSION_ID);
+  },guard,hub=>{
+    Object.assign(hub,{searchTools:async()=>{signal();await waiting;return [{qualified_name:'SHOULD_NOT_RETURN',server:'test',tool_name:'secret'}];}});
+  });
+});

@@ -465,6 +465,7 @@ export class BrowserRuntime {
   private readonly sessionOperationChains = new Map<string, Promise<void>>();
   private readonly pendingSessionOperations = new Map<string, number>();
   private sessionReaper: NodeJS.Timeout | undefined;
+  private readonly sharedCrossToolGuard: BrowserCrossToolGuard | undefined;
 
   constructor(
     readonly root: string,
@@ -476,6 +477,7 @@ export class BrowserRuntime {
     private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
     private readonly handoffAgent?: BrowserHandoffAgentPort
   ) {
+    this.sharedCrossToolGuard = handoffAgent ? createBrowserCrossToolGuard(handoffAgent) : undefined;
     if (cdp) {
       this.cdp = cdp;
       this.browserEngine = 'injected';
@@ -531,7 +533,7 @@ export class BrowserRuntime {
   }
 
   crossToolGuard(): BrowserCrossToolGuard | undefined {
-    return this.handoffAgent ? createBrowserCrossToolGuard(this.handoffAgent) : undefined;
+    return this.sharedCrossToolGuard;
   }
 
   info(): BrowserRuntimeInfo {
@@ -1322,7 +1324,7 @@ export class BrowserRuntime {
    */
   async requestLocalBrowserHandoff(sessionId: string): Promise<{ readonly state: 'handoff-requested'; readonly epoch: number }> {
     if (!this.handoffAgent) throw new Error('Local handoff authority is not configured.');
-    return this.serializeSessionOperation(sessionId, async () => {
+    const request = () => this.serializeSessionOperation(sessionId, async () => {
       const record = this.session(sessionId);
       if (record.headless || !record.agentDesktopLeaseId || !this.agentDesktop) {
         throw new Error('Local handoff requires a visible browser with a valid dedicated Agent Desktop lease.');
@@ -1330,8 +1332,11 @@ export class BrowserRuntime {
       await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
       const transition = this.handoffAgent!.request(record.sessionId);
       this.invalidateSessionObservations(record.sessionId);
-      return { state: 'handoff-requested', epoch: transition.epoch };
+      return { state: 'handoff-requested' as const, epoch: transition.epoch };
     });
+    return this.sharedCrossToolGuard
+      ? this.sharedCrossToolGuard.withHandoffBarrier(request)
+      : request();
   }
 
   /**

@@ -71,6 +71,7 @@ export function registerArtifactTools(
 
       try {
         crossToolGuard?.assertNonBrowserToolAllowed('desktop_artifact_manage');
+        const execute = async () => {
         let result: unknown;
         switch (action) {
           case 'publish': {
@@ -112,6 +113,11 @@ export function registerArtifactTools(
             break;
           }
         }
+          return result;
+        };
+        const result = await (crossToolGuard
+          ? crossToolGuard.runNonBrowserOperation('desktop_artifact_manage', execute)
+          : execute());
         crossToolGuard?.assertNonBrowserToolAllowed('desktop_artifact_manage');
         await audit.finish(operation, 'allow');
         return jsonResult(result);

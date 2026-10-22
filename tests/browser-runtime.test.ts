@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { createBrowserHandoffBoundary } from '../src/browser-handoff-boundary.js';
+import { createBrowserCrossToolGuard } from '../src/browser-cross-tool-guard.js';
 import { ArtifactStore } from '../src/artifact-store.js';
 import type {
   BrowserAction,
@@ -576,6 +577,61 @@ test('candidate handoff denies agent reads, writes and inventory until trusted l
   await browser.closeAll();
 });
 
+test('BrowserRuntime local handoff shares the same gate as generic MCP operations', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifactStore=new ArtifactStore(path.join(root,'artifacts'));
+  await artifactStore.init();
+  const browserRoot=path.join(root,'browser');
+  const leaseId='99999999-9999-4999-8999-999999999999';
+  const desktop={
+    async assertLease(id:string){assert.equal(id,leaseId);return{};},
+    async isLeaseActive(id:string){return id===leaseId;}
+  } as unknown as AgentDesktopManager;
+  let browser!: BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(browserRoot,new FakeProcessController(browserRoot),artifactStore,
+    new FakeCdpDriver(),executable,desktop,undefined,boundary.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'handoff-drain-visible',agent_desktop_lease_id:leaseId});
+  const gate=browser.crossToolGuard();
+  assert.ok(gate);
+  assert.equal(gate,browser.crossToolGuard(),'all entrypoints must share one admission registry');
+  let release!:()=>void;
+  let entered!:()=>void;
+  const didEnter=new Promise<void>(r=>{entered=r;});
+  const hold=new Promise<void>(r=>{release=r;});
+  let sideEffectDone=false;
+  const inFlight=gate.runNonBrowserOperation('desktop_ui_action',async()=>{
+    entered();
+    await hold;
+    sideEffectDone=true;
+    return true;
+  });
+  await didEnter;
+  let transferred=false;
+  const handoff=browser.requestLocalBrowserHandoff(session.session_id).then(value=>{
+    transferred=true;
+    assert.equal(sideEffectDone,true,'human authority cannot start before native action returns');
+    return value;
+  });
+  await assert.rejects(gate.runNonBrowserOperation('desktop_start_process',async()=> 'blocked'),/quarantine/i);
+  assert.equal(boundary.agent.status(session.session_id).state,'agent');
+  assert.equal(transferred,false);
+  release();
+  await assert.rejects(inFlight,/quarantine/i);
+  const outcome=await handoff;
+  assert.equal(outcome.state,'handoff-requested');
+  assert.equal(boundary.agent.status(session.session_id).state,'handoff-requested');
+  boundary.local.accept(session.session_id);
+  assert.throws(()=>gate.assertNonBrowserToolAllowed('desktop_ui_windows'),/quarantine/i);
+  boundary.local.resume(session.session_id);
+  assert.equal(await gate.runNonBrowserOperation('desktop_read_file',async()=> 'fresh'),'fresh');
+  await browser.closeAll();
+});
+
 test('candidate handoff requires a dedicated visible lease and rejects invalid local transitions', async t => {
   const root=await tempRoot();
   t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true})); });
@@ -676,6 +732,80 @@ test('browser session inventory rechecks ownership when local handoff happens du
   assert.equal(inventory.length,0,'cannot disclose a tab read under an earlier control epoch');
   assert.equal((await browser.list()).length,0);
   await browser.closeAll();
+});
+
+
+test('handoff barrier prevents new generic admissions and waits for an in-flight mutation to finish', async () => {
+  const session='aaaa0000-aaaa-4aaa-8aaa-000000000000';
+  const boundary=createBrowserHandoffBoundary(()=>undefined);
+  const guard=createBrowserCrossToolGuard(boundary.agent);
+  let release!:()=>void;
+  let began!:()=>void;
+  const entered=new Promise<void>(r=>{began=r;});
+  const hold=new Promise<void>(r=>{release=r;});
+  let finished=false;
+  const running=guard.runNonBrowserOperation('desktop_ui_action',async()=>{
+    began();
+    await hold;
+    finished=true;
+    return 'finished';
+  });
+  await entered;
+  let transferred=false;
+  const handoff=guard.withHandoffBarrier(async()=>{
+    assert.equal(finished,true,'must drain side effect first');
+    transferred=true;
+    return boundary.agent.request(session);
+  },1000);
+  assert.throws(()=>guard.assertNonBrowserToolAllowed('desktop_start_process'),/quarantine/i);
+  await assert.rejects(guard.runNonBrowserOperation('desktop_read_file',async()=> 'leak'),/quarantine/i);
+  assert.equal(transferred,false);
+  release();
+  await assert.rejects(running,/quarantine/i); // result is suppressed once the barrier is pending
+  const outcome=await handoff;
+  assert.equal(outcome.state,'handoff-requested');
+  assert.equal(transferred,true);
+  assert.equal(boundary.agent.anySessionReserved(),true);
+  assert.throws(()=>guard.assertNonBrowserToolAllowed('desktop_ui_windows'),/quarantine/i);
+  boundary.local.reject(session);
+  const allowed=await guard.runNonBrowserOperation('desktop_read_file',async()=> 'safe');
+  assert.equal(allowed,'safe');
+});
+
+test('handoff drain timeout never transfers control and reopens admission safely', async () => {
+  const session='bbbb0000-bbbb-4bbb-8bbb-000000000000';
+  const boundary=createBrowserHandoffBoundary(()=>undefined);
+  const guard=createBrowserCrossToolGuard(boundary.agent);
+  let release!:()=>void;
+  let entered!:()=>void;
+  const started=new Promise<void>(r=>{entered=r;});
+  const held=new Promise<void>(r=>{release=r;});
+  const running=guard.runNonBrowserOperation('desktop_start_process',async()=>{entered();await held;return 'done';});
+  await started;
+  let didRequest=false;
+  await assert.rejects(guard.withHandoffBarrier(async()=>{didRequest=true;return boundary.agent.request(session);},20),/timed out/i);
+  assert.equal(didRequest,false);
+  assert.equal(boundary.agent.status(session).state,'agent');
+  release();
+  await running;
+  assert.equal(await guard.runNonBrowserOperation('desktop_ui_windows',async()=>123),123);
+});
+
+test('handoff drain handles rejected operations, and concurrent handoff requests fail closed', async () => {
+  const boundary=createBrowserHandoffBoundary(()=>undefined);
+  const guard=createBrowserCrossToolGuard(boundary.agent);
+  let release!:()=>void;
+  let entered!:()=>void;
+  const started=new Promise<void>(r=>{entered=r;});
+  const held=new Promise<void>(r=>{release=r;});
+  const failing=guard.runNonBrowserOperation('desktop_ui_action',async()=>{entered();await held;throw new Error('injected operation failure');});
+  await started;
+  const barrier=guard.withHandoffBarrier(async()=> 'handoff-barrier-drained',1000);
+  await assert.rejects(guard.withHandoffBarrier(async()=> 'should-not-run',1000),/already|pending/i);
+  release();
+  await assert.rejects(failing,/injected operation failure/);
+  assert.equal(await barrier,'handoff-barrier-drained');
+  assert.equal(await guard.runNonBrowserOperation('desktop_task_manage',async()=> 'recovered'),'recovered');
 });
 
 test('guarded browser workflow performs two fresh-observation mutations without requiring repeated MCP roundtrips', async t => {

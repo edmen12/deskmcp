@@ -44,7 +44,9 @@ async function auditedComputerCall<T>(
   try {
     crossToolGuard?.assertNonBrowserToolAllowed(tool);
     policy.assertCanUseComputer();
-    const result = await action();
+    const result = await (crossToolGuard
+      ? crossToolGuard.runNonBrowserOperation(tool, action)
+      : action());
     crossToolGuard?.assertNonBrowserToolAllowed(tool);
     await audit.finish(operation, 'allow');
     return result;

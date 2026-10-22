@@ -151,9 +151,10 @@ async function serveSignedArtifact(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   store: ArtifactStore,
-  route: { artifactId: string; filename: string }
+  route: { artifactId: string; filename: string },
+  crossToolGuard?: BrowserCrossToolGuard
 ): Promise<void> {
-  try {
+  const transfer = async (): Promise<void> => {
     const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
     const resolved = await store.resolveSignedDownload(
       route.artifactId,
@@ -169,12 +170,37 @@ async function serveSignedArtifact(
       'x-content-type-options': 'nosniff'
     });
     const stream = createReadStream(resolved.payload);
-    stream.once('error', error => {
-      console.error('[deskmcp] artifact stream failed:', error);
-      res.destroy(error);
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        res.off('finish', onFinish);
+        res.off('close', onClose);
+        stream.off('error', onError);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onFinish = () => finish();
+      const onClose = () => {
+        stream.destroy();
+        finish(new Error('Artifact HTTP consumer closed before transfer completed.'));
+      };
+      const onError = (error: Error) => { stream.destroy(); finish(error); };
+      res.once('finish', onFinish);
+      res.once('close', onClose);
+      stream.once('error', onError);
+      stream.pipe(res);
     });
-    stream.pipe(res);
+  };
+  try {
+    if (crossToolGuard) await crossToolGuard.runNonBrowserOperation('artifact_http_get', transfer);
+    else await transfer();
   } catch (error) {
+    if (res.headersSent) {
+      if (!res.writableEnded && !res.destroyed) res.destroy(error instanceof Error ? error : undefined);
+      return;
+    }
     writeJson(res, error instanceof ArtifactExpiredError ? 410 : 403, { error: 'artifact_access_denied' });
   }
 }
@@ -275,7 +301,7 @@ export async function startHttpServer(
         writeJson(res, artifactStore ? 405 : 404, { error: artifactStore ? 'method_not_allowed' : 'not_found' });
         return;
       }
-      void serveSignedArtifact(req, res, artifactStore, artifactRoute);
+      void serveSignedArtifact(req, res, artifactStore, artifactRoute, crossToolGuard);
       return;
     }
 

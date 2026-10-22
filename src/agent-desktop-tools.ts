@@ -68,6 +68,7 @@ export function registerAgentDesktopTools(
       }
       try {
         crossToolGuard?.assertNonBrowserToolAllowed('desktop_agent_desktop');
+        const execute = async () => {
         policy.assertCanUseComputer();
         let result;
         if (action === 'status') {
@@ -99,6 +100,11 @@ export function registerAgentDesktopTools(
           const status = await manager.stopControl(lease_id);
           result = { ...poolView(status), stopped: true };
         }
+          return result;
+        };
+        const result = await (crossToolGuard
+          ? crossToolGuard.runNonBrowserOperation('desktop_agent_desktop', execute)
+          : execute());
         crossToolGuard?.assertNonBrowserToolAllowed('desktop_agent_desktop');
         await audit.finish(operation, 'allow');
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };

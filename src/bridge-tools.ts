@@ -59,7 +59,9 @@ async function auditedCall(
 
   try {
     crossToolGuard?.assertNonBrowserToolAllowed(tool);
-    const result = await action();
+    const result = await (crossToolGuard
+      ? crossToolGuard.runNonBrowserOperation(tool, action)
+      : action());
     crossToolGuard?.assertNonBrowserToolAllowed(tool);
     if (result.isError) {
       await audit.finish(operation, 'fail', new Error('DownstreamToolError'));

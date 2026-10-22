@@ -135,6 +135,7 @@ export function registerTaskTools(
 
       try {
         crossToolGuard?.assertNonBrowserToolAllowed('desktop_task_manage');
+        const execute = async () => {
         if (risk === 'write') policy.assertCanWrite();
         const workspace = workspaceFingerprint(policy.allowedRoots);
         if (requiresContextHandle(action) && !input.context_handle) {
@@ -264,6 +265,11 @@ export function registerTaskTools(
             break;
           }
         }
+          return result;
+        };
+        const result = await (crossToolGuard
+          ? crossToolGuard.runNonBrowserOperation('desktop_task_manage', execute)
+          : execute());
         crossToolGuard?.assertNonBrowserToolAllowed('desktop_task_manage');
         await audit.finish(operation, 'allow');
         return jsonResult(result);
