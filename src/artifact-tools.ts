@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AuditLogger, AuditRisk } from './audit.js';
 import { ArtifactStore } from './artifact-store.js';
@@ -29,7 +30,8 @@ export function registerArtifactTools(
   server: McpServer,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  store: ArtifactStore
+  store: ArtifactStore,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   server.registerTool(
     'desktop_artifact_manage',
@@ -68,6 +70,7 @@ export function registerArtifactTools(
       }
 
       try {
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_artifact_manage');
         let result: unknown;
         switch (action) {
           case 'publish': {
@@ -109,6 +112,7 @@ export function registerArtifactTools(
             break;
           }
         }
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_artifact_manage');
         await audit.finish(operation, 'allow');
         return jsonResult(result);
       } catch (error) {

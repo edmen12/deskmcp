@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AuditLogger, AuditRisk } from './audit.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
@@ -52,7 +53,8 @@ async function audited<T>(
   risk: AuditRisk,
   target: string | undefined,
   prefix: string,
-  action: () => Promise<T>
+  action: () => Promise<T>,
+  crossToolGuard: BrowserCrossToolGuard | undefined
 ) {
   let operation;
   try {
@@ -61,7 +63,9 @@ async function audited<T>(
     return failure(`${prefix} audit start failed`, error);
   }
   try {
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     const result = await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     await audit.finish(operation, 'allow');
     return jsonResult(result);
   } catch (error) {
@@ -79,8 +83,19 @@ export function registerDynamicMcpTools(
   server: McpServer,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  hub: DynamicMcpHub
+  hub: DynamicMcpHub,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
+  const auditedWithGuard = <T>(
+    audit: AuditLogger,
+    policy: DesktopPolicy,
+    tool: string,
+    risk: AuditRisk,
+    target: string | undefined,
+    prefix: string,
+    action: () => Promise<T>
+  ) => audited(audit, policy, tool, risk, target, prefix, action, crossToolGuard);
+
   server.registerTool(
     'desktop_mcp_manage',
     {
@@ -108,7 +123,7 @@ export function registerDynamicMcpTools(
         openWorldHint: true
       }
     },
-    async input => audited(
+    async input => auditedWithGuard(
       audit,
       policy,
       'desktop_mcp_manage',
@@ -207,7 +222,7 @@ export function registerDynamicMcpTools(
         openWorldHint: false
       }
     },
-    async input => audited(
+    async input => auditedWithGuard(
       audit,
       policy,
       'desktop_mcp_tool_search',
@@ -234,7 +249,7 @@ export function registerDynamicMcpTools(
         openWorldHint: false
       }
     },
-    async input => audited(
+    async input => auditedWithGuard(
       audit,
       policy,
       'desktop_mcp_tool_inspect',
@@ -261,7 +276,7 @@ export function registerDynamicMcpTools(
         openWorldHint: true
       }
     },
-    async input => audited(
+    async input => auditedWithGuard(
       audit,
       policy,
       'desktop_mcp_tool_call',

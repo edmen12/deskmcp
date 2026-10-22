@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { AuditLogger } from './audit.js';
@@ -32,6 +33,7 @@ function resultText(result: DesktopBackendToolResult) {
 async function auditedProcessCall(
   audit: AuditLogger,
   policy: DesktopPolicy,
+  crossToolGuard: BrowserCrossToolGuard | undefined,
   tool: string,
   target: string | undefined,
   prefix: string,
@@ -45,7 +47,9 @@ async function auditedProcessCall(
   }
 
   try {
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     const result = await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     await audit.finish(operation, result.isError ? 'fail' : 'allow',
       result.isError ? new Error('DownstreamToolError') : undefined);
     return resultText(result);
@@ -218,7 +222,8 @@ export function registerProcessTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   sessions: ProcessSessionRegistry,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   server.registerTool(
     'desktop_start_process',
@@ -258,6 +263,7 @@ export function registerProcessTools(
     async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, process_lifetime, agent_desktop_lease_id }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_start_process',
       agent_desktop_lease_id ? `agent-desktop:${agent_desktop_lease_id}` : undefined,
       'Desktop process start denied or failed',
@@ -343,6 +349,7 @@ export function registerProcessTools(
     async ({ session_id, timeout_ms, offset, length }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_read_process',
       session_id,
       'Desktop process read denied or failed',
@@ -379,6 +386,7 @@ export function registerProcessTools(
     async ({ session_id, input, timeout_ms, wait_for_prompt }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_interact_process',
       session_id,
       'Desktop process interaction denied or failed',
@@ -411,6 +419,7 @@ export function registerProcessTools(
     async ({ session_id }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_terminate_process',
       session_id,
       'Desktop process termination denied or failed',

@@ -43,7 +43,7 @@ The published Ego Lite repository contains the agent SDK and Skill, not the brow
 
 ## Human takeover boundary: optional in-process gate candidate; native UI NOT implemented
 
-Candidate control-state and BrowserRuntime read/action gate are now implemented and test-driven, but there is no native local-user proof, authenticated Control Panel/HUD adapter, real D2 human takeover, or cross-tool enforcement. See [security review](ego-lite-handoff-security-review-20261022.md) for verified controls and remaining release RED blockers.
+Candidate control-state and BrowserRuntime read/action gate are now implemented and test-driven, but there is no native local-user proof, authenticated Control Panel/HUD adapter, real D2 human takeover, or cross-tool enforcement. See [security review](ego-lite-handoff-security-review-20261022.md) for verified controls and remaining release RED blockers. See also [cross-tool quarantine review](ego-lite-cross-tool-quarantine-20261022.md) for 24-tool denial tests and the remaining cross-transport risk.
 
 1. Ownership states: agent-owned -> pause requested -> human-owned -> locally confirmed resume requested -> agent-owned. Human-owned sessions must block Agent snapshots and mutations, protecting credentials entered by people.
 2. Handoff drains in-flight operations through session gate before ownership changes, invalidates all Agent observations and pending action authorization. Late Agent requests fail.

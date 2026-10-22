@@ -5,7 +5,15 @@ import path from 'node:path';
 import test from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { AuditLogger } from '../src/audit.js';
+import { ArtifactStore } from '../src/artifact-store.js';
+import { TaskContextStore } from '../src/task-context.js';
+import { SkillStore } from '../src/skill-store.js';
+import { DynamicMcpHub } from '../src/dynamic-mcp-hub.js';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import type { BrowserRuntime } from '../src/browser-runtime.js';
+import type { BrowserCrossToolGuard } from '../src/browser-cross-tool-guard.js';
+import { createBrowserCrossToolGuard } from '../src/browser-cross-tool-guard.js';
+import { createBrowserHandoffBoundary } from '../src/browser-handoff-boundary.js';
 import { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { DesktopPolicy, type PermissionProfile } from '../src/desktop-policy.js';
 import { startHttpServer } from '../src/http-server.js';
@@ -183,7 +191,9 @@ class StubBrowserRuntime {
 
 async function withBrowserClient<T>(
   profile: PermissionProfile,
-  operation: (client: Client, browser: StubBrowserRuntime, root: string) => Promise<T>
+  operation: (client: Client, browser: StubBrowserRuntime, root: string) => Promise<T>,
+  guard?: BrowserCrossToolGuard,
+  configureHub?: (hub: DynamicMcpHub) => void
 ): Promise<T> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-browser-tools-'));
   const policy = await DesktopPolicy.create({ profile, allowedRoots: [root] });
@@ -193,6 +203,17 @@ async function withBrowserClient<T>(
   const observations = new ObservationStore();
   const sessions = new ProcessSessionRegistry();
   const browser = new StubBrowserRuntime();
+  if (guard) Object.assign(browser, {crossToolGuard: () => guard});
+  const tasks = guard ? new TaskContextStore(path.join(root, 'tasks')) : undefined;
+  const artifacts = guard ? new ArtifactStore(path.join(root, 'artifacts')) : undefined;
+  const hub = guard ? new DynamicMcpHub(path.join(root, 'mcp-hub')) : undefined;
+  const skills = guard ? new SkillStore(path.join(root, 'skills')) : undefined;
+  const desktop = guard ? ({ status: async () => { throw new Error('Test must not reach native desktop'); } } as unknown as AgentDesktopManager) : undefined;
+  await tasks?.init();
+  await artifacts?.init();
+  await hub?.init();
+  if (hub && configureHub) configureHub(hub);
+  await skills?.init();
   const running = await startHttpServer(
     '127.0.0.1',
     0,
@@ -202,10 +223,12 @@ async function withBrowserClient<T>(
     observations,
     sessions,
     undefined,
-    undefined,
-    undefined,
-    undefined,
-    browser as unknown as BrowserRuntime
+    tasks,
+    artifacts,
+    hub,
+    browser as unknown as BrowserRuntime,
+    skills,
+    desktop
   );
   const client = new Client(
     { name: 'deskmcp-browser-tools-test', version: '0.1.0' },
@@ -670,5 +693,89 @@ test('browser MCP type_text and set_checked support Playwright refs and reject i
       assert.match(String(error), /selector|ref|delay|invalid|argument/i);
     }
     assert.equal(rejected, true);
+  });
+});
+
+test('candidate human takeover cross-tool quarantine denies filesystem, processes and computer UI before backend calls', async () => {
+  const boundary = createBrowserHandoffBoundary(() => undefined);
+  const guard = createBrowserCrossToolGuard(boundary.agent);
+  boundary.agent.request(SESSION_ID);
+  assert.equal(boundary.agent.anySessionReserved(), true);
+  await withBrowserClient('full-control', async (client, _browser, root) => {
+    for (const [name, args] of [
+      ['desktop_read_file', {path: path.join(root, 'fixture.txt'), length: 100}],
+      ['desktop_list_directory', {path: root, depth: 1}],
+      ['desktop_search', {path: root, pattern: 'secret'}],
+      ['desktop_get_file_info', {path: root}],
+      ['desktop_create_directory', {path: path.join(root,'should-not-create')}],
+      ['desktop_move_file', {source:path.join(root,'a'),destination:path.join(root,'b')}],
+      ['desktop_edit_file', {path:path.join(root,'file'),old_string:'a',new_string:'b'}],
+      ['desktop_write_file', {path:path.join(root,'file'),content:'bad',mode:'rewrite'}],
+      ['desktop_start_process', {command: 'Write-Output SHOULD_NOT_RUN'}],
+      ['desktop_read_process', {session_id: SESSION_ID}],
+      ['desktop_interact_process', {session_id:SESSION_ID,input:'bad'}],
+      ['desktop_terminate_process', {session_id: SESSION_ID}],
+      ['desktop_ui_windows', {}],
+      ['desktop_ui_snapshot', {window_id: SESSION_ID}],
+      ['desktop_ui_action', {window_id: SESSION_ID, computer_observation_id: OBSERVATION_ID, action: 'wait'}]
+    ] as const) {
+      const denied = await client.callTool({name, arguments: args});
+      assert.equal(denied.isError, true, name + ' must fail during handoff');
+      assert.match(contentText(denied), /human takeover quarantine/i, name);
+    }
+    for (const [name, args] of [
+      ['desktop_agent_desktop', {action:'status'}],
+      ['desktop_task_manage', {action:'list'}],
+      ['desktop_skill_manage', {action:'list'}],
+      ['desktop_artifact_manage', {action:'list'}],
+      ['desktop_mcp_manage', {action:'list'}],
+      ['desktop_mcp_tool_search', {query:'browser'}],
+      ['desktop_mcp_tool_inspect', {name:'test:tool'}],
+      ['desktop_mcp_tool_call', {name:'test:tool', arguments:{}}]
+    ] as const) {
+      const denied = await client.callTool({name, arguments:args});
+      assert.equal(denied.isError, true, name + ' must fail during handoff');
+      assert.match(contentText(denied), /human takeover quarantine/i, name);
+    }
+    const registered = (await client.listTools()).tools.map(tool=>tool.name);
+    assert.equal(registered.length,27,'all current DeskMCP tool registrations are covered');
+
+    const deniedPolicy = await client.callTool({name:'desktop_policy_status', arguments:{}});
+    assert.equal(deniedPolicy.isError, true);
+    assert.match(contentText(deniedPolicy), /human takeover quarantine/i);
+
+    boundary.local.reject(SESSION_ID);
+    assert.equal(boundary.agent.anySessionReserved(), false);
+    const normal = await client.callTool({name:'desktop_policy_status', arguments:{}});
+    assert.equal(normal.isError, undefined);
+    assert.match(contentText(normal), /full-control/);
+  }, guard);
+});
+
+test('handoff beginning during in-flight MCP read suppresses late response and audits denial', async () => {
+  const boundary = createBrowserHandoffBoundary(() => undefined);
+  const guard = createBrowserCrossToolGuard(boundary.agent);
+  let signal!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve=>{signal=resolve;});
+  const blocked = new Promise<void>(resolve=>{release=resolve;});
+  await withBrowserClient('full-control', async client => {
+    const pending = client.callTool({
+      name:'desktop_mcp_tool_search',
+      arguments:{query:'a'}
+    });
+    await entered;
+    boundary.agent.request(SESSION_ID);
+    release();
+    const denied = await pending;
+    assert.equal(denied.isError, true);
+    assert.match(contentText(denied), /human takeover quarantine/);
+    assert.doesNotMatch(contentText(denied), /SHOULD_STAY_PRIVATE/);
+  }, guard, hub => {
+    Object.assign(hub, { searchTools: async () => {
+      signal();
+      await blocked;
+      return [{ qualified_name:'SHOULD_STAY_PRIVATE', server:'test',tool_name:'private'}];
+    }});
   });
 });

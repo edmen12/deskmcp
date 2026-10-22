@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
@@ -29,6 +30,7 @@ function publicWindow(window: ComputerWindow, windowId: string) {
 async function auditedComputerCall<T>(
   audit: AuditLogger,
   policy: DesktopPolicy,
+  crossToolGuard: BrowserCrossToolGuard | undefined,
   tool: string,
   target: string | undefined,
   action: () => Promise<T>
@@ -40,8 +42,10 @@ async function auditedComputerCall<T>(
     return failure('Audit start failed', error);
   }
   try {
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     policy.assertCanUseComputer();
     const result = await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     await audit.finish(operation, 'allow');
     return result;
   } catch (error) {
@@ -281,7 +285,8 @@ export function registerComputerUseTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   runtime: ComputerUseRuntime,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   server.registerTool(
     'desktop_ui_windows',
@@ -295,7 +300,8 @@ export function registerComputerUseTools(
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
     },
-    async ({ app, include_untitled, agent_desktop_lease_id }) => auditedComputerCall(audit, policy, 'desktop_ui_windows', undefined, async () => {
+    async ({ app, include_untitled, agent_desktop_lease_id }) => auditedComputerCall(audit, policy,
+      crossToolGuard, 'desktop_ui_windows', undefined, async () => {
       if (agent_desktop_lease_id && !agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
       const windows = await runtime.coordinator.exclusive(() => runtime.backend.listWindows(app));
       // A Windows virtual desktop is NOT an isolated Win32 Desktop object.
@@ -333,6 +339,7 @@ export function registerComputerUseTools(
     async ({ window_id, app, include_tree, include_screenshot, interactive_only, max_elements, agent_desktop_lease_id }) => auditedComputerCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_ui_snapshot',
       window_id ? `window:${window_id}` : undefined,
       async () => runtime.coordinator.exclusive(async () => {
@@ -405,7 +412,8 @@ export function registerComputerUseTools(
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
     },
-    async input => auditedComputerCall(audit, policy, 'desktop_ui_action', `window:${input.window_id}`, async () => runtime.coordinator.exclusive(async () => {
+    async input => auditedComputerCall(audit, policy,
+      crossToolGuard, 'desktop_ui_action', `window:${input.window_id}`, async () => runtime.coordinator.exclusive(async () => {
       const parsedAction = parseAction(input);
       const observationLeaseHint = runtime.observations.peekLease(
         input.computer_observation_id,

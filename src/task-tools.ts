@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { AuditLogger, AuditRisk } from './audit.js';
@@ -77,7 +78,8 @@ export function registerTaskTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   store: TaskContextStore,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   server.registerTool(
     'desktop_task_manage',
@@ -132,6 +134,7 @@ export function registerTaskTools(
       }
 
       try {
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_task_manage');
         if (risk === 'write') policy.assertCanWrite();
         const workspace = workspaceFingerprint(policy.allowedRoots);
         if (requiresContextHandle(action) && !input.context_handle) {
@@ -261,6 +264,7 @@ export function registerTaskTools(
             break;
           }
         }
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_task_manage');
         await audit.finish(operation, 'allow');
         return jsonResult(result);
       } catch (error) {

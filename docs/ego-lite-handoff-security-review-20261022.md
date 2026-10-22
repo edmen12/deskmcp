@@ -15,7 +15,7 @@ Source baseline: isolated review branch based on main@343ba99, later advanced th
 ## Release blockers — RED
 
 1. TRUSTED LOCAL CONFIRMATION: a local object capability does not prove a person actually accepted/finished the handoff. Native Control Panel/HUD authenticated local IPC, explicit user interaction and audited approval are not implemented. Never expose local accept/resume through remote MCP.
-2. CROSS-TOOL ENFORCEMENT: other native Desktop, process and Computer Use tools can bypass a BrowserRuntime-only ownership gate. A central window/process ownership registry must cover every path.
+2. CROSS-TOOL ENFORCEMENT: candidate MCP-level quarantine now covers all 24 non-Browser registered tool entrypoints, with 27/27 current tool registrations accounted for. This is NOT full cross-transport or OS isolation: in-flight side effects, signed Artifact HTTP routes, other applications and plugins remain outside the guarantee. Details: ego-lite-cross-tool-quarantine-20261022.md.
 3. WINDOWS DESKTOP IDENTITY: an Agent Desktop lease can represent a private Win32 Desktop Object rather than actual human-visible Win+Tab Desktop 2. Real UI handoff and Desktop 1 non-interference are unproven.
 4. LIFE CYCLE: native lease/HUD failure, user exit, computer lock, process termination, profile ownership, system shutdown and background idle cleanup need explicit cleanup and recovery contracts.
 5. PRIVACY: fresh snapshots after Agent resume can show form values. Sensitive fields and credential prompts require redaction, site-aware handling and a clear handback warning.

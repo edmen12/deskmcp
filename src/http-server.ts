@@ -10,6 +10,7 @@ import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { ArtifactExpiredError, type ArtifactStore } from './artifact-store.js';
 import type { BrowserRuntime } from './browser-runtime.js';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
 import { createComputerUseRuntime, type ComputerUseRuntime } from './computer-use-runtime.js';
 import { createDesktopMcpServer, SERVER_NAME, SERVER_VERSION } from './mcp-server.js';
@@ -192,7 +193,8 @@ export async function startHttpServer(
   dynamicMcpHub?: DynamicMcpHub,
   browser?: BrowserRuntime,
   skillStore?: SkillStore,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  injectedCrossToolGuard?: BrowserCrossToolGuard
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -201,6 +203,7 @@ export async function startHttpServer(
     throw new Error('Desktop policy, audit logger, observation store, and process registry are required when DeskMCP backend is enabled.');
   }
   const effectiveComputerUse = computerUse ?? (bridge ? createComputerUseRuntime() : undefined);
+  const crossToolGuard = injectedCrossToolGuard ?? browser?.crossToolGuard?.();
 
   const mcpHandler = createMcpHandler(() =>
     createDesktopMcpServer(
@@ -215,7 +218,8 @@ export async function startHttpServer(
       dynamicMcpHub,
       browser,
       skillStore,
-      agentDesktop
+      agentDesktop,
+      crossToolGuard
     )
   );
   const nodeHandler = toNodeHandler(mcpHandler, {

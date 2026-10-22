@@ -15,6 +15,8 @@ export interface BrowserHandoffAgentPort {
   epoch(sessionId: string): number;
   request(sessionId: string): BrowserHandoffStatus;
   status(sessionId: string): BrowserHandoffStatus;
+  /** Coarse fail-closed cross-tool quarantine during any pending/human ownership. */
+  anySessionReserved(): boolean;
 }
 export interface BrowserHandoffLocalPort {
   accept(sessionId: string): BrowserHandoffStatus;
@@ -66,6 +68,7 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
   };
   const agent: BrowserHandoffAgentPort = Object.freeze({
     status: agentStatus,
+    anySessionReserved: () => [...records.values()].some(value => value.state !== 'agent'),
     epoch: (sessionId: string) => agentStatus(sessionId).epoch,
     assertAgentAccess: (sessionId: string) => {
       if (agentStatus(sessionId).state !== 'agent') {

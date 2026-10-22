@@ -12,6 +12,7 @@ import {
 import path from 'node:path';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { BrowserHandoffAgentPort } from './browser-handoff-boundary.js';
+import { createBrowserCrossToolGuard, type BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import type { ArtifactInfo, ArtifactStore } from './artifact-store.js';
 import {
   ChromeCdpDriver,
@@ -527,6 +528,10 @@ export class BrowserRuntime {
       this.cdpPromise = undefined;
       throw error;
     }
+  }
+
+  crossToolGuard(): BrowserCrossToolGuard | undefined {
+    return this.handoffAgent ? createBrowserCrossToolGuard(this.handoffAgent) : undefined;
   }
 
   info(): BrowserRuntimeInfo {
