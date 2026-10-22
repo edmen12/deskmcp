@@ -669,6 +669,85 @@ test('BrowserRuntime refuses human handoff while a separately owned background p
   await browser.closeAll();
 });
 
+test('human takeover lease/HUD loss permanently revokes handback and never repositions windows', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true})); });
+  const executable=path.join(root,'browser.exe');
+  await writeFile(executable,'test binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  const leaseId='99999999-9999-4999-8999-999999999999';
+  let hudHealthy=true;
+  const desktop={
+    async assertLease(id:string){assert.equal(id,leaseId); if(!hudHealthy)throw new Error('HUD heartbeat stale'); return {};},
+    async isLeaseActive(id:string){return id===leaseId;}
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const authority=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),
+    executable,desktop,undefined,authority.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'hud-loss',agent_desktop_lease_id:leaseId});
+  await browser.requestLocalBrowserHandoff(session.session_id);
+  authority.local.accept(session.session_id);
+  const oldMoves=controller.placements.length;
+  hudHealthy=false;
+  const deadline=Date.now()+3500;
+  while (authority.agent.status(session.session_id).state !== 'revoked' && Date.now()<deadline) {
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.equal(authority.agent.status(session.session_id).state,'revoked');
+  assert.equal(controller.placements.length,oldMoves);
+  assert.throws(()=>authority.local.resume(session.session_id),/Invalid browser handoff transition/);
+  await assert.rejects(browser.snapshot(session.session_id,session.page_id,{screenshot:false}),/human control/i);
+  assert.equal(authority.agent.anySessionReserved(),true);
+  await browser.closeAll();
+});
+
+test('disappeared browser process revokes requested human handoff and prevents fake acceptance', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'browser.exe');
+  await writeFile(executable,'test binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const controller=new FakeProcessController(path.join(root,'browser'));
+  const leaseId='88888888-8888-4888-8888-888888888888';
+  const desktop={
+    async assertLease(id:string){assert.equal(id,leaseId);return {};},
+    async isLeaseActive(id:string){return id===leaseId;}
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const authority=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),
+    executable,desktop,undefined,authority.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'process-loss',agent_desktop_lease_id:leaseId});
+  await browser.requestLocalBrowserHandoff(session.session_id);
+  controller.activeIds.clear();
+  await browser.list();
+  assert.equal(authority.agent.status(session.session_id).state,'revoked');
+  assert.throws(()=>authority.local.accept(session.session_id),/Invalid browser handoff transition/);
+  assert.throws(()=>authority.local.reject(session.session_id),/Invalid browser handoff transition/);
+  await browser.closeAll();
+});
+
+test('failed observation revocation cannot restore a revoked human session', () => {
+  const id='99999999-9999-4999-8999-999999999999';
+  let changes=0;
+  const boundary=createBrowserHandoffBoundary(()=>{
+    changes++;
+    if(changes===3)throw new Error('invalidation crash');
+  });
+  boundary.agent.request(id);
+  boundary.local.accept(id);
+  assert.throws(()=>boundary.agent.revokeIfReserved(id),/invalidation crash/);
+  assert.equal(boundary.agent.status(id).state,'revoked');
+  assert.throws(()=>boundary.local.resume(id),/Invalid browser handoff transition/);
+  assert.throws(()=>boundary.agent.assertAgentAccess(id),/human control/i);
+});
+
 test('candidate handoff requires a dedicated visible lease and rejects invalid local transitions', async t => {
   const root=await tempRoot();
   t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true})); });

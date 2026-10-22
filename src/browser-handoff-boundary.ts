@@ -4,7 +4,7 @@
  * It must only be retained by a future authenticated native Control Panel adapter.
  * Never register local accept/resume methods as remote MCP tools.
  */
-export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human';
+export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human' | 'revoked';
 
 export interface BrowserHandoffStatus {
   readonly state: BrowserHandoffState;
@@ -14,6 +14,8 @@ export interface BrowserHandoffAgentPort {
   assertAgentAccess(sessionId: string): void;
   epoch(sessionId: string): number;
   request(sessionId: string): BrowserHandoffStatus;
+  /** Irreversible tombstone after lease/HUD/browser ownership loss. Never a remote MCP action. */
+  revokeIfReserved(sessionId: string): BrowserHandoffStatus;
   status(sessionId: string): BrowserHandoffStatus;
   /** Coarse fail-closed cross-tool quarantine during any pending/human ownership. */
   anySessionReserved(): boolean;
@@ -75,7 +77,16 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
         throw new Error('Browser session is reserved for human control; agent reads and actions are denied.');
       }
     },
-    request: (sessionId: string) => transition(sessionId, 'agent', 'handoff-requested')
+    request: (sessionId: string) => transition(sessionId, 'agent', 'handoff-requested'),
+    revokeIfReserved: (sessionId: string) => {
+      const current = agentStatus(sessionId);
+      if (current.state === 'agent' || current.state === 'revoked') return current;
+      // Revoke first, even if invalidation callback raises. Never transition
+      // back to agent from this state without a separate local recovery design.
+      records.set(sessionId, { state: 'revoked', epoch: current.epoch + 1 });
+      revokeObservations(sessionId);
+      return agentStatus(sessionId);
+    }
   });
   const local: BrowserHandoffLocalPort = Object.freeze({
     accept: (sessionId: string) => transition(sessionId, 'handoff-requested', 'human'),

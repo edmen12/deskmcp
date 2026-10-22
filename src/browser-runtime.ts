@@ -721,6 +721,7 @@ export class BrowserRuntime {
     await record.profileLock.release();
     this.sessions.delete(record.sessionId);
     this.profilesInUse.delete(record.profileId);
+    this.handoffAgent?.revokeIfReserved(record.sessionId);
     this.invalidateSessionObservations(record.sessionId);
   }
 
@@ -733,6 +734,20 @@ export class BrowserRuntime {
   private async refreshAgentDesktopPlacement(record: BrowserSessionRecord, timeoutMs = 250): Promise<void> {
     const leaseId = record.agentDesktopLeaseId;
     if (!leaseId) return;
+    const ownership = this.handoffAgent?.status(record.sessionId).state;
+    if (ownership && ownership !== 'agent') {
+      // Do not relocate or activate windows while a person may be interacting.
+      // A revoked session must never silently return to Agent ownership.
+      if (ownership !== 'revoked') {
+        try {
+          if (!this.agentDesktop) throw new Error('Agent Desktop native authority disappeared.');
+          await this.agentDesktop.assertLease(leaseId); // checks HUD heartbeat, not just lease presence
+        } catch {
+          this.handoffAgent!.revokeIfReserved(record.sessionId);
+        }
+      }
+      return;
+    }
     if (!this.agentDesktop || !await this.agentDesktop.isLeaseActive(leaseId)) {
       this.detachAgentDesktopPlacement(record);
       return;
@@ -823,6 +838,7 @@ export class BrowserRuntime {
       if (active) continue;
       this.sessions.delete(sessionId);
       this.profilesInUse.delete(record.profileId);
+      this.handoffAgent?.revokeIfReserved(sessionId);
       this.invalidateSessionObservations(sessionId);
       try {
         await record.profileLock.release();
