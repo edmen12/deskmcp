@@ -5,6 +5,7 @@ $fixture = Join-Path (Get-Location) 'test-area\ego-d2-real-winforms-acceptance.p
 $out = Join-Path (Get-Location) 'runtime\ego-d2-combined-fixture.stdout.txt'
 $err = Join-Path (Get-Location) 'runtime\ego-d2-combined-fixture.stderr.txt'
 $child = $null
+Remove-Item -LiteralPath (Join-Path (Get-Location) 'runtime\ego-d2-fixture-event.txt') -Force -ErrorAction SilentlyContinue
 try {
   $child = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-Sta','-ExecutionPolicy','Bypass','-File',('"'+$fixture+'"')) -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
   Start-Sleep -Seconds 3

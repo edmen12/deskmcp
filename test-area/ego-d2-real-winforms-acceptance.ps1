@@ -50,7 +50,10 @@ $button.Text = "Apply Input"
 $button.Width = 148
 $button.Left = 24
 $button.Top = 110
-$button.Add_Click({ $label.Text = "Applied: " + $field.Text })
+$button.Add_Click({
+    $label.Text = "Applied: " + $field.Text
+    [IO.File]::WriteAllText((Join-Path (Get-Location) "runtime\ego-d2-fixture-event.txt"),$label.Text)
+})
 $form.Controls.Add($button)
 $items = New-Object System.Windows.Forms.ListBox
 $items.Name = "AgentList"

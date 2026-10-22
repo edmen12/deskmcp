@@ -27,3 +27,12 @@ The installed native AgentDesktopHost.ObjectWindows uses EnumDesktopWindows then
 2. Build the modified net10.0-windows AgentDesktopHost; full .NET SDK is absent locally, so actual replacement binary has NOT been built. No production install/restart.
 3. End-to-end verify via Candidate MCP desktop_ui_windows -> snapshot -> set_value -> invoke -> readback, and show Desktop 1 unchanged with real Windows instrumentation.
 4. Human Takeover trust/WPF integration still unreleased; prioritize desktop GUI operation and no Desktop 1 interference.
+
+## Follow-up implementation: native WinForms Computer Use fallback (candidate only)
+- agent-desktop-host/ObjectUi.cs now defines restricted object-controls and object-act operations, accepting only WinForms EDIT set_value or BUTTON invoke. It enumerates a specifically named lease-owned Win32 Desktop Object, verifies target HWND and same-process descendants, and rechecks child root/PID/class immediately before action.
+- src/computer-use-backend.ts detects WinApp's titlebar-only WinForms inspection, adds bounded native EDIT/BUTTON selectors, and routes those native selectors to the isolated host. Password fields are denied; no value is returned in native edit readback. No SendInput, global pointer/keyboard, foreground switch or clipboard.
+- Program.cs registers both native host commands. tests/computer-use-native-fallback.test.ts adds three source-contract regression checks.
+- Candidate-only native C++ test shim was built with MSVC to exercise the updated protocol without overwriting the installed C# host binary.
+- npm run test:fast: 175/175 PASS. npm run test:browser: 87/87 PASS.
+- The live scoped native BACKGROUND input+button callback PASS above remains verified. However a later attempt to run the full candidate WinAppBackend inspect+act flow was blocked before fixture creation because the Agent Desktop lease became revoked or replaced. TWO candidate E2E attempts were refused. This is NOT an E2E PASS.
+- WPF/native host C# source remains UNCOMPILED because .NET 10 SDK is not installed. Do not merge, install or claim ready until compiled and tested against the full Desktop 2 lease.

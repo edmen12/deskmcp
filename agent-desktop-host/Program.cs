@@ -271,6 +271,15 @@ internal static class Program
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "object-windows" => ObjectWindows(ParseDesktopObjectName(Required(options, "desktop-object"))),
+                "object-controls" => ObjectUi.Inspect(
+                    ParseDesktopObjectName(Required(options, "desktop-object")),
+                    ParseHwnd(Required(options, "hwnd"))),
+                "object-act" => ObjectUi.Act(
+                    ParseDesktopObjectName(Required(options, "desktop-object")),
+                    ParseHwnd(Required(options, "hwnd")),
+                    Required(options, "action"),
+                    Required(options, "selector"),
+                    options.GetValueOrDefault("value64")),
                 "self-test" => SelfTest(vda),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };

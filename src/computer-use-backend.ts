@@ -406,10 +406,26 @@ export class WinAppComputerBackend {
     const window = windows.find(item => item.hwnd === hwnd) ?? windows[0];
     if (!window) throw new Error('Target window no longer exists.');
     if (window.hwnd !== hwnd) throw new Error('Computer backend inspection did not return the requested window.');
+    let elements = flattenUiElementsForMcp(window.elements, maxElements);
+    // WinApp UIA can see only a title bar for WinForms in a non-input
+    // Win32 Desktop Object. Query only lease-owned native EDIT/BUTTON child
+    // controls; raw native HWND selectors remain validated by the native host.
+    if (desktopObjectName && !elements.some(element =>
+      element.className?.startsWith('WindowsForms10.') === true)) {
+      const data = recordValue(extractJson(await this.runAgentDesktopHost([
+        'object-controls', '--desktop-object', desktopObjectName,
+        '--hwnd', String(hwnd)
+      ])), 'Private WinForms child inspection');
+      if (data.hwnd !== hwnd || !Array.isArray(data.elements)) {
+        throw new Error('Native isolated control inspection is inconsistent.');
+      }
+      const native = flattenUiElementsForMcp(data.elements, maxElements);
+      elements = [...elements, ...native].slice(0, maxElements);
+    }
     return {
       hwnd: window.hwnd,
       ...(window.title ? { title: window.title } : {}),
-      elements: flattenUiElementsForMcp(window.elements, maxElements)
+      elements
     };
   }
 
@@ -448,6 +464,20 @@ export class WinAppComputerBackend {
   }
 
   async act(hwnd: number, action: UiAction, desktopObjectName?: string): Promise<unknown> {
+    if (desktopObjectName && action.type !== 'wait' &&
+      'selector' in action && typeof action.selector === 'string' &&
+      action.selector.startsWith('native:')) {
+      if (action.type !== 'set_value' && action.type !== 'invoke') {
+        throw new Error('Private Win32 native controls only support set_value and invoke.');
+      }
+      const output = await this.runAgentDesktopHost([
+        'object-act', '--desktop-object', desktopObjectName,
+        '--hwnd', String(hwnd), '--action', action.type,
+        '--selector', action.selector,
+        ...(action.type === 'set_value' ? ['--value64', encodeUtf8(action.value)] : [])
+      ]);
+      return recordValue(extractJson(output), 'Native isolated control action');
+    }
     if (action.type === 'wait') {
       await new Promise(resolve => setTimeout(resolve, action.milliseconds));
       return { waitedMs: action.milliseconds };

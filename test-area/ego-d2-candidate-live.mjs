@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import {readFile} from 'node:fs/promises';
 import { WinAppComputerBackend } from '../dist/src/computer-use-backend.js';
 
 const lease=process.argv[2];
@@ -22,11 +23,21 @@ for(let attempt=0;attempt<9;attempt++) {
 }
 if(!target) throw new Error('D2 fixture not discovered after repeated native object enumeration');
 const inspect=await backend.inspect(target.hwnd,true,120,object);
-console.log('INSPECTION_ELEMENTS='+JSON.stringify(inspect.elements.slice(0,35)));
-const result=await backend.act(target.hwnd,{type:'set_value',selector:'AgentInput',value:'D2_AGENT_LIVE_PASS'},object);
-console.log('INPUT='+JSON.stringify(result));
-const click=await backend.act(target.hwnd,{type:'invoke',selector:'ApplyButton'},object);
-console.log('APPLY='+JSON.stringify(click));
-const verified=await backend.inspect(target.hwnd,true,120,object);
-console.log('POST_INSPECT='+JSON.stringify(verified.elements.slice(0,35)));
-console.log('D2_PRIVATE_COMPUTER_USE_LIVE_PASS');
+const edits=inspect.elements.filter(e=>e.type==='Edit'&&e.selector?.startsWith('native:edit:'));
+const buttons=inspect.elements.filter(e=>e.type==='Button'&&e.name==='Apply Input'&&e.selector?.startsWith('native:button:'));
+assert.equal(edits.length,1,'one native WinForms text box discovered');
+assert.equal(buttons.length,1,'one native WinForms Apply button discovered');
+console.log('D2_NATIVE_CONTROLS='+JSON.stringify({edit:edits[0].selector,button:buttons[0].selector}));
+const set=await backend.act(target.hwnd,{type:'set_value',selector:edits[0].selector,value:'D2_AGENT_LIVE_PASS'},object);
+assert.equal(set.readback_verified,true,'actual Win32 textbox value was confirmed');
+const invoked=await backend.act(target.hwnd,{type:'invoke',selector:buttons[0].selector},object);
+assert.equal(invoked.acknowledged,true);
+const expected='Applied: D2_AGENT_LIVE_PASS';
+let actual='';
+for(let i=0;i<8;i++) {
+  try {actual=(await readFile(path.join(process.cwd(),'runtime','ego-d2-fixture-event.txt'),'utf8')).trim();} catch {}
+  if(actual===expected)break;
+  await new Promise(resolve=>setTimeout(resolve,150));
+}
+assert.equal(actual,expected,'actual WinForms button-click callback was verified');
+console.log('D2_PRIVATE_COMPUTER_USE_LIVE_PASS CALLBACK='+actual);
