@@ -8,11 +8,12 @@ STATUS: CANDIDATE / NOT WPF-INTEGRATED / RELEASE RED. No production updates.
 - This is defense-in-depth only. Same-user process injection/parent spoofing, user-writable installation files, and unsigned components remain outside an OS-backed identity boundary.
 - test-area/test-ego-windows-hello-probe.py checks malformed challenges, invalid owners, and an actual system-owned desktop HWND (read-only). No HWND is clicked, changed or activated.
 - test-area/verify-ego-human-release-identity.ps1 adds a separate read-only release gate: Panel and native helper must have valid Authenticode signatures, the same pinned publisher cert thumbprint, and share one installation directory.
-- The release gate is not invoked by the current native runtime. Its enforcement in a signed installer/release pipeline is required; simply shipping the source file does not enforce it.
+- Updated native authorization path now also enforces Authenticode on BOTH the Panel and native broker via WinVerifyTrust, pins their signer-certificate thumbprints to the trusted publisher embedded at build time, and refuses approval when the publisher pin is unconfigured. This is separate from the read-only release gate and runs before any Hello prompt. Developer/test builds intentionally have no trusted publisher pin and cannot approve handoff.
+- Runtime verification is defense-in-depth, not a tamper-resistant installation boundary. The installer and release process must pin an independently vetted publisher certificate and deploy both signed executables safely; user-writable installation paths and arbitrary same-user code remain threats.
 
 ## Verified
 - MSVC C++/WinRT reviewer build PASS (no new SDK/install).
-- Native safety tests 13/13 PASS including rejecting real system desktop HWND. No PIN prompt, key creation or signing.
+- Native safety tests 14/14 PASS, including rejecting an unrelated real HWND and read-only confirmation that the developer broker's trusted-publisher pin is absent (exit 9). No PIN prompt, key creation or signing.
 - Real installed DeskMCP.exe reported Get-AuthenticodeSignature Status=NotSigned. The release gate correctly returns RELEASE_IDENTITY_BLOCKED on a disposable temporary copy, which was deleted.
 - Fast tests 166/166 PASS.
 - Browser tests 87/87 PASS.
@@ -20,7 +21,7 @@ STATUS: CANDIDATE / NOT WPF-INTEGRATED / RELEASE RED. No production updates.
 
 ## RED / must be resolved before merging
 1. Trusted WPF Control Panel does not yet spawn the Hello reviewer from an explicit user-initiated approval nor securely exchange the challenge/signature with Gateway. Existing HUD Exit Agent Control is a separate action.
-2. The installed DeskMCP.exe is currently NOT SIGNED. The native signed-publisher check lives only in the offline release gate. Runtime binary integrity/publisher enforcement and tamper-resistant packaging require independent review.
+2. Installed DeskMCP.exe is NOT SIGNED. Native runtime now rejects absent/untrusted publisher pins and uses WinVerifyTrust for both executables, but a legitimate signed release, independent publisher pin provenance, secure installer path and on-machine positive signature verification are NOT complete.
 3. Even signed binaries under the user's writable directory do not form an absolute security boundary against same-user arbitrary code. Trusted enrollment, signer identity, secure per-user process isolation and UI ownership threat model remain open.
 4. Windows Hello key DeskMCP.BrowserHuman.v1 not enrolled. No real PIN/biometric signing test; no proof that software verifier interoperates with genuine Hello signature.
 5. Real Desktop 2 GUI/HUD presence, Desktop 1 foreground non-interference, UAC, lock-screen, active sessions and failure recovery are not end-to-end validated.

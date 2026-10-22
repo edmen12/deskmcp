@@ -55,7 +55,10 @@ for label, args, data, expected in tests:
         label, result.returncode, result.stderr.decode(errors="replace"))
     print(f"PASS {label}: exit={result.returncode}")
 
+identity = run(["--identity-status"], "")
+assert identity.returncode == 9 and b"TRUSTED_PUBLISHER_UNCONFIGURED" in identity.stdout
+print("PASS unsigned developer build cannot enter trusted approval mode")
 capability = run(["--check"], "")
 assert capability.returncode == 0 and b"HELLO_SUPPORTED" in capability.stdout
 print("PASS read-only Windows Hello capability probe")
-print("13/13 safety checks PASS. No Hello signature/PIN/enrollment executed.")
+print("14/14 safety checks PASS. No Hello signature/PIN/enrollment executed.")

@@ -29,11 +29,17 @@ static credentials::KeyCredential openExistingCredential() {
 int wmain(int argc, wchar_t** argv) {
     try {
         if (argc != 2 && argc != 3) {
-            std::cerr << "Usage: --check | --public | --validate | --review-sign <trusted-hwnd>\n";
+            std::cerr << "Usage: --check | --identity-status | --public | --validate | --review-sign <trusted-hwnd>\n";
             return 2;
         }
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         std::wstring mode(argv[1]);
+        if (mode == L"--identity-status") {
+            // Read-only report: unpinned development builds cannot sign.
+            const bool configured=review::trustedPublisherConfigured();
+            std::cout<<(configured ? "TRUSTED_PUBLISHER_CONFIGURED" : "TRUSTED_PUBLISHER_UNCONFIGURED")<<"\n";
+            return configured ? 0 : 9;
+        }
         if (mode == L"--check") {
             // Read-only capability check. Does NOT create a key or prompt for PIN.
             const bool supported = credentials::KeyCredentialManager::IsSupportedAsync().get();

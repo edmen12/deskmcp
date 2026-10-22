@@ -7,6 +7,9 @@
 #include <cstdint>
 #include <tlhelp32.h>
 #include <cwchar>
+#include <wintrust.h>
+#include <softpub.h>
+#include <wincrypt.h>
 #include <regex>
 #include <chrono>
 #include <filesystem>
@@ -99,6 +102,58 @@ inline bool userIsOnSignedDesktop(const Challenge& challenge){
     FreeLibrary(module);
     return valid;
 }
+// Publisher thumbprint must be embedded by an authorized SIGNED release
+// build. The developer/test build deliberately has no pin and must NEVER sign.
+#ifndef DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT
+#define DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT L""
+#endif
+inline bool trustedPublisherConfigured() {
+    constexpr auto pin=DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT;
+    if(wcslen(pin)!=40)return false;
+    for(const wchar_t* digit=pin; *digit; ++digit) {
+        if(!((*digit>=L'0'&&*digit<=L'9')||(*digit>=L'A'&&*digit<=L'F')||
+             (*digit>=L'a'&&*digit<=L'f')))return false;
+    }
+    return true;
+}
+inline bool verifiedPinnedAuthenticode(const std::filesystem::path& path) {
+    constexpr auto pin=DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT;
+    if(!trustedPublisherConfigured())return false;
+    WINTRUST_FILE_INFO file{};
+    file.cbStruct=sizeof(file);
+    file.pcwszFilePath=path.c_str();
+    WINTRUST_DATA data{};
+    data.cbStruct=sizeof(data);
+    data.dwUIChoice=WTD_UI_NONE;
+    data.fdwRevocationChecks=WTD_REVOKE_WHOLECHAIN;
+    data.dwUnionChoice=WTD_CHOICE_FILE;
+    data.pFile=&file;
+    data.dwStateAction=WTD_STATEACTION_VERIFY;
+    data.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+    GUID action=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    const LONG code=WinVerifyTrust(nullptr,&action,&data);
+    bool valid=false;
+    if(code==ERROR_SUCCESS && data.hWVTStateData) {
+        const auto provider=WTHelperProvDataFromStateData(data.hWVTStateData);
+        const auto signer=provider?WTHelperGetProvSignerFromChain(provider,0,FALSE,0):nullptr;
+        const auto leaf=signer && signer->csCertChain?signer->pasCertChain[0].pCert:nullptr;
+        BYTE hash[20]{};
+        DWORD length=sizeof(hash);
+        if(leaf && CertGetCertificateContextProperty(leaf,CERT_SHA1_HASH_PROP_ID,hash,&length) &&
+           length==sizeof(hash)) {
+            constexpr wchar_t digits[]=L"0123456789ABCDEF";
+            wchar_t actual[41]{};
+            for(unsigned i=0;i<sizeof(hash);i++) {
+                actual[2*i]=digits[hash[i]>>4];
+                actual[2*i+1]=digits[hash[i]&15];
+            }
+            valid=CompareStringOrdinal(actual,-1,pin,-1,TRUE)==CSTR_EQUAL;
+        }
+    }
+    data.dwStateAction=WTD_STATEACTION_CLOSE;
+    if(data.hWVTStateData)WinVerifyTrust(nullptr,&action,&data);
+    return valid;
+}
 // Additional fail-closed process ownership check. It narrows the caller to
 // a direct-child native broker of the same-installation DeskMCP.exe WPF
 // process, with that process owning the review window. It is NOT a strong
@@ -143,7 +198,8 @@ inline bool parentPanelOwnsReviewWindow(HWND owner) {
     const auto expected=binary.parent_path()/L"DeskMCP.exe";
     // Caller must be the WPF panel installed alongside this native broker.
     // Only the panel's installer may legitimately set this path.
-    return CompareStringOrdinal(actual,-1,expected.c_str(),-1,TRUE)==CSTR_EQUAL;
+    return CompareStringOrdinal(actual,-1,expected.c_str(),-1,TRUE)==CSTR_EQUAL &&
+        verifiedPinnedAuthenticode(expected) && verifiedPinnedAuthenticode(binary);
 }
 inline bool verifiedOwnerOnDesktop(HWND owner, const Challenge& challenge) {
     if (!owner || !IsWindow(owner) || !IsWindowVisible(owner) ||
