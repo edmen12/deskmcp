@@ -174,13 +174,15 @@ class FakeCdpDriver implements BrowserCdpDriver {
 
   async snapshot(port: number, pageId: string | undefined, _options?: BrowserSnapshotOptions): Promise<BrowserSnapshotData> {
     assert.equal(port, 43210);
-    assert.equal(pageId ?? 'page-1', 'page-1');
+    const selectedPageId = pageId ?? this.pages.find(page=>page.active)?.page_id ?? 'page-1';
+    const selected = this.pages.find(page=>page.page_id===selectedPageId);
+    if (!selected) throw new Error('Browser page not found.');
     return {
-      page_id: 'page-1',
+      page_id: selectedPageId,
       pages: this.pages,
-      url: 'https://example.com/',
-      title: 'Example',
-      text: 'Browser snapshot text',
+      url: selectedPageId === 'page-1' ? 'https://example.com/' : selected.url,
+      title: selectedPageId === 'page-1' ? 'Example' : selected.title,
+      text: selectedPageId === 'page-1' ? 'Browser snapshot text' : '',
       viewport: { width: 1440, height: 900 },
       page_size: { width: 1440, height: 1200 },
       interactive_elements: [{ tag: 'a', text: 'Example link', href: 'https://example.com/', selector: '#link' }],
@@ -550,7 +552,7 @@ test('candidate handoff denies agent reads, writes and inventory until trusted l
   } as unknown as AgentDesktopManager;
   let browser!: BrowserRuntime;
   const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
-  browser=new BrowserRuntime(browserRoot,controller,artifacts,new FakeCdpDriver(),executable,desktop,undefined,boundary.agent);
+  browser=new BrowserRuntime(browserRoot,controller,artifacts,new FakeCdpDriver(),executable,desktop,undefined,boundary.agent,undefined,boundary.runtime);
   await browser.init();
   const session=await browser.start({profile_id:'local-handoff-check',agent_desktop_lease_id:leaseId});
   const old=await browser.snapshot(session.session_id,session.page_id,{screenshot:false});
@@ -568,12 +570,120 @@ test('candidate handoff denies agent reads, writes and inventory until trusted l
   ]),/human control/i);
   assert.equal(boundary.local.accept(session.session_id).state,'human');
   await assert.rejects(browser.snapshot(session.session_id,session.page_id,{screenshot:false}),/human control/i);
-  const resumed=boundary.local.resume(session.session_id);
+  const awaiting=boundary.local.resume(session.session_id);
+  assert.equal(awaiting.state,'privacy-reset');
+  await assert.rejects(browser.snapshot(session.session_id,session.page_id,{screenshot:false}),/human control/i);
+  await assert.rejects(browser.find(session.session_id,session.page_id,{query:'secret'}),/human control/i);
+  const resumed=await browser.completeLocalBrowserHandback(session.session_id);
   assert.equal(resumed.state,'agent');
-  await assert.rejects(browser.act(session.session_id,session.page_id,old.browser_observation_id,
+  assert.notEqual(resumed.page_id,session.page_id,'old page is physically gone');
+  await assert.rejects(browser.act(session.session_id,resumed.page_id,old.browser_observation_id,
     [{type:'click',selector:'#go'}],{screenshot:false}),/consumed|expired|unknown/i);
-  const fresh=await browser.snapshot(session.session_id,session.page_id,{screenshot:false});
+  const fresh=await browser.snapshot(session.session_id,resumed.page_id,{screenshot:false});
   assert.equal(fresh.session_id,session.session_id);
+  await browser.closeAll();
+});
+
+test('human handback privacy reset failure leaves Agent access revoked and hides old content', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const rootBrowser=path.join(root,'browser');
+  class UnclosablePageDriver extends FakeCdpDriver {
+    override async closePage():Promise<void> { throw new Error('UNSAFE_PRIVATE_PAGE_REMAINS'); }
+  }
+  const cdp=new UnclosablePageDriver();
+  const controller=new FakeProcessController(rootBrowser);
+  const lease='99999999-9999-4999-8999-999999999999';
+  const desktop={
+    async assertLease(id:string){assert.equal(id,lease);return{};},
+    async isLeaseActive(id:string){return id===lease;}
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(rootBrowser,controller,artifacts,cdp,executable,
+    desktop,undefined,boundary.agent,undefined,boundary.runtime);
+  await browser.init();
+  const session=await browser.start({profile_id:'failed-privacy-reset',agent_desktop_lease_id:lease});
+  cdp.pages[0]={...cdp.pages[0]!,url:'https://example.com/secret-form'};
+  await browser.requestLocalBrowserHandoff(session.session_id);
+  boundary.local.accept(session.session_id);
+  assert.equal(boundary.local.resume(session.session_id).state,'privacy-reset');
+  await assert.rejects(browser.completeLocalBrowserHandback(session.session_id),/privacy reset failed/i);
+  assert.equal(boundary.agent.status(session.session_id).state,'revoked');
+  assert.equal(boundary.agent.anySessionReserved(),true);
+  await assert.rejects(browser.snapshot(session.session_id,session.page_id,{screenshot:false}),/human control/i);
+  await assert.rejects(browser.completeLocalBrowserHandback(session.session_id),/handback has not been confirmed/i);
+  await browser.closeAll();
+  assert.equal(boundary.agent.status(session.session_id).state,'retired');
+});
+
+test('human handback refuses a new popup appearing during privacy reset verification', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const rootBrowser=path.join(root,'browser');
+  class PopupRaceDriver extends FakeCdpDriver {
+    listCalls=0;
+    override async listPages(port:number):Promise<readonly BrowserPageSummary[]>{
+      this.listCalls++;
+      if(this.listCalls>=3 && this.pages.length===1 && this.pages[0]?.page_id!=='page-1'){
+        this.pages.push({page_id:'popup-race',url:'https://example.com/private',title:'Secret',active:false});
+      }
+      return super.listPages(port);
+    }
+  }
+  const cdp=new PopupRaceDriver();
+  const controller=new FakeProcessController(rootBrowser);
+  const lease='99999999-9999-4999-8999-999999999999';
+  const desktop={
+    async assertLease(id:string){assert.equal(id,lease);return{};},
+    async isLeaseActive(id:string){return id===lease;}
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(rootBrowser,controller,artifacts,cdp,executable,
+    desktop,undefined,boundary.agent,undefined,boundary.runtime);
+  await browser.init();
+  const session=await browser.start({profile_id:'popup-race',agent_desktop_lease_id:lease});
+  await browser.requestLocalBrowserHandoff(session.session_id);
+  boundary.local.accept(session.session_id);
+  boundary.local.resume(session.session_id);
+  await assert.rejects(browser.completeLocalBrowserHandback(session.session_id),/privacy reset failed/i);
+  assert.equal(boundary.agent.status(session.session_id).state,'revoked');
+  await browser.closeAll();
+});
+
+test('handback privacy reset refuses missing internal completion authority', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const rootBrowser=path.join(root,'browser');
+  const controller=new FakeProcessController(rootBrowser);
+  const lease='99999999-9999-4999-8999-999999999999';
+  const desktop={
+    async assertLease(id:string){assert.equal(id,lease);return{};},
+    async isLeaseActive(id:string){return id===lease;}
+  } as unknown as AgentDesktopManager;
+  let browser!:BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(rootBrowser,controller,artifacts,new FakeCdpDriver(),executable,desktop,undefined,boundary.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'no-internal-capability',agent_desktop_lease_id:lease});
+  await browser.requestLocalBrowserHandoff(session.session_id);
+  boundary.local.accept(session.session_id);
+  boundary.local.resume(session.session_id);
+  await assert.rejects(browser.completeLocalBrowserHandback(session.session_id),/not configured/i);
+  assert.equal(boundary.agent.status(session.session_id).state,'privacy-reset');
   await browser.closeAll();
 });
 
@@ -593,7 +703,7 @@ test('BrowserRuntime local handoff shares the same gate as generic MCP operation
   let browser!: BrowserRuntime;
   const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
   browser=new BrowserRuntime(browserRoot,new FakeProcessController(browserRoot),artifactStore,
-    new FakeCdpDriver(),executable,desktop,undefined,boundary.agent);
+    new FakeCdpDriver(),executable,desktop,undefined,boundary.agent,undefined,boundary.runtime);
   await browser.init();
   const session=await browser.start({profile_id:'handoff-drain-visible',agent_desktop_lease_id:leaseId});
   const gate=browser.crossToolGuard();
@@ -628,6 +738,8 @@ test('BrowserRuntime local handoff shares the same gate as generic MCP operation
   boundary.local.accept(session.session_id);
   assert.throws(()=>gate.assertNonBrowserToolAllowed('desktop_ui_windows'),/quarantine/i);
   boundary.local.resume(session.session_id);
+  await assert.rejects(gate.runNonBrowserOperation('desktop_read_file',async()=> 'secret'),/quarantine/i);
+  await browser.completeLocalBrowserHandback(session.session_id);
   assert.equal(await gate.runNonBrowserOperation('desktop_read_file',async()=> 'fresh'),'fresh');
   await browser.closeAll();
 });
@@ -788,10 +900,11 @@ test('candidate handoff requires a dedicated visible lease and rejects invalid l
   boundary.agent.request(session);
   boundary.local.accept(session);
   assert.equal(boundary.agent.status(session).state,'human');
-  boundary.local.resume(session);
-  assert.equal(boundary.agent.status(session).state,'agent');
-  assert.equal(transitions.length,5);
-  assert.equal(boundary.agent.status(session).epoch,5);
+  assert.equal(boundary.local.resume(session).state,'privacy-reset');
+  assert.throws(()=>boundary.agent.assertAgentAccess(session),/human control/i);
+  assert.equal(boundary.runtime.completePrivacyReset(session).state,'agent');
+  assert.equal(transitions.length,6);
+  assert.equal(boundary.agent.status(session).epoch,6);
   assert.equal(controller.terminated.length,1);
 });
 

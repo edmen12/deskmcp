@@ -4,7 +4,7 @@
  * It must only be retained by a future authenticated native Control Panel adapter.
  * Never register local accept/resume methods as remote MCP tools.
  */
-export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human' | 'revoked' | 'retired';
+export type BrowserHandoffState = 'agent' | 'handoff-requested' | 'human' | 'privacy-reset' | 'revoked' | 'retired';
 
 export interface BrowserHandoffStatus {
   readonly state: BrowserHandoffState;
@@ -25,11 +25,18 @@ export interface BrowserHandoffAgentPort {
 export interface BrowserHandoffLocalPort {
   accept(sessionId: string): BrowserHandoffStatus;
   reject(sessionId: string): BrowserHandoffStatus;
+  /** Human signals handback, but access remains denied pending browser privacy reset. */
   resume(sessionId: string): BrowserHandoffStatus;
+}
+
+/** Internal BrowserRuntime-only completion authority; never register as MCP tool. */
+export interface BrowserHandoffRuntimePort {
+  completePrivacyReset(sessionId: string): BrowserHandoffStatus;
 }
 
 export interface BrowserHandoffBoundary {
   readonly agent: BrowserHandoffAgentPort;
+  readonly runtime: BrowserHandoffRuntimePort;
   /**
    * Do not expose outside trusted native UI wiring.
    * A caller holding this port has the ability to resume agent control.
@@ -77,7 +84,7 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
   const agent: BrowserHandoffAgentPort = Object.freeze({
     status: agentStatus,
     anySessionReserved: () => [...records.values()].some(value =>
-      value.state === 'handoff-requested' || value.state === 'human' || value.state === 'revoked'),
+      value.state === 'handoff-requested' || value.state === 'human' || value.state === 'privacy-reset' || value.state === 'revoked'),
     epoch: (sessionId: string) => agentStatus(sessionId).epoch,
     assertAgentAccess: (sessionId: string) => {
       if (agentStatus(sessionId).state !== 'agent') {
@@ -99,7 +106,10 @@ export function createBrowserHandoffBoundary(revokeObservations: (sessionId: str
   const local: BrowserHandoffLocalPort = Object.freeze({
     accept: (sessionId: string) => transition(sessionId, 'handoff-requested', 'human'),
     reject: (sessionId: string) => transition(sessionId, 'handoff-requested', 'agent'),
-    resume: (sessionId: string) => transition(sessionId, 'human', 'agent')
+    resume: (sessionId: string) => transition(sessionId, 'human', 'privacy-reset')
   });
-  return Object.freeze({ agent, local });
+  const runtime: BrowserHandoffRuntimePort = Object.freeze({
+    completePrivacyReset: (sessionId: string) => transition(sessionId, 'privacy-reset', 'agent')
+  });
+  return Object.freeze({ agent, local, runtime });
 }

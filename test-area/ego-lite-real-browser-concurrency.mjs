@@ -7,6 +7,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { BrowserRuntime } from '../dist/src/browser-runtime.js';
+import { createBrowserHandoffBoundary } from '../dist/src/browser-handoff-boundary.js';
 import { PlaywrightBrowserDriver } from '../dist/src/browser-playwright.js';
 import { ArtifactStore } from '../dist/src/artifact-store.js';
 
@@ -66,7 +67,14 @@ class OwnedTestEdge {
       return result.ok;
     } catch { return false; }
   }
-  async place() { throw new Error('No visible desktop placement is allowed in this test'); }
+  async place(_id, leaseId) {
+    // Test-only simulated lease placement: browser remains headless, so this
+    // is NOT a real Windows Desktop 2 takeover or HUD user-presence test.
+    if (!leaseId || leaseId !== '99999999-9999-4999-8999-999999999999') {
+      throw new Error('Refused a non-fixture visible desktop placement');
+    }
+    return {moved:1,windows:1};
+  }
   async terminate(id) {
     const record = this.processes.get(id);
     if (!record) return;
@@ -101,6 +109,7 @@ const server = createServer((_request, response) => {
   response.end(testHtml);
 });
 let runtime;
+let handoffRuntime;
 let started1;
 let started2;
 const facts = { date: new Date().toISOString(), chromium: browserExe, result: 'FAILED', checks: [], isolated_profile_root: root };
@@ -203,10 +212,51 @@ try {
   requireCondition(recovered.length === 0, 'runtime must reconcile unexpected browser-process termination');
   facts.checks.push({check:'unexpected browser-process termination reconciles session and releases its profile ownership',pass:true});
   console.log('STEP=second_session_pass');
+  const fakeLeaseId='99999999-9999-4999-8999-999999999999';
+  const fakeDesktop={
+    async assertLease(id){assert.equal(id,fakeLeaseId);return{};},
+    async isLeaseActive(id){return id===fakeLeaseId;}
+  };
+  const authority=createBrowserHandoffBoundary(id=>handoffRuntime.invalidateForLocalHandoff(id));
+  handoffRuntime=new BrowserRuntime(
+    path.join(root,'human-privacy-browser'),controller,artifacts,driver,browserExe,
+    fakeDesktop,undefined,authority.agent,undefined,authority.runtime
+  );
+  await handoffRuntime.init();
+  const handoffSession=await limit(handoffRuntime.start({
+    url,timeout_ms:25000,agent_desktop_lease_id:fakeLeaseId
+  }),30000,'isolated real Chromium simulated-lease start');
+  const before=await handoffRuntime.snapshot(handoffSession.session_id,handoffSession.page_id,{screenshot:false});
+  await handoffRuntime.act(handoffSession.session_id,handoffSession.page_id,before.browser_observation_id,
+    [{type:'fill',selector:'#field',value:'PRIVATE-OTP-EXAMPLE'}],{screenshot:false});
+  const otherTab=await handoffRuntime.newPage(handoffSession.session_id,url);
+  requireCondition(Boolean(otherTab.page_id),'second real Edge tab created for cleanup test');
+  await handoffRuntime.requestLocalBrowserHandoff(handoffSession.session_id);
+  authority.local.accept(handoffSession.session_id);
+  requireCondition(authority.local.resume(handoffSession.session_id).state==='privacy-reset',
+    'local signal cannot instantly grant Agent visibility');
+  await assert.rejects(
+    handoffRuntime.snapshot(handoffSession.session_id,handoffSession.page_id,{screenshot:false}),
+    /human control/i
+  );
+  facts.checks.push({check:'real Edge under simulated lease: privacy-reset denies snapshot before cleanup',pass:true});
+  const safelyReturned=await limit(handoffRuntime.completeLocalBrowserHandback(handoffSession.session_id),
+    30000,'safe post-human blank reset');
+  const returnedSnapshot=await handoffRuntime.snapshot(handoffSession.session_id,safelyReturned.page_id,{screenshot:false});
+  requireCondition(returnedSnapshot.url==='about:blank'
+    && returnedSnapshot.text.length===0
+    && !JSON.stringify(returnedSnapshot).includes('PRIVATE-OTP-EXAMPLE'),
+    'old human-entered form and tabs must be gone before Agent can read');
+  requireCondition((await handoffRuntime.list())[0]?.pages.length===1,
+    'verified reset leaves exactly one blank tab');
+  facts.checks.push({check:'real Edge simulated-lease handback closes prior tabs and returns only a new blank page',pass:true});
+  await handoffRuntime.closeAll();
+  console.log('STEP=real_handback_privacy_pass');
   facts.result = 'PASS';
 } catch (e) {
   facts.error = String(e?.stack || e);
 } finally {
+  await limit(handoffRuntime?.closeAll() ?? Promise.resolve(),15000,'handoff runtime closeAll').catch(e => { facts.cleanup_error=String(e); });
   await limit(runtime?.closeAll() ?? Promise.resolve(),15000,'runtime closeAll').catch(e => { facts.cleanup_error=String(e); });
   await controller.cleanup().catch(e => { facts.cleanup_error=String(e); });
   await new Promise(resolve=>server.close(resolve));

@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
-import type { BrowserHandoffAgentPort } from './browser-handoff-boundary.js';
+import type { BrowserHandoffAgentPort, BrowserHandoffRuntimePort } from './browser-handoff-boundary.js';
 import { createBrowserCrossToolGuard, type BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import type { ArtifactInfo, ArtifactStore } from './artifact-store.js';
 import {
@@ -476,7 +476,8 @@ export class BrowserRuntime {
     private readonly agentDesktop?: AgentDesktopManager,
     private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
     private readonly handoffAgent?: BrowserHandoffAgentPort,
-    private readonly ownedProcessHandoffPreflight?: (browserProcessSessionIds: readonly string[]) => Promise<void>
+    private readonly ownedProcessHandoffPreflight?: (browserProcessSessionIds: readonly string[]) => Promise<void>,
+    private readonly handoffRuntime?: BrowserHandoffRuntimePort
   ) {
     this.sharedCrossToolGuard = handoffAgent ? createBrowserCrossToolGuard(handoffAgent) : undefined;
     if (cdp) {
@@ -1376,6 +1377,55 @@ export class BrowserRuntime {
     return this.sharedCrossToolGuard
       ? this.sharedCrossToolGuard.withHandoffBarrier(request)
       : request();
+  }
+
+  /**
+   * Internal-only privacy gate. Local handback moves human -> privacy-reset;
+   * normal MCP reads and actions remain denied until all previously human
+   * controlled pages are closed, leaving only a verified blank page.
+   * This is NOT user presence attestation and is NOT an MCP tool.
+   */
+  async completeLocalBrowserHandback(sessionId: string): Promise<{ readonly state: 'agent'; readonly page_id: string }> {
+    if (!this.handoffAgent || !this.handoffRuntime) {
+      throw new Error('Trusted local browser handback runtime is not configured.');
+    }
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
+      const record = this.session(sessionId);
+      if (this.handoffAgent!.status(record.sessionId).state !== 'privacy-reset') {
+        throw new Error('Human browser handback has not been confirmed.');
+      }
+      try {
+        if (!record.agentDesktopLeaseId || !this.agentDesktop) throw new Error('Agent Desktop lease missing.');
+        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+        if (!await this.processController.active(record.processSessionId)) throw new Error('Owned browser process exited.');
+        const driver = await this.driver();
+        // A newly created page is about:blank by browser default.
+        // Do not relax the navigation HTTP(S)-only policy to allow blank URLs.
+        const fresh = await driver.createPage(record.port, undefined, 10000);
+        const pages = await driver.listPages(record.port, 10000);
+        if (!pages.some(page => page.page_id === fresh && page.url === 'about:blank')) {
+          throw new Error('Fresh browser page is not verified blank.');
+        }
+        for (const page of pages) {
+          if (page.page_id !== fresh) await driver.closePage(record.port, page.page_id, 10000);
+        }
+        // A stale tab enumeration or popup that raced cleanup must not pass.
+        const finalPages = await driver.listPages(record.port, 10000);
+        if (finalPages.length !== 1 || finalPages[0]?.page_id !== fresh || finalPages[0].url !== 'about:blank') {
+          throw new Error('Browser page cleanup was incomplete.');
+        }
+        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+        this.invalidateSessionObservations(record.sessionId);
+        const resumed = this.handoffRuntime!.completePrivacyReset(record.sessionId);
+        if (resumed.state !== 'agent') throw new Error('Browser handback authority was not restored.');
+        return { state: 'agent' as const, page_id: fresh };
+      } catch {
+        // Ambiguous tab operation or lost lease can leave private content
+        // behind. Deny access, not an optimistic retry or partial handback.
+        this.handoffAgent!.revokeIfReserved(record.sessionId);
+        throw new Error('Browser privacy reset failed. Agent access remains revoked; close the owned browser session locally.');
+      }
+    }, 'system-cleanup'));
   }
 
   /**
