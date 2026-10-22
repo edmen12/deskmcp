@@ -562,7 +562,11 @@ internal static class Program
             List<object> windows = new();
             bool enumerated = EnumDesktopWindows(desktop, (hwnd, _) =>
             {
-                if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) return true;
+                // Windows on a non-input Win32 desktop often report IsWindowVisible=false,
+                // even while the app is ShowDialog-visible on that isolated desktop.
+                // EnumDesktopWindows already restricts HWNDs to this owned object.
+                // UI capabilities are filtered separately by size/title and revalidated.
+                if (!IsWindow(hwnd)) return true;
                 GetWindowThreadProcessId(hwnd, out uint processId);
                 if (processId == 0 || processId > Int32.MaxValue) return true;
 

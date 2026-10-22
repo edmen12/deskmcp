@@ -116,6 +116,66 @@ function isAgentDesktopSafetyWindow(window: ComputerWindow): boolean {
   return window.title?.startsWith('DeskMCP Agent Desktop') === true;
 }
 
+/**
+ * Windows virtual desktops and isolated Win32 Desktop Objects are different.
+ * Desktop-bound GUI process launches use the latter. Gather both safely:
+ * regular windows are verified by virtual desktop GUID; object windows are
+ * enumerated explicitly on the lease-owned Win32 Desktop Object.
+ */
+interface ScopedComputerWindows {
+  readonly virtualWindows: readonly ComputerWindow[];
+  readonly objectWindows: readonly ComputerWindow[];
+  readonly windows: readonly ComputerWindow[];
+  readonly desktopObjectName?: string;
+}
+function sameWindow(a: ComputerWindow, b: ComputerWindow): boolean {
+  return a.hwnd === b.hwnd && a.processId === b.processId &&
+    a.processName === b.processName && a.className === b.className;
+}
+async function listScopedComputerWindows(
+  runtime: ComputerUseRuntime,
+  agentDesktop: AgentDesktopManager | undefined,
+  agentDesktopLeaseId?: string,
+  app?: string
+): Promise<ScopedComputerWindows> {
+  if (!agentDesktopLeaseId) {
+    const virtualWindows = await runtime.backend.listWindows(app);
+    return { virtualWindows, objectWindows: [], windows: virtualWindows };
+  }
+  if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+  const desktopObjectName = await agentDesktop.desktopObjectNameForLease(agentDesktopLeaseId);
+  const [regular, objectWindows] = await Promise.all([
+    runtime.backend.listWindows(app),
+    runtime.backend.listWindows(app, desktopObjectName)
+  ]);
+  const virtualWindows = await agentDesktop.filterWindowsForLease(regular, agentDesktopLeaseId);
+  await agentDesktop.assertLease(agentDesktopLeaseId);
+  return {
+    virtualWindows, objectWindows,
+    windows: [...virtualWindows, ...objectWindows],
+    desktopObjectName
+  };
+}
+function objectScopeForWindow(inventory: ScopedComputerWindows, window: ComputerWindow): string | undefined {
+  return inventory.objectWindows.some(row => sameWindow(row, window))
+    ? inventory.desktopObjectName : undefined;
+}
+function resolveScopedComputerWindow(
+  runtime: ComputerUseRuntime,
+  inventory: ScopedComputerWindows,
+  windowId: string
+): { window: ComputerWindow; desktopObjectName?: string } {
+  const scope = runtime.windows.scope(windowId);
+  if (scope && scope !== inventory.desktopObjectName) {
+    throw new Error('Window belongs to a different or expired Agent Desktop isolated object.');
+  }
+  const windows = scope ? inventory.objectWindows : inventory.virtualWindows;
+  return {
+    window: runtime.windows.resolve(windowId, windows, scope),
+    ...(scope ? {desktopObjectName: scope} : {})
+  };
+}
+
 export async function resolveAgentDesktopWindowLease(
   agentDesktop: AgentDesktopManager | undefined,
   hwnd: number,
@@ -230,7 +290,7 @@ async function snapshotContent(
   window: ComputerWindow,
   options: { includeTree: boolean; includeScreenshot: boolean; interactiveOnly: boolean; maxElements: number; agentDesktopLeaseId?: string; desktopObjectName?: string }
 ) {
-  const windowId = runtime.windows.issue(window);
+  const windowId = runtime.windows.issue(window, options.desktopObjectName);
   const observationId = runtime.observations.issue(windowId, Date.now(), options.agentDesktopLeaseId);
   const [inspection, screenshot] = await Promise.all([
     options.includeTree
@@ -305,19 +365,16 @@ export function registerComputerUseTools(
     async ({ app, include_untitled, agent_desktop_lease_id }) => auditedComputerCall(audit, policy,
       crossToolGuard, 'desktop_ui_windows', undefined, async () => {
       if (agent_desktop_lease_id && !agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-      const windows = await runtime.coordinator.exclusive(() => runtime.backend.listWindows(app));
-      // A Windows virtual desktop is NOT an isolated Win32 Desktop object.
-      // The caller's lease is enforced by verified window desktop GUIDs.
-      const scopedWindows = agent_desktop_lease_id
-        ? await agentDesktop!.filterWindowsForLease(windows, agent_desktop_lease_id)
-        : windows;
-      const visible = scopedWindows
+      const inventory = await runtime.coordinator.exclusive(() =>
+        listScopedComputerWindows(runtime, agentDesktop, agent_desktop_lease_id, app));
+      const visible = inventory.windows
         .filter(window => window.width >= 32 && window.height >= 24)
         .filter(window => !isAgentDesktopSafetyWindow(window))
         .filter(window => include_untitled || Boolean(window.title?.trim()) || window.isForeground)
         .sort((a, b) => Number(b.isForeground) - Number(a.isForeground) || (b.width * b.height) - (a.width * a.height))
         .slice(0, 100)
-        .map(window => publicWindow(window, runtime.windows.issue(window)));
+        .map(window => publicWindow(window,
+          runtime.windows.issue(window, objectScopeForWindow(inventory, window))));
       return { content: [{ type: 'text' as const, text: JSON.stringify(visible, null, 2) }] };
     })
   );
@@ -349,15 +406,12 @@ export function registerComputerUseTools(
           if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
           await agentDesktop.assertLease(agent_desktop_lease_id);
         }
-        const all = window_id
-          ? await runtime.backend.listWindows()
-          : await runtime.backend.listWindows(app);
-        const scopedWindows = agent_desktop_lease_id
-          ? await agentDesktop!.filterWindowsForLease(all, agent_desktop_lease_id)
-          : all;
+        const inventory = await listScopedComputerWindows(runtime, agentDesktop,
+          agent_desktop_lease_id, window_id ? undefined : app);
         const target = window_id
-          ? runtime.windows.resolve(window_id, scopedWindows)
-          : selectForegroundOrSingle(scopedWindows);
+          ? resolveScopedComputerWindow(runtime, inventory, window_id).window
+          : selectForegroundOrSingle(inventory.windows);
+        const desktopObjectName = objectScopeForWindow(inventory, target);
         if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
         const effectiveAgentDesktopLeaseId = await resolveAgentDesktopWindowLease(
           agentDesktop,
@@ -366,17 +420,24 @@ export function registerComputerUseTools(
         );
         if (effectiveAgentDesktopLeaseId) {
           if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-          if (agent_desktop_lease_id) await agentDesktop.assertLease(effectiveAgentDesktopLeaseId);
-          else await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+          if (desktopObjectName || agent_desktop_lease_id) {
+            await agentDesktop.assertLease(effectiveAgentDesktopLeaseId);
+          } else {
+            await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+          }
         }
         const snapshot = await snapshotContent(runtime, target, {
           includeTree: include_tree,
           includeScreenshot: include_screenshot,
           interactiveOnly: interactive_only,
           maxElements: max_elements,
-          ...(effectiveAgentDesktopLeaseId ? { agentDesktopLeaseId: effectiveAgentDesktopLeaseId } : {})
+          ...(effectiveAgentDesktopLeaseId ? { agentDesktopLeaseId: effectiveAgentDesktopLeaseId } : {}),
+          ...(desktopObjectName ? { desktopObjectName } : {})
         });
-        if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+        if (effectiveAgentDesktopLeaseId) {
+          if (desktopObjectName) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
+          else await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+        }
         return snapshot;
       })
     )
@@ -386,7 +447,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop Computer Use targets windows by their verified Windows virtual-desktop GUID (not by a separate Win32 desktop object), and the observation retains its lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, and wait are allowed. Physical click, hover, drag, wheel injection, and keyboard injection remain fail-closed until those global-input paths are proven not to target the user input desktop. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop Computer Use uses verified virtual-desktop GUIDs for normal windows and lease-owned Win32 Desktop Object enumeration for isolated windows; observations retain their lease and object provenance even when the next call omits the lease. In isolated mode, invoke, set_value, semantic direction/to scroll, and wait are allowed. Physical click, hover, drag, wheel injection, and keyboard injection remain fail-closed until those global-input paths are proven not to target the user input desktop. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -428,11 +489,10 @@ export function registerComputerUseTools(
         await agentDesktop.assertLease(scopedLeaseId);
       }
 
-      const liveWindows = await runtime.backend.listWindows();
-      const scopedWindows = scopedLeaseId
-        ? await agentDesktop!.filterWindowsForLease(liveWindows, scopedLeaseId)
-        : liveWindows;
-      const target = runtime.windows.resolve(input.window_id, scopedWindows);
+      const inventory = await listScopedComputerWindows(runtime, agentDesktop, scopedLeaseId);
+      const resolved = resolveScopedComputerWindow(runtime, inventory, input.window_id);
+      const target = resolved.window;
+      const desktopObjectName = resolved.desktopObjectName;
       if (isAgentDesktopSafetyWindow(target)) throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
 
       const requestedAgentDesktopLeaseId = scopedLeaseId ?? await resolveAgentDesktopWindowLease(
@@ -457,20 +517,24 @@ export function registerComputerUseTools(
       const action = effectiveAgentDesktopLeaseId ? prepareAgentDesktopAction(parsedAction) : parsedAction;
       if (effectiveAgentDesktopLeaseId) {
         if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
-        await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+        if (desktopObjectName) await agentDesktop.assertLease(effectiveAgentDesktopLeaseId);
+        else await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
       }
 
       // Invalidate every sibling observation before attempting the action. Even a
       // backend error can be partial, so all clients must re-observe afterward.
       runtime.observations.advance(input.window_id, usesGlobalDesktopInput(action));
 
-      await runtime.backend.act(target.hwnd, action);
+      await runtime.backend.act(target.hwnd, action, desktopObjectName);
       if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
       if (input.settle_ms > 0 && action.type !== 'wait') {
         await new Promise(resolve => setTimeout(resolve, input.settle_ms));
       }
 
-      const refreshedWindows = await runtime.backend.listWindows();
+      const refreshedInventory = await listScopedComputerWindows(runtime, agentDesktop,
+        effectiveAgentDesktopLeaseId);
+      const refreshedWindows = desktopObjectName
+        ? refreshedInventory.objectWindows : refreshedInventory.virtualWindows;
       const refreshed = refreshedWindows.find(window => (
         window.hwnd === target.hwnd &&
         window.processId === target.processId &&
@@ -487,7 +551,8 @@ export function registerComputerUseTools(
         };
       }
       if (effectiveAgentDesktopLeaseId) {
-        await agentDesktop!.assertWindowOnLease(refreshed.hwnd, effectiveAgentDesktopLeaseId);
+        if (desktopObjectName) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
+        else await agentDesktop!.assertWindowOnLease(refreshed.hwnd, effectiveAgentDesktopLeaseId);
       }
       if (input.observe_after === 'none') {
         return {
@@ -502,7 +567,8 @@ export function registerComputerUseTools(
         runtime,
         refreshed,
         input.observe_after,
-        effectiveAgentDesktopLeaseId
+        effectiveAgentDesktopLeaseId,
+        desktopObjectName
       );
       if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
       const first = snapshot.content[0];
