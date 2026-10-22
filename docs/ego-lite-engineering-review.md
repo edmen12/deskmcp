@@ -41,7 +41,9 @@ The published Ego Lite repository contains the agent SDK and Skill, not the brow
 - Current tests: TypeScript build PASS; Browser suite 64/64 PASS; repeatable real Microsoft Edge local headless fixture 10/10 scoped checks PASS, including fill/click DOM callback and wrong-URL preventing later click. Not a general website reliability guarantee.
 - Open: independent code/security review, approval and auditing at an eventual MCP entrypoint, cancellation/deadline semantics, multi-hour crash and profile soak, controlled human takeover. Do not expose a tool or merge based on local tests alone.
 
-## Human takeover boundary: DESIGN ONLY, not implemented
+## Human takeover boundary: optional in-process gate candidate; native UI NOT implemented
+
+Candidate control-state and BrowserRuntime read/action gate are now implemented and test-driven, but there is no native local-user proof, authenticated Control Panel/HUD adapter, real D2 human takeover, or cross-tool enforcement. See [security review](ego-lite-handoff-security-review-20261022.md) for verified controls and remaining release RED blockers.
 
 1. Ownership states: agent-owned -> pause requested -> human-owned -> locally confirmed resume requested -> agent-owned. Human-owned sessions must block Agent snapshots and mutations, protecting credentials entered by people.
 2. Handoff drains in-flight operations through session gate before ownership changes, invalidates all Agent observations and pending action authorization. Late Agent requests fail.

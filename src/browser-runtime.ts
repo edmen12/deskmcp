@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { BrowserHandoffAgentPort } from './browser-handoff-boundary.js';
 import type { ArtifactInfo, ArtifactStore } from './artifact-store.js';
 import {
   ChromeCdpDriver,
@@ -49,6 +50,7 @@ const MAX_START_TIMEOUT_MS = 60000;
 const SCREENSHOT_RETENTION_SECONDS = 60 * 60;
 const BROWSER_OBSERVATION_TTL_MS = 30_000;
 const MAX_BROWSER_OBSERVATIONS = 1024;
+const MAX_PENDING_BROWSER_SESSION_OPERATIONS = 32;
 const PROFILE_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const PROFILE_LOCK_TIMEOUT_MS = 250;
 const MAX_PERSISTENT_PROFILES = 32;
@@ -460,6 +462,7 @@ export class BrowserRuntime {
   // Ego-style Space boundary: a session cannot observe a half-completed action.
   // Independent browser sessions retain parallel observation/action execution.
   private readonly sessionOperationChains = new Map<string, Promise<void>>();
+  private readonly pendingSessionOperations = new Map<string, number>();
   private sessionReaper: NodeJS.Timeout | undefined;
 
   constructor(
@@ -469,7 +472,8 @@ export class BrowserRuntime {
     cdp: BrowserCdpDriver | undefined = undefined,
     private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
     private readonly agentDesktop?: AgentDesktopManager,
-    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS
+    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
+    private readonly handoffAgent?: BrowserHandoffAgentPort
   ) {
     if (cdp) {
       this.cdp = cdp;
@@ -545,19 +549,38 @@ export class BrowserRuntime {
     finally { release(); }
   }
 
-  private async serializeSessionOperation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+  private async serializeSessionOperation<T>(
+    sessionId: string,
+    operation: () => Promise<T>,
+    mode: 'agent' | 'system-cleanup' = 'agent'
+  ): Promise<T> {
     const normalized = validateSessionId(sessionId);
+    const expectedEpoch = mode === 'agent' ? this.handoffAgent?.epoch(normalized) : undefined;
+    const pending = this.pendingSessionOperations.get(normalized) ?? 0;
+    if (pending >= MAX_PENDING_BROWSER_SESSION_OPERATIONS) {
+      throw new Error('Browser session operation queue is full; retry only after taking a fresh observation.');
+    }
+    this.pendingSessionOperations.set(normalized, pending + 1);
     const previous = this.sessionOperationChains.get(normalized) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>(resolve => { release = resolve; });
     this.sessionOperationChains.set(normalized, current);
-    await previous;
     try {
+      await previous;
+      if (mode === 'agent' && this.handoffAgent) {
+        if (expectedEpoch !== this.handoffAgent.epoch(normalized)) {
+          throw new Error('Browser control epoch changed during a queued action. Take a fresh snapshot after local confirmation.');
+        }
+        this.handoffAgent.assertAgentAccess(normalized);
+      }
       return await operation();
     } finally {
       if (this.sessionOperationChains.get(normalized) === current) {
         this.sessionOperationChains.delete(normalized);
       }
+      const remaining = (this.pendingSessionOperations.get(normalized) ?? 1) - 1;
+      if (remaining <= 0) this.pendingSessionOperations.delete(normalized);
+      else this.pendingSessionOperations.set(normalized, remaining);
       release();
     }
   }
@@ -738,9 +761,11 @@ export class BrowserRuntime {
       }
 
       const now = Date.now();
-      const idleDirectSessions = [...this.sessions.values()].filter(record =>
-        !record.agentDesktopLeaseId && now - record.lastActivityAt >= this.directSessionIdleTimeoutMs
-      );
+      const idleDirectSessions = [...this.sessions.values()].filter(record => {
+        if (record.agentDesktopLeaseId || now - record.lastActivityAt < this.directSessionIdleTimeoutMs) return false;
+        try { this.handoffAgent?.assertAgentAccess(record.sessionId); return true; }
+        catch { return false; } // Human-owned sessions have no ordinary agent idle timeout.
+      });
       for (const record of idleDirectSessions) {
         try { await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record)); }
         catch { /* Keep ownership if termination fails; retry on the next reaper pass. */ }
@@ -906,8 +931,15 @@ export class BrowserRuntime {
     await this.reconcile();
     const out: BrowserSessionSummary[] = [];
     for (const record of this.sessions.values()) {
+      const epoch = this.handoffAgent?.epoch(record.sessionId);
+      try { this.handoffAgent?.assertAgentAccess(record.sessionId); }
+      catch { continue; }
       let pages: readonly BrowserPageSummary[] | undefined;
       try { pages = await (await this.driver()).listPages(record.port, 3000); } catch { }
+      // A human takeover can begin while listPages awaits CDP: recheck before disclosure.
+      if (this.handoffAgent?.epoch(record.sessionId) !== epoch) continue;
+      try { this.handoffAgent?.assertAgentAccess(record.sessionId); }
+      catch { continue; }
       out.push({
         session_id: record.sessionId,
         profile_id: record.profileId,
@@ -926,12 +958,25 @@ export class BrowserRuntime {
     await this.reconcile();
     const profiles: BrowserProfileSummary[] = [];
     for (const profileId of await this.persistentProfileNames()) {
+      const ownerSessionId = this.profilesInUse.get(profileId);
+      const epoch = ownerSessionId ? this.handoffAgent?.epoch(ownerSessionId) : undefined;
+      if (ownerSessionId) {
+        try { this.handoffAgent?.assertAgentAccess(ownerSessionId); }
+        catch { continue; } // Human-owned profile metadata is not exposed via MCP.
+      }
       const profileDir = path.join(this.root, 'profiles', profileId);
       const info = await lstat(profileDir);
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Browser profile path is not a trusted directory: ${profileId}.`);
+      const inUse = await this.profileAppearsInUse(profileId);
+      // profileAppearsInUse is async; even a mid-read handoff must suppress disclosure.
+      if (ownerSessionId) {
+        if (this.handoffAgent?.epoch(ownerSessionId) !== epoch) continue;
+        try { this.handoffAgent?.assertAgentAccess(ownerSessionId); }
+        catch { continue; }
+      }
       profiles.push({
         profile_id: profileId,
-        in_use: await this.profileAppearsInUse(profileId),
+        in_use: inUse,
         modified_at: info.mtime.toISOString()
       });
     }
@@ -1056,6 +1101,7 @@ export class BrowserRuntime {
   }
 
   private async findUnlocked(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
@@ -1075,6 +1121,7 @@ export class BrowserRuntime {
   }
 
   private async snapshotUnlocked(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
@@ -1118,6 +1165,7 @@ export class BrowserRuntime {
     ref: string | undefined,
     options: BrowserSnapshotOptions = {}
   ): Promise<BrowserSnapshotResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     const selectedSelector = selector?.trim();
@@ -1188,6 +1236,7 @@ export class BrowserRuntime {
     actions: readonly BrowserAction[],
     options: BrowserSnapshotOptions = {}
   ): Promise<BrowserSnapshotResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     const mutatingActions = actions.filter(browserActionMutatesObservedState).length;
@@ -1234,6 +1283,7 @@ export class BrowserRuntime {
       });
       try {
         for (const [index, step] of steps.entries()) {
+          this.handoffAgent?.assertAgentAccess(record.sessionId);
           if (snapshot.page_id !== initial.pageId) {
             throw new BrowserWorkflowInterrupted(index, completed, false, 'page target changed');
           }
@@ -1261,6 +1311,32 @@ export class BrowserRuntime {
     });
   }
 
+  /**
+   * Candidate-only handoff request. Not an MCP tool. The future native UI must
+   * accept and resume via its private local port; remote callers never can.
+   */
+  async requestLocalBrowserHandoff(sessionId: string): Promise<{ readonly state: 'handoff-requested'; readonly epoch: number }> {
+    if (!this.handoffAgent) throw new Error('Local handoff authority is not configured.');
+    return this.serializeSessionOperation(sessionId, async () => {
+      const record = this.session(sessionId);
+      if (record.headless || !record.agentDesktopLeaseId || !this.agentDesktop) {
+        throw new Error('Local handoff requires a visible browser with a valid dedicated Agent Desktop lease.');
+      }
+      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+      const transition = this.handoffAgent!.request(record.sessionId);
+      this.invalidateSessionObservations(record.sessionId);
+      return { state: 'handoff-requested', epoch: transition.epoch };
+    });
+  }
+
+  /**
+   * Candidate-only local revocation hook. A trusted local UI adapter must hold
+   * the local control port and invoke this synchronously as part of transition.
+   */
+  invalidateForLocalHandoff(sessionId: string): void {
+    this.invalidateSessionObservations(validateSessionId(sessionId));
+  }
+
   async close(sessionId: string): Promise<{ session_id: string; closed: boolean }> {
     return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
@@ -1279,7 +1355,7 @@ export class BrowserRuntime {
     }
     await this.serializeMutation(async () => {
       const records = [...this.sessions.values()];
-      for (const record of records) await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record));
+      for (const record of records) await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record), 'system-cleanup');
     });
   }
 }

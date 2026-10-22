@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
+import { createBrowserHandoffBoundary } from '../src/browser-handoff-boundary.js';
 import { ArtifactStore } from '../src/artifact-store.js';
 import type {
   BrowserAction,
@@ -506,6 +507,176 @@ test('closing a browser session waits for its in-flight action instead of termin
   await browser.closeAll();
 });
 
+
+test('session FIFO refuses queue floods without affecting another browser session', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, { recursive:true,force:true })); });
+  const driver = new GatedActionDriver();
+  const controller = new FakeProcessController(path.join(root,'browser'));
+  const { browser } = await configuredRuntime(root,controller,driver);
+  const first = await browser.start({profile_id:'queue-flood-one'});
+  const second = await browser.start({profile_id:'queue-flood-two'});
+  const firstSnapshot = await browser.snapshot(first.session_id,first.page_id,{screenshot:false});
+  const running = browser.act(first.session_id,first.page_id,firstSnapshot.browser_observation_id,
+    [{type:'fill',selector:'#input',value:'hold'}],{screenshot:false});
+  await driver.actionEntered;
+  const queued=Array.from({length:31},()=>browser.snapshot(first.session_id,first.page_id,{screenshot:false}));
+  await assert.rejects(browser.snapshot(first.session_id,first.page_id,{screenshot:false}),/operation queue is full/i);
+  const independent = await browser.snapshot(second.session_id,second.page_id,{screenshot:false});
+  assert.equal(independent.session_id,second.session_id);
+  driver.releaseAction();
+  await running;
+  const results = await Promise.all(queued);
+  assert.equal(results.length,31);
+  const later = await browser.snapshot(first.session_id,first.page_id,{screenshot:false});
+  assert.equal(later.session_id,first.session_id);
+  await browser.closeAll();
+});
+
+test('candidate handoff denies agent reads, writes and inventory until trusted local resume', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, {recursive:true,force:true})); });
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const browserRoot=path.join(root,'browser');
+  const controller=new FakeProcessController(browserRoot);
+  const leaseId='99999999-9999-4999-8999-999999999999';
+  const desktop={
+    async assertLease(id: string) { assert.equal(id,leaseId); return {}; },
+    async isLeaseActive(id: string) { return id===leaseId; }
+  } as unknown as AgentDesktopManager;
+  let browser!: BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  browser=new BrowserRuntime(browserRoot,controller,artifacts,new FakeCdpDriver(),executable,desktop,undefined,boundary.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'local-handoff-check',agent_desktop_lease_id:leaseId});
+  const old=await browser.snapshot(session.session_id,session.page_id,{screenshot:false});
+  const started=await browser.requestLocalBrowserHandoff(session.session_id);
+  assert.equal(started.state,'handoff-requested');
+  assert.equal((await browser.list()).length,0,'agent inventory cannot reveal an active handoff');
+  assert.equal((await browser.listProfiles()).length,0,'agent cannot see human-owned profile identifiers');
+  await assert.rejects(browser.snapshot(session.session_id,session.page_id,{screenshot:false}),/human control/i);
+  await assert.rejects(browser.find(session.session_id,session.page_id,{query:'password'}),/human control/i);
+  await assert.rejects(browser.act(session.session_id,session.page_id,old.browser_observation_id,[{type:'click',selector:'#go'}],{screenshot:false}),/human control/i);
+  await assert.rejects(browser.newPage(session.session_id),/human control/i);
+  await assert.rejects(browser.close(session.session_id),/human control/i);
+  await assert.rejects(browser.runGuardedWorkflow(session.session_id,session.page_id,old.browser_observation_id,[
+    {action:{type:'click',selector:'#go'},expected_url:'https://example.com/'}
+  ]),/human control/i);
+  assert.equal(boundary.local.accept(session.session_id).state,'human');
+  await assert.rejects(browser.snapshot(session.session_id,session.page_id,{screenshot:false}),/human control/i);
+  const resumed=boundary.local.resume(session.session_id);
+  assert.equal(resumed.state,'agent');
+  await assert.rejects(browser.act(session.session_id,session.page_id,old.browser_observation_id,
+    [{type:'click',selector:'#go'}],{screenshot:false}),/consumed|expired|unknown/i);
+  const fresh=await browser.snapshot(session.session_id,session.page_id,{screenshot:false});
+  assert.equal(fresh.session_id,session.session_id);
+  await browser.closeAll();
+});
+
+test('candidate handoff requires a dedicated visible lease and rejects invalid local transitions', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{ await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true})); });
+  const {browser,controller} = await configuredRuntime(root);
+  const plain = await browser.start({profile_id:'handoff-headless-denied'});
+  await assert.rejects(browser.requestLocalBrowserHandoff(plain.session_id),/not configured/i);
+  await browser.closeAll();
+  const transitions: string[]=[];
+  const boundary=createBrowserHandoffBoundary(id=>{transitions.push(id);});
+  const session='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  assert.equal(boundary.agent.status(session).state,'agent');
+  assert.throws(()=>boundary.local.accept(session),/Invalid browser handoff transition/);
+  assert.throws(()=>boundary.local.resume(session),/Invalid browser handoff transition/);
+  boundary.agent.request(session);
+  assert.throws(()=>boundary.agent.assertAgentAccess(session),/human control/i);
+  assert.equal(boundary.local.reject(session).state,'agent');
+  assert.equal(boundary.agent.epoch(session),2);
+  boundary.agent.request(session);
+  boundary.local.accept(session);
+  assert.equal(boundary.agent.status(session).state,'human');
+  boundary.local.resume(session);
+  assert.equal(boundary.agent.status(session).state,'agent');
+  assert.equal(transitions.length,5);
+  assert.equal(boundary.agent.status(session).epoch,5);
+  assert.equal(controller.terminated.length,1);
+});
+
+test('failed handoff revocation callback cannot restore agent access', () => {
+  const session='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  let rejectResume=false;
+  const boundary=createBrowserHandoffBoundary(()=>{
+    if (rejectResume) throw new Error('INJECTED_REVOKE_FAILURE');
+  });
+  boundary.agent.request(session);
+  boundary.local.accept(session);
+  rejectResume=true;
+  assert.throws(()=>boundary.local.resume(session),/INJECTED_REVOKE_FAILURE/);
+  assert.equal(boundary.agent.status(session).state,'human');
+  assert.throws(()=>boundary.agent.assertAgentAccess(session),/human control/i);
+});
+
+test('handoff request on a configured headless session refuses ownership change', async t => {
+  const root = await tempRoot();
+  t.after(async () => { await import('node:fs/promises').then(fs => fs.rm(root, {recursive:true,force:true})); });
+  const executable = path.join(root, 'configured-browser.exe');
+  await writeFile(executable, 'fixture binary', 'utf8');
+  const artifacts = new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  let browser!: BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  const browserRoot=path.join(root,'browser');
+  browser=new BrowserRuntime(browserRoot,new FakeProcessController(browserRoot),artifacts,new FakeCdpDriver(),executable,undefined,undefined,boundary.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'headless-handoff-must-fail'});
+  await assert.rejects(browser.requestLocalBrowserHandoff(session.session_id),/dedicated Agent Desktop lease/i);
+  assert.equal(boundary.agent.status(session.session_id).state,'agent');
+  assert.equal((await browser.list()).length,1);
+  await browser.closeAll();
+});
+
+test('browser session inventory rechecks ownership when local handoff happens during CDP listPages', async t => {
+  const root=await tempRoot();
+  t.after(async()=>{await import('node:fs/promises').then(fs=>fs.rm(root,{recursive:true,force:true}));});
+  class BlockingInventoryDriver extends FakeCdpDriver {
+    barrier: {entered:Promise<void>;signal:()=>void;release:()=>void;wait:Promise<void>}|undefined;
+    override async listPages(port:number): Promise<readonly BrowserPageSummary[]> {
+      if (this.barrier) {
+        const b=this.barrier;
+        this.barrier=undefined;
+        b.signal();
+        await b.wait;
+      }
+      return super.listPages(port);
+    }
+  }
+  const executable=path.join(root,'configured-browser.exe');
+  await writeFile(executable,'fixture binary','utf8');
+  const artifacts=new ArtifactStore(path.join(root,'artifacts'));
+  await artifacts.init();
+  const driver=new BlockingInventoryDriver();
+  const browserRoot=path.join(root,'browser');
+  let browser!:BrowserRuntime;
+  const boundary=createBrowserHandoffBoundary(id=>browser.invalidateForLocalHandoff(id));
+  const controller=new FakeProcessController(browserRoot);
+  browser=new BrowserRuntime(browserRoot,controller,artifacts,driver,executable,undefined,undefined,boundary.agent);
+  await browser.init();
+  const session=await browser.start({profile_id:'inventory-handoff-race'});
+  let signal!:()=>void;
+  let release!:()=>void;
+  const entered=new Promise<void>(resolve=>{signal=resolve;});
+  const wait=new Promise<void>(resolve=>{release=resolve;});
+  driver.barrier={entered,signal,release,wait};
+  const pendingList=browser.list();
+  await entered;
+  boundary.agent.request(session.session_id); // Emulates synchronous revocation in a trusted local channel.
+  release();
+  const inventory=await pendingList;
+  assert.equal(inventory.length,0,'cannot disclose a tab read under an earlier control epoch');
+  assert.equal((await browser.list()).length,0);
+  await browser.closeAll();
+});
 
 test('guarded browser workflow performs two fresh-observation mutations without requiring repeated MCP roundtrips', async t => {
   const root = await tempRoot();
