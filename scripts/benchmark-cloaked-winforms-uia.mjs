@@ -246,12 +246,18 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'benchmark-cloaked-win
     exitCode = 1;
     safeResult.error = error instanceof Error ? error.message : String(error);
   } finally {
-    if (child && child.exitCode === null) {
+    if (child && child.exitCode === null && child.signalCode === null) {
       child.kill();
       await Promise.race([
         new Promise(resolve => child.once('exit', resolve)),
         sleep(1400)
       ]);
+    }
+    safeResult.owned_fixture_exit_confirmed = Boolean(child &&
+      (child.exitCode !== null || child.signalCode !== null));
+    if (!safeResult.owned_fixture_exit_confirmed) {
+      safeResult.cleanup_warning = 'OWNED_FIXTURE_EXIT_NOT_CONFIRMED';
+      exitCode = 1;
     }
     await rm(folder, { recursive: true, force: true }).catch(() => {});
   }

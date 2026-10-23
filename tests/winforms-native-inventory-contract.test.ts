@@ -47,7 +47,8 @@ test('benchmark preserves fixture hash pin, no-activate and negative read-only t
     'OWNED_NONACTIVATING_CLOAK_PROOF_FAILED',
     'wrong_process', 'swapped_control_roles', 'invalid_capability', 'wrong_sentinel',
     'supports_native_action !== false', 'dispatch_count !== 0',
-    'OWNED_NATIVE_READ_ONLY_FAIL_CLOSED_TEST_FAILED'
+    'OWNED_NATIVE_READ_ONLY_FAIL_CLOSED_TEST_FAILED',
+    'owned_fixture_exit_confirmed', 'OWNED_FIXTURE_EXIT_NOT_CONFIRMED'
   ]) assert.ok(runner.includes(token), token);
 });
 
