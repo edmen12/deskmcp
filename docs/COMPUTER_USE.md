@@ -37,6 +37,12 @@ Snapshots default to the interactive UI Automation tree without a screenshot. Re
 
 `wait_for` now acquires the shared coordinator for its initial observation/lease preflight and for **each individual** identity-checked UIA scan. Polling delays run outside the lock, allowing other agents to inspect or modify UI between scans. A fresh `computer_observation_id` is still required before any later action. The 10-second budget bounds polling decisions, but one in-flight WinApp inspect can exceed that elapsed limit due to backend timeout; it is not a hard deadline.
 
+### Target identity guard and UIA coverage (candidate)
+
+Each tree snapshot now includes `selector_coverage`: returned element count, selected elements, unique-selector count, ambiguous-selector elements, whether the returned tree is empty, and `scope_complete=false`. A zero-element response explicitly warns that WinApp's depth/filter/provider may have hidden controls. This is evidence about the **returned tree**, not about every element in the application.
+
+For critical actions such as Save or Submit, pass `target_guard` on `desktop_ui_action`, for example `{ "type": "Button", "automation_id": "SaveAction", "require_enabled": true }` together with the exact `selector` observed in the prior snapshot. Before any input/Invoke, DeskMCP performs another bounded UIA inspection (up to 200 projected elements), checks that the selector occurs **exactly once** and matches all supplied identity fields, and then revalidates the window capability and any Agent Desktop lease. A known-truncated tree, missing, ambiguous, disabled or changed control is rejected without dispatch. The guard is optional and requires at least one identity field (`type`, `name`, `automation_id` or `class_name`); it is intentionally unavailable for coordinate-only actions. Guard scans introduce additional latency and cannot eliminate application changes in the short interval between verification and dispatch (TOCTOU).
+
 Normal user desktop actions keep their existing input options and policy checks. Only a valid Agent Desktop lease applies the separate isolated-desktop action restrictions.
 
 Windows Forms controls can lose their child UI Automation providers when the app window is isolated on a non-current Windows virtual desktop. DeskMCP detects the known degraded shape and returns `semantic_tree_status: "limited"` plus `semantic_tree_warning`; callers must not treat that element list as complete. DeskMCP does not move the app back to Desktop 1 or steal the user's foreground merely to recover a richer tree.
@@ -81,6 +87,10 @@ If Windows switches to Secure Desktop for UAC, normal desktop UI automation must
 ## Backend startup measurement (2026-10-23; local read-only sample)
 
 Run `node scripts/benchmark-winapp-startup.mjs <trusted-absolute-winapp-exe-path>` to time six separate CLI launches for each of `--help` and `ui list-windows --json`, without printing any window metadata. A local installed WinApp CLI v0.5.0 sample yielded 6/6 successful calls in each case, with medians of about 54.7ms for help and 55.7ms for read-only window enumeration. These numbers do **not** include a complex UIA tree scan, network round-trips, or a persistent worker baseline. Persistent UIA worker adoption remains proposed pending isolated benchmarks showing meaningful latency benefits after accounting for COM lifecycle, recovery, memory, and Agent Desktop isolation.
+
+### Read-only WinApp inspect probe (2026-10-23)
+
+Run `node scripts/benchmark-winapp-inspect.mjs <trusted-absolute-winapp-exe-path>` to enumerate but only inspect Windows-owned Explorer `ApplicationFrameWindow` targets; it does not emit titles, control labels, selector strings, HWNDs or PIDs. It performs no click, screenshot, text input or foreground request. One available local shell frame returned 1 element in a depth-4 tree (95.8ms) and zero elements in an interactive-depth-8 tree (69.9ms). **This is a limited provider-visibility sample, not a complex third-party app benchmark or a no-focus-steal acceptance test.** The tool deliberately marks empty or ambiguous selector coverage and allows opt-in identity verification instead of guessing. More complex application UIA benchmarking requires a controlled, non-disruptive fixture with verified window ownership.
 
 ## Backend and packaging
 

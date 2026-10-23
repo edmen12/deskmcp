@@ -6,6 +6,7 @@ import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { ComputerWindow, UiAction, UiElementSummary } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
 import { diffUiSnapshots, waitForUiCondition, type WaitCondition } from './computer-use-read-model.js';
+import { uiSelectorCoverage, verifyUiTargetGuard } from './computer-use-target-guard.js';
 
 function failure(prefix: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -376,7 +377,10 @@ async function snapshotContent(
   const truncationWarning = inspection?.elementsTruncated
     ? `semantic_tree_truncated: DeskMCP returned at most ${options.maxElements} controls from WinApp's depth-limited result; omitted controls must not be treated as absent. Increase max_elements (up to 200) or narrow the target.`
     : undefined;
-  const semanticTreeWarning = [agentDesktopWarning, truncationWarning].filter(Boolean).join(' ');
+  const emptyTreeWarning = inspection && inspection.elements.length === 0
+    ? 'semantic_tree_empty: WinApp returned zero elements within the requested depth/filter. Do not infer that the app has no controls.'
+    : undefined;
+  const semanticTreeWarning = [agentDesktopWarning, truncationWarning, emptyTreeWarning].filter(Boolean).join(' ');
   const metadata = {
     computer_observation_id: observationId,
     captured_at: new Date().toISOString(),
@@ -385,6 +389,7 @@ async function snapshotContent(
     ...(inspection ? {
       ...(!options.diffOnly ? { elements: inspection.elements } : {}),
       ...(uiDiff ? { ui_diff: uiDiff, diff_from_observation_id: options.diffFromObservationId } : {}),
+      selector_coverage: uiSelectorCoverage(inspection.elements),
       semantic_tree_truncated: inspection.elementsTruncated === true,
       semantic_tree_scope: 'winapp_depth_and_filter_limited'
     } : {}),
@@ -531,6 +536,13 @@ export function registerComputerUseTools(
         computer_observation_id: z.string().uuid(),
         action: z.enum(['invoke', 'set_value', 'click', 'hover', 'scroll', 'send_keys', 'drag', 'wait', 'wait_for']),
         selector: z.string().min(1).max(512).optional(),
+        target_guard: z.object({
+          type: z.string().min(1).max(128).optional(),
+          name: z.string().min(1).max(512).optional(),
+          automation_id: z.string().min(1).max(512).optional(),
+          class_name: z.string().min(1).max(256).optional(),
+          require_enabled: z.boolean().optional()
+        }).strict().optional(),
         value: z.string().max(65536).optional(),
         keys: z.string().max(4096).optional(),
         button: z.enum(['left', 'right']).optional(),
@@ -601,6 +613,25 @@ export function registerComputerUseTools(
       if (effectiveAgentDesktopLeaseId) {
         if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
         await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+      }
+
+      if (input.target_guard) {
+        // Fail closed before any potentially non-idempotent backend dispatch.
+        const selector = input.selector;
+        if (!selector || !['invoke', 'set_value', 'click', 'hover', 'scroll', 'send_keys'].includes(action.type)) {
+          throw new Error('target_guard requires an action with an exact selector.');
+        }
+        const inspected = await runtime.backend.inspect(target.hwnd, true, 200);
+        verifyUiTargetGuard(inspected, selector, input.target_guard);
+        // UIA reads can trigger application-side changes; re-check native window and lease.
+        const guardedWindows = await runtime.backend.listWindows();
+        const guardedScoped = effectiveAgentDesktopLeaseId
+          ? await agentDesktop!.filterWindowsForLease(guardedWindows, effectiveAgentDesktopLeaseId)
+          : guardedWindows;
+        runtime.windows.resolve(input.window_id, guardedScoped);
+        if (effectiveAgentDesktopLeaseId) {
+          await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+        }
       }
 
       // Invalidate every sibling observation before attempting the action. Even a

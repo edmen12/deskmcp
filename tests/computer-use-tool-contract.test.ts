@@ -5,7 +5,7 @@ import type { AuditLogger } from '../src/audit.js';
 import type { DesktopPolicy } from '../src/desktop-policy.js';
 import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import type { ComputerUseRuntime } from '../src/computer-use-runtime.js';
-import type { ComputerWindow } from '../src/computer-use-backend.js';
+import type { ComputerWindow, UiElementSummary } from '../src/computer-use-backend.js';
 import { ComputerObservationRegistry } from '../src/computer-use-observation.js';
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
 import { registerComputerUseTools } from '../src/computer-use-tools.js';
@@ -32,9 +32,10 @@ function setup(agentDesktop?: AgentDesktopManager) {
     className: 'FixtureWindow', width: 800, height: 600, isForeground: true
   };
   let inspectFails = false;
+  let elementsTruncated = true;
   let onInspect: (() => void) | undefined;
   let currentProcessId = target.processId;
-  let snapshotElements = [{ type: 'Window', selector: 'Root', value: '' }];
+  let snapshotElements: UiElementSummary[] = [{ type: 'Window', selector: 'Root', value: '' }];
   let listFailureOnCall = Number.POSITIVE_INFINITY;
   let listCalls = 0;
   let actCalls = 0;
@@ -47,7 +48,7 @@ function setup(agentDesktop?: AgentDesktopManager) {
     async inspect() {
       onInspect?.();
       if (inspectFails) throw new Error('screenshot or UIA unavailable');
-      return { hwnd: target.hwnd, elements: snapshotElements, elementsTruncated: true };
+      return { hwnd: target.hwnd, elements: snapshotElements, elementsTruncated };
     },
     async act() { actCalls += 1; return {}; }
   };
@@ -76,6 +77,7 @@ function setup(agentDesktop?: AgentDesktopManager) {
   return {
     runtime, tool, decode, snapshot,
     setInspectFails(value: boolean) { inspectFails = value; },
+    setElementsTruncated(value: boolean) { elementsTruncated = value; },
     setInspectHook(callback: (() => void) | undefined) { onInspect = callback; },
     changeProcessIdentity(value: number) { currentProcessId = value; },
     setSnapshotElements(value: typeof snapshotElements) { snapshotElements = value; },
@@ -345,4 +347,128 @@ test('cooperative wait_for rechecks Agent Desktop lease and fails closed after r
   assert.match(result.content[0]?.text ?? '', /lease revoked/i);
   assert.ok(guardChecks >= 3);
   assert.equal(fixture.getActCalls(), 0);
+});
+
+test('snapshot reports selector coverage and warns when UIA exposes zero elements', async () => {
+  const f = setup();
+  f.setSnapshotElements([]);
+  const r = await f.snapshot();
+  assert.equal((r.selector_coverage as Record<string, unknown>).scanned_elements, 0);
+  assert.equal((r.selector_coverage as Record<string, unknown>).semantic_tree_empty, true);
+  assert.equal(r.semantic_tree_status, 'limited');
+  assert.match(String(r.semantic_tree_warning), /Do not infer that the app has no controls/i);
+});
+
+test('target_guard dispatches exactly once for one matching live UIA control', async () => {
+  const f = setup();
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([{ type: 'Button', selector: 'Root', name: 'Save', isEnabled: true }]);
+  const before = await f.snapshot();
+  const response = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'invoke', selector: 'Root',
+    target_guard: { type: 'Button', name: 'Save', require_enabled: true },
+    settle_ms: 0, observe_after: 'none',
+    allow_system_keys: false, allow_user_desktop: false
+  });
+  assert.equal(response.isError, undefined);
+  assert.equal(f.getActCalls(), 1);
+});
+
+test('target_guard blocks changed, ambiguous and unobservable selectors without acting', async () => {
+  for (const live of [
+    [{ type: 'Button', selector: 'Root', name: 'Delete' }],
+    [{ type: 'Button', selector: 'Root', name: 'Save' }, { type: 'Button', selector: 'Root', name: 'Save' }],
+    []
+  ]) {
+    const f = setup();
+    f.setElementsTruncated(false);
+    f.setSnapshotElements([{ type: 'Button', selector: 'Root', name: 'Save' }]);
+    const before = await f.snapshot();
+    f.setSnapshotElements(live);
+    const response = await f.tool('desktop_ui_action')({
+      window_id: (before.window as Record<string, unknown>).window_id,
+      computer_observation_id: before.computer_observation_id,
+      action: 'invoke', selector: 'Root',
+      target_guard: { type: 'Button', name: 'Save' },
+      settle_ms: 0, observe_after: 'none',
+      allow_system_keys: false, allow_user_desktop: false
+    });
+    assert.equal(response.isError, true);
+    assert.equal(f.getActCalls(), 0);
+  }
+});
+
+test('target_guard refuses actions without a selector before input dispatch', async () => {
+  const f = setup();
+  const before = await f.snapshot();
+  const response = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'wait', wait_ms: 0,
+    target_guard: { type: 'Button' },
+    settle_ms: 0, observe_after: 'none',
+    allow_system_keys: false, allow_user_desktop: false
+  });
+  assert.equal(response.isError, true);
+  assert.match(response.content[0]?.text ?? '', /exact selector/i);
+  assert.equal(f.getActCalls(), 0);
+});
+
+test('target_guard does not dispatch from a known truncated tree', async () => {
+  const f = setup();
+  f.setSnapshotElements([{ type: 'Button', selector: 'Root', name: 'Save' }]);
+  const before = await f.snapshot();
+  const response = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'invoke', selector: 'Root',
+    target_guard: { type: 'Button', name: 'Save' },
+    settle_ms: 0, observe_after: 'none',
+    allow_system_keys: false, allow_user_desktop: false
+  });
+  assert.equal(response.isError, true);
+  assert.match(response.content[0]?.text ?? '', /truncated UI tree/i);
+  assert.equal(f.getActCalls(), 0);
+});
+
+test('target_guard preserves normal-desktop click capability and Agent Desktop click denial', async () => {
+  const normal = setup();
+  normal.setElementsTruncated(false);
+  normal.setSnapshotElements([{ selector: 'Root', type: 'Button', name: 'Confirm' }]);
+  const before = await normal.snapshot();
+  const argumentsForAction = {
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'click',
+    selector: 'Root',
+    target_guard: { type: 'Button', name: 'Confirm' },
+    settle_ms: 0, observe_after: 'none',
+    allow_system_keys: false, allow_user_desktop: false
+  };
+  const normalResult = await normal.tool('desktop_ui_action')(argumentsForAction);
+  assert.equal(normalResult.isError, undefined);
+  assert.equal(normal.getActCalls(), 1);
+
+  const leaseId = '11111111-1111-4111-8111-111111111111';
+  const agentDesktop = {
+    async activeLeaseForWindow() { return leaseId; },
+    async assertLease() { return undefined; },
+    async assertWindowOnLease() { return undefined; },
+    async filterWindowsForLease<T>(windows: T[]) { return windows; },
+    async hasActiveControls() { return true; }
+  } as unknown as AgentDesktopManager;
+  const isolated = setup(agentDesktop);
+  isolated.setElementsTruncated(false);
+  isolated.setSnapshotElements([{ selector: 'Root', type: 'Button', name: 'Confirm' }]);
+  const isolatedBefore = await isolated.snapshot();
+  const isolatedResult = await isolated.tool('desktop_ui_action')({
+    ...argumentsForAction,
+    window_id: (isolatedBefore.window as Record<string, unknown>).window_id,
+    computer_observation_id: isolatedBefore.computer_observation_id
+  });
+  assert.equal(isolatedResult.isError, true);
+  assert.match(isolatedResult.content[0]?.text ?? '', /requires_foreground_input/i);
+  assert.equal(isolated.getActCalls(), 0);
 });
