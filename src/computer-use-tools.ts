@@ -233,6 +233,7 @@ interface ComputerWaitForInput {
   readonly expected_value?: string | undefined;
   readonly wait_ms?: number | undefined;
   readonly poll_ms?: number | undefined;
+  readonly wait_scan_mode?: 'auto' | 'interactive' | 'full' | undefined;
   readonly allow_user_desktop?: boolean | undefined;
 }
 
@@ -281,24 +282,41 @@ async function executeCooperativeWaitFor(
   const verifyLease = async () => {
     if (validated.leaseId) await agentDesktop!.assertLease(validated.leaseId);
   };
+  let fullScanOnly = input.wait_scan_mode === 'full';
   const inspectOne = () => runtime.coordinator.exclusive(async () => {
-    await verifyLease();
-    const live = await runtime.backend.listWindows();
-    const scoped = validated.leaseId
-      ? await agentDesktop!.filterWindowsForLease(live, validated.leaseId)
-      : live;
-    const target = runtime.windows.resolve(input.window_id, scoped);
-    if (isAgentDesktopSafetyWindow(target)) throw new Error('Agent Desktop safety HUD cannot be inspected.');
-    const currentLease = await resolveAgentDesktopWindowLease(agentDesktop, target.hwnd);
-    if (currentLease !== validated.leaseId) {
-      throw new PolicyDeniedError('Target window Agent Desktop lease changed during wait_for.');
+    const guardedInspect = async (interactiveOnly: boolean) => {
+      await verifyLease();
+      const live = await runtime.backend.listWindows();
+      const scoped = validated.leaseId
+        ? await agentDesktop!.filterWindowsForLease(live, validated.leaseId)
+        : live;
+      const target = runtime.windows.resolve(input.window_id, scoped);
+      if (isAgentDesktopSafetyWindow(target)) throw new Error('Agent Desktop safety HUD cannot be inspected.');
+      const currentLease = await resolveAgentDesktopWindowLease(agentDesktop, target.hwnd);
+      if (currentLease !== validated.leaseId) {
+        throw new PolicyDeniedError('Target window Agent Desktop lease changed during wait_for.');
+      }
+      await assertUnscopedUserDesktopActionAllowed(
+        agentDesktop, validated.leaseId, input.allow_user_desktop ?? false
+      );
+      if (validated.leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, validated.leaseId);
+      const inspected = await runtime.backend.inspect(target.hwnd, interactiveOnly, 200);
+      // Revalidate after provider work; HWND can be replaced while the UIA call runs.
+      const after = await runtime.backend.listWindows();
+      const afterScoped = validated.leaseId
+        ? await agentDesktop!.filterWindowsForLease(after, validated.leaseId)
+        : after;
+      runtime.windows.resolve(input.window_id, afterScoped);
+      if (validated.leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, validated.leaseId);
+      return inspected;
+    };
+    let inspected = await guardedInspect(!fullScanOnly);
+    if (input.wait_scan_mode !== 'interactive' && !fullScanOnly &&
+        (inspected.elementsTruncated === true ||
+         !inspected.elements.some(element => element.selector === input.selector))) {
+      fullScanOnly = true;
+      inspected = await guardedInspect(false);
     }
-    await assertUnscopedUserDesktopActionAllowed(
-      agentDesktop, validated.leaseId, input.allow_user_desktop ?? false
-    );
-    if (validated.leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, validated.leaseId);
-    const inspected = await runtime.backend.inspect(target.hwnd, true, 200);
-    if (validated.leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, validated.leaseId);
     return inspected;
   });
 
@@ -318,6 +336,8 @@ async function executeCooperativeWaitFor(
     selector: input.selector,
     attempts: outcome.attempts,
     timed_out: outcome.timed_out,
+    scan_mode: input.wait_scan_mode ?? 'auto',
+    auto_fallback_to_full: fullScanOnly && (input.wait_scan_mode ?? 'auto') === 'auto',
     semantic_tree_truncated: outcome.last_inspection_truncated,
     semantic_tree_scope: 'winapp_depth_and_filter_limited',
     observation_required_before_next_action: true
@@ -541,7 +561,8 @@ export function registerComputerUseTools(
           name: z.string().min(1).max(512).optional(),
           automation_id: z.string().min(1).max(512).optional(),
           class_name: z.string().min(1).max(256).optional(),
-          require_enabled: z.boolean().optional()
+          require_enabled: z.boolean().optional(),
+          scan_mode: z.enum(['interactive', 'full']).optional().default('full')
         }).strict().optional(),
         value: z.string().max(65536).optional(),
         keys: z.string().max(4096).optional(),
@@ -562,6 +583,7 @@ export function registerComputerUseTools(
         wait_condition: z.enum(['present', 'enabled', 'value_equals']).optional().default('present'),
         expected_value: z.string().max(65536).optional(),
         poll_ms: z.number().int().min(100).max(1000).optional().default(250),
+        wait_scan_mode: z.enum(['auto', 'interactive', 'full']).optional().default('auto'),
         settle_ms: z.number().int().min(0).max(5000).optional().default(150),
         observe_after: z.enum(['none', 'tree', 'screenshot', 'both']).optional().default('tree'),
         agent_desktop_lease_id: z.string().uuid().optional()
@@ -621,7 +643,7 @@ export function registerComputerUseTools(
         if (!selector || !['invoke', 'set_value', 'click', 'hover', 'scroll', 'send_keys'].includes(action.type)) {
           throw new Error('target_guard requires an action with an exact selector.');
         }
-        const inspected = await runtime.backend.inspect(target.hwnd, true, 200);
+        const inspected = await runtime.backend.inspect(target.hwnd, input.target_guard.scan_mode === 'interactive', 200);
         verifyUiTargetGuard(inspected, selector, input.target_guard);
         // UIA reads can trigger application-side changes; re-check native window and lease.
         const guardedWindows = await runtime.backend.listWindows();

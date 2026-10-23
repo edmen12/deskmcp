@@ -147,7 +147,7 @@ export async function waitForUiCondition(
     const met = condition === 'present' ? Boolean(element)
       : condition === 'enabled' ? element?.isEnabled === true
       : element?.value === expectedValue;
-    if (met) return { condition_met: true, timed_out: false, attempts, last_inspection_truncated: lastInspectionTruncated };
+    if (met && !lastInspectionTruncated) return { condition_met: true, timed_out: false, attempts, last_inspection_truncated: false };
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { condition_met: false, timed_out: true, attempts, last_inspection_truncated: lastInspectionTruncated };
     await sleep(Math.min(pollMs, remaining));

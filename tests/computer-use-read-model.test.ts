@@ -85,3 +85,16 @@ test('wait rejects ambiguous selectors, missing expected value and guard failure
   ), /lease revoked/i);
   assert.equal(inspected, false);
 });
+
+test('wait refuses to verify a selector from a known truncated tree', async () => {
+  const result = await waitForUiCondition(
+    async () => ({
+      hwnd: 101, elements: [{ selector: 'Save', type: 'Button', isEnabled: true }],
+      elementsTruncated: true
+    }),
+    async () => undefined, 'Save', 'enabled', undefined, 0, 100
+  );
+  assert.equal(result.condition_met, false);
+  assert.equal(result.timed_out, true);
+  assert.equal(result.last_inspection_truncated, true);
+});

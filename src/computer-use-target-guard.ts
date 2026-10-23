@@ -27,6 +27,7 @@ export interface UiTargetGuard {
   readonly automation_id?: string | undefined;
   readonly class_name?: string | undefined;
   readonly require_enabled?: boolean | undefined;
+  readonly scan_mode?: 'interactive' | 'full' | undefined;
 }
 
 /**

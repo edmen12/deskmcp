@@ -36,6 +36,8 @@ function setup(agentDesktop?: AgentDesktopManager) {
   let onInspect: (() => void) | undefined;
   let currentProcessId = target.processId;
   let snapshotElements: UiElementSummary[] = [{ type: 'Window', selector: 'Root', value: '' }];
+  let fullScanElements: UiElementSummary[] | undefined;
+  const inspectModes: boolean[] = [];
   let listFailureOnCall = Number.POSITIVE_INFINITY;
   let listCalls = 0;
   let actCalls = 0;
@@ -45,10 +47,11 @@ function setup(agentDesktop?: AgentDesktopManager) {
       if (listCalls >= listFailureOnCall) throw new Error('postaction enumeration lost');
       return [{ ...target, processId: currentProcessId }];
     },
-    async inspect() {
+    async inspect(_hwnd: number, interactiveOnly = true) {
+      inspectModes.push(interactiveOnly);
       onInspect?.();
       if (inspectFails) throw new Error('screenshot or UIA unavailable');
-      return { hwnd: target.hwnd, elements: snapshotElements, elementsTruncated };
+      return { hwnd: target.hwnd, elements: interactiveOnly ? snapshotElements : (fullScanElements ?? snapshotElements), elementsTruncated };
     },
     async act() { actCalls += 1; return {}; }
   };
@@ -81,6 +84,8 @@ function setup(agentDesktop?: AgentDesktopManager) {
     setInspectHook(callback: (() => void) | undefined) { onInspect = callback; },
     changeProcessIdentity(value: number) { currentProcessId = value; },
     setSnapshotElements(value: typeof snapshotElements) { snapshotElements = value; },
+    setFullScanElements(value: UiElementSummary[]) { fullScanElements = value; },
+    inspectModes() { return [...inspectModes]; },
     setListFails(value: boolean) { listFailureOnCall = value ? listCalls + 2 : Number.POSITIVE_INFINITY; },
     getActCalls() { return actCalls; }
   };
@@ -183,6 +188,7 @@ test('snapshot diff rejects a baseline from another window or invalid scope', as
 
 test('wait_for verifies UIA condition without dispatching mouse or keyboard input', async () => {
   const fixture = setup();
+  fixture.setElementsTruncated(false);
   const before = await fixture.snapshot();
   fixture.setSnapshotElements([{ selector: 'Root', value: 'saved', type: 'Edit' }]);
   const response = await fixture.tool('desktop_ui_action')({
@@ -252,6 +258,7 @@ test('UI diff baseline remains readable after its one-time action token is consu
 
 test('cooperative wait_for releases GUI coordinator between polls for a separate agent', async () => {
   const fixture = setup();
+  fixture.setElementsTruncated(false);
   fixture.setSnapshotElements([{ type: 'Edit', selector: 'Root', value: 'pending' }]);
   const before = await fixture.snapshot();
   let completed = false;
@@ -471,4 +478,82 @@ test('target_guard preserves normal-desktop click capability and Agent Desktop c
   assert.equal(isolatedResult.isError, true);
   assert.match(isolatedResult.content[0]?.text ?? '', /requires_foreground_input/i);
   assert.equal(isolated.getActCalls(), 0);
+});
+
+test('wait_for auto mode discovers a WPF control excluded by interactive filtering', async () => {
+  const f = setup();
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([{ selector: 'Root', type: 'Window' }]);
+  f.setFullScanElements([
+    { selector: 'Root', type: 'Window' },
+    { selector: 'WpfScroller', type: 'Pane', isEnabled: true }
+  ]);
+  const before = await f.snapshot();
+  const r = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'wait_for', selector: 'WpfScroller', wait_condition: 'present',
+    wait_scan_mode: 'auto', wait_ms: 100, poll_ms: 100,
+    allow_user_desktop: false, allow_system_keys: false
+  });
+  assert.equal(r.isError, undefined);
+  const result = f.decode(r);
+  assert.equal(result.condition_met, true);
+  assert.equal(result.auto_fallback_to_full, true);
+  assert.deepEqual(f.inspectModes(), [true, true, false]); // prior snapshot, then interactive, then full
+  assert.equal(f.getActCalls(), 0);
+});
+
+test('wait_for interactive-only does not silently inspect excluded controls', async () => {
+  const f = setup();
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([{ selector: 'Root', type: 'Window' }]);
+  f.setFullScanElements([{ selector: 'WpfScroller', type: 'Pane' }]);
+  const before = await f.snapshot();
+  const r = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'wait_for', selector: 'WpfScroller', wait_scan_mode: 'interactive',
+    wait_ms: 0, poll_ms: 100, allow_user_desktop: false, allow_system_keys: false
+  });
+  assert.equal(f.decode(r).condition_met, false);
+  assert.deepEqual(f.inspectModes(), [true, true]);
+});
+
+test('target_guard defaults to full scan and can verify a noninteractive WPF control', async () => {
+  const f = setup();
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([{ selector: 'Root', type: 'Window' }]);
+  f.setFullScanElements([{ selector: 'WpfScroller', type: 'Pane', automationId: 'WpfScroller', isEnabled: true }]);
+  const before = await f.snapshot();
+  const r = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'invoke', selector: 'WpfScroller',
+    target_guard: { type: 'Pane', automation_id: 'WpfScroller', require_enabled: true },
+    settle_ms: 0, observe_after: 'none',
+    allow_user_desktop: false, allow_system_keys: false
+  });
+  assert.equal(r.isError, undefined);
+  assert.deepEqual(f.inspectModes(), [true, false]);
+  assert.equal(f.getActCalls(), 1);
+});
+
+test('target_guard interactive scan mode rejects an invisible WPF selector', async () => {
+  const f = setup();
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([{ selector: 'Root', type: 'Window' }]);
+  f.setFullScanElements([{ selector: 'WpfScroller', type: 'Pane' }]);
+  const before = await f.snapshot();
+  const r = await f.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'invoke', selector: 'WpfScroller',
+    target_guard: { type: 'Pane', scan_mode: 'interactive' },
+    settle_ms: 0, observe_after: 'none',
+    allow_user_desktop: false, allow_system_keys: false
+  });
+  assert.equal(r.isError, true);
+  assert.deepEqual(f.inspectModes(), [true, true]);
+  assert.equal(f.getActCalls(), 0);
 });
