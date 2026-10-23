@@ -15,6 +15,7 @@ import { ComputerObservationRegistry } from '../src/computer-use-observation.js'
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
 import {
   agentDesktopSemanticTreeWarning,
+  winFormsProviderVisibilityWarning,
   assertUnscopedUserDesktopActionAllowed,
   prepareAgentDesktopAction,
   resolveAgentDesktopWindowLease
@@ -402,4 +403,30 @@ test('Desktop 1 actions require an explicit escape while Agent Desktop control i
   await assert.doesNotReject(
     assertUnscopedUserDesktopActionAllowed(idleAgentDesktop, undefined, false)
   );
+});
+
+test('normal WinForms warns on shell-only UIA tree without blaming Agent Desktop', () => {
+  const win = windowFixture({ className: 'WindowsForms10.Window.8.app.0.1234' });
+  const chromeOnly = [
+    { type: 'Window', className: 'WindowsForms10.Window.8.app.0.1234' },
+    { type: 'TitleBar', automationId: 'TitleBar' },
+    { type: 'MenuBar' },
+    { type: 'Button', automationId: 'Close', name: 'Close' }
+  ];
+  const warning = winFormsProviderVisibilityWarning(win, chromeOnly);
+  assert.match(warning ?? '', /semantic_tree_limited/i);
+  assert.match(warning ?? '', /DWM-cloaked/i);
+  assert.doesNotMatch(warning ?? '', /non-current Agent Desktop/i);
+
+  // WinApp interactive filtering can omit the root node, but the verified
+  // window class still reveals the provider family.
+  assert.match(winFormsProviderVisibilityWarning(win, chromeOnly.slice(1)) ?? '', /semantic_tree_limited/i);
+  assert.equal(winFormsProviderVisibilityWarning(win, [
+    ...chromeOnly,
+    { type: 'Edit', className: 'WindowsForms10.EDIT.app.0.1234' }
+  ]), undefined);
+  assert.equal(winFormsProviderVisibilityWarning(
+    windowFixture({ className: 'HwndWrapper[DefaultDomain;;1234]' }),
+    [{ type: 'Button' }]
+  ), undefined);
 });

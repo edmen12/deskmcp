@@ -14,7 +14,7 @@ import { ComputerSnapshotRegistry } from '../src/computer-use-read-model.js';
 type Response = { content: Array<{ type: string; text: string }>; isError?: boolean };
 type Handler = (input: Record<string, unknown>) => Promise<Response>;
 
-function setup(agentDesktop?: AgentDesktopManager) {
+function setup(agentDesktop?: AgentDesktopManager, targetClassName = 'FixtureWindow') {
   const handlers = new Map<string, Handler>();
   const server = {
     registerTool(name: string, _schema: unknown, handler: Handler) { handlers.set(name, handler); }
@@ -29,7 +29,7 @@ function setup(agentDesktop?: AgentDesktopManager) {
   } as unknown as DesktopPolicy;
   const target: ComputerWindow = {
     hwnd: 101, processId: 202, processName: 'fixture.exe', title: 'Test',
-    className: 'FixtureWindow', width: 800, height: 600, isForeground: true
+    className: targetClassName, width: 800, height: 600, isForeground: true
   };
   let inspectFails = false;
   let elementsTruncated = true;
@@ -556,4 +556,30 @@ test('target_guard interactive scan mode rejects an invisible WPF selector', asy
   assert.equal(r.isError, true);
   assert.deepEqual(f.inspectModes(), [true, true]);
   assert.equal(f.getActCalls(), 0);
+});
+
+test('normal WinForms snapshot warns when WinApp returns only titlebar and system controls', async () => {
+  const f = setup(undefined, 'WindowsForms10.Window.8.app.0.1234');
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([
+    { type: 'Window', className: 'WindowsForms10.Window.8.app.0.1234' },
+    { type: 'TitleBar', automationId: 'TitleBar' },
+    { type: 'Button', automationId: 'Close' }
+  ]);
+  const result = await f.snapshot();
+  assert.equal(result.semantic_tree_truncated, false);
+  assert.equal(result.semantic_tree_status, 'limited');
+  assert.match(String(result.semantic_tree_warning), /WinForms child classes/i);
+  assert.equal((result.selector_coverage as Record<string, unknown>).scope_complete, false);
+});
+
+test('normal WinForms snapshot does not warn once a real app control is exposed', async () => {
+  const f = setup(undefined, 'WindowsForms10.Window.8.app.0.1234');
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([
+    { type: 'Window', className: 'WindowsForms10.Window.8.app.0.1234' },
+    { type: 'Edit', className: 'WindowsForms10.Edit.app.0.1234', selector: 'EditBox' }
+  ]);
+  const result = await f.snapshot();
+  assert.equal(result.semantic_tree_warning, undefined);
 });

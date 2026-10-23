@@ -45,7 +45,7 @@ For critical actions such as Save or Submit, pass `target_guard` on `desktop_ui_
 
 Normal user desktop actions keep their existing input options and policy checks. Only a valid Agent Desktop lease applies the separate isolated-desktop action restrictions.
 
-Windows Forms controls can lose their child UI Automation providers when the app window is isolated on a non-current Windows virtual desktop. DeskMCP detects the known degraded shape and returns `semantic_tree_status: "limited"` plus `semantic_tree_warning`; callers must not treat that element list as complete. DeskMCP does not move the app back to Desktop 1 or steal the user's foreground merely to recover a richer tree.
+WinForms child controls can disappear from UI Automation both when isolated on a non-current virtual desktop **and** on a normal desktop when the window is DWM-cloaked. If a known WinForms root exposes no WinForms child classes, `desktop_ui_snapshot` returns `semantic_tree_status: "limited"` and a mode-appropriate `semantic_tree_warning`, even when WinApp reported a successful scan with TitleBar/Menu/System Button elements. This is a *conservative visibility warning*, not an assertion that a form has missing business controls in every case. DeskMCP does not uncloak, foreground, or move a window to Desktop 1 to recover the tree. UIA actions for omitted controls will not be guessed or implicitly redirected to native window messages.
 
 ## Observation safety
 
@@ -83,6 +83,24 @@ DeskMCP Computer Use does not bypass:
 - Host-session isolation.
 
 If Windows switches to Secure Desktop for UAC, normal desktop UI automation must fail rather than attempt to synthesize consent. Administrator process elevation continues to use DeskMCP's separate ProcessHost/UAC flow.
+
+## Controlled WinForms provider benchmark (2026-10-23; read-only candidate)
+
+Reused the hash-pinned existing `DeskMCP.Desktop2NativeEditProbe.dll` under `test-area/desktop2-native-edit-probe/` of the independent acceptance worktree. The source fixture has its WinForms root marked `WS_EX_NOACTIVATE` during HWND creation and DWM-cloaks itself before Show. We never supplied its uncloak sentinel, moved it to virtual Desktop2, or sent any input. Run `node scripts/benchmark-cloaked-winforms-uia.mjs <absolute-winapp-exe> <absolute-owned-native-edit-fixture-dll> <absolute-dotnet-exe> OWNED_CLOAKED_WINFORMS_READ_ONLY_ONCE`. The runner checks the trusted fixture DLL SHA-256 and source executable basenames, bounds all child commands, suppresses native handles/names/window metadata, and terminates its owned fixture.
+
+Three six-scan-per-mode repetitions reproduced the same provider effect: a depth-4 scan returned 7 elements with `Window`, `TitleBar`, `MenuBar`, `MenuItem` and three system `Button` nodes. Interactive-depth-8 returned 4 window chrome/menu/system-button nodes. **0/3 fixture-owned controls** (`OwnedSingleLineEdit`, `OwnedNativePushButton`, `OwnedScrollableList`) were exposed by exact Automation ID, despite every WinApp command succeeding. The full tree included an actual `WindowsForms10.*` root class, not a different application type. The third run had P50/P95 of 69.7/90.8ms in depth-4, and 68.1/69.5ms in Interactive mode. No fixture activation/focus messages were observed during runs.
+
+Contrast with the same-day cloaked WPF fixture: `5/5` expected controls on depth-4 and `4/5` on Interactive. **UIA success is not control-discovery success.** Caveats: a cloaked WinForms test app on the current desktop is not an ordinary non-cloaked third-party WinForms window, and none of these read-only results authorize untested UIA ValuePattern edits, blind HWND message fallback or Desktop2 control. Independently observed transient foreground effects outside the owned fixture were not instrumented in this probe.
+
+Current evidence-based matrix:
+
+| UI/control case | Observed | General release implication |
+|---|---|---|
+| Owned cloaked WPF, read-only UIA | 5/5 full; 4/5 interactive | Auto full-scan fallback useful; input safety not established |
+| Owned cloaked WinForms, read-only UIA | 0/3 app controls, chrome-only despite successful WinApp commands | Return provider-visibility warning; **do not guess missing selectors** |
+| Owned WinForms native Edit, protected Desktop2 | Historical limited `WM_SETTEXT` app-callback PASS with no observed Desktop1 disturbance in its own fixture | Candidate per-control backend only; not a general WinForms/Electron capability |
+| WPF direct UIA `ValuePattern.SetValue` on Desktop2 | Historical foreground theft confirmed | Quarantined; no automatic UIA mutation fallback |
+| Third-party WinForms, WPF, Electron, WinUI | Not covered by this controlled fixture round | Remains open, needs independent no-foreground-theft and app-effect evidence |
 
 ## Controlled WPF provider benchmark (2026-10-23; read-only candidate)
 

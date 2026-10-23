@@ -139,15 +139,36 @@ export async function assertUnscopedUserDesktopActionAllowed(
   }
 }
 
+function winFormsChromeOnlyTree(
+  window: ComputerWindow,
+  elements: readonly UiElementSummary[]
+): boolean {
+  const winFormsRoot = window.className?.startsWith('WindowsForms10.') === true
+    || elements.some(element =>
+      element.type === 'Window' && element.className?.startsWith('WindowsForms10.') === true
+    );
+  if (!winFormsRoot) return false;
+  // The WinApp tree can expose titlebar/menu system controls while omitting the
+  // WinForms Edit, Button and ListBox providers (verified on a cloaked fixture).
+  return !elements.some(element =>
+    element.type !== 'Window' && element.className?.startsWith('WindowsForms10.') === true
+  );
+}
+
+/** Conservative diagnostic: this is provider visibility, not proof of absence. */
+export function winFormsProviderVisibilityWarning(
+  window: ComputerWindow,
+  elements: readonly UiElementSummary[]
+): string | undefined {
+  if (!winFormsChromeOnlyTree(window, elements)) return undefined;
+  return 'semantic_tree_limited: WinForms window has no exposed WinForms child classes in this UIA result. It may be limited to window chrome/menu controls (observed with DWM-cloaked WinForms). Do not infer that app controls are absent; consider native HWND evidence or a permitted app-owned path.';
+}
+
 export function agentDesktopSemanticTreeWarning(
   window: ComputerWindow,
   elements: readonly UiElementSummary[]
 ): string | undefined {
-  if (!window.className?.startsWith('WindowsForms10.')) return undefined;
-  const hasWinFormsDescendant = elements.some(element =>
-    element.type !== 'Window' && element.className?.startsWith('WindowsForms10.') === true
-  );
-  if (hasWinFormsDescendant) return undefined;
+  if (!winFormsChromeOnlyTree(window, elements)) return undefined;
   return 'semantic_tree_limited: Windows Forms child controls are not exposed by Windows UI Automation while this window is isolated on a non-current Agent Desktop. Do not treat the returned elements as a complete tree; semantic actions may be unavailable.';
 }
 
@@ -391,8 +412,10 @@ async function snapshotContent(
   } : undefined;
   if (current) runtime.snapshots.add(observationId, current);
   const uiDiff = baseline && current ? diffUiSnapshots(baseline, current) : undefined;
-  const agentDesktopWarning = options.agentDesktopLeaseId && inspection
-    ? agentDesktopSemanticTreeWarning(window, inspection.elements)
+  const providerWarning = inspection
+    ? (options.agentDesktopLeaseId
+        ? agentDesktopSemanticTreeWarning(window, inspection.elements)
+        : winFormsProviderVisibilityWarning(window, inspection.elements))
     : undefined;
   const truncationWarning = inspection?.elementsTruncated
     ? `semantic_tree_truncated: DeskMCP returned at most ${options.maxElements} controls from WinApp's depth-limited result; omitted controls must not be treated as absent. Increase max_elements (up to 200) or narrow the target.`
@@ -400,7 +423,7 @@ async function snapshotContent(
   const emptyTreeWarning = inspection && inspection.elements.length === 0
     ? 'semantic_tree_empty: WinApp returned zero elements within the requested depth/filter. Do not infer that the app has no controls.'
     : undefined;
-  const semanticTreeWarning = [agentDesktopWarning, truncationWarning, emptyTreeWarning].filter(Boolean).join(' ');
+  const semanticTreeWarning = [providerWarning, truncationWarning, emptyTreeWarning].filter(Boolean).join(' ');
   const metadata = {
     computer_observation_id: observationId,
     captured_at: new Date().toISOString(),
