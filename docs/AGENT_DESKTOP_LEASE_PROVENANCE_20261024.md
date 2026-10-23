@@ -110,3 +110,32 @@ The safety failure message for **future candidate deployments** will additionall
 - **Actual .NET ↔ TypeScript bidirectional serialization compatibility:** `scripts/verify-agent-desktop-provenance-interop.mjs` loaded the built WPF assembly in a **non-GUI console process**, emitted a native `control_panel_safety_revocation` control document read by the Gateway, then round-tripped a Gateway `control_panel_shutdown` document through the native model. Both preserved their mutation history. Temporary synthetic data only; production `control.json` was **not touched**.
 
 **Important:** this is a **candidate source fix**, not installed. The installed Control Panel cannot yet emit the additional diagnostic categories/history until an explicitly approved installation. The historical event’s **immediate revocation reason is known**; the *underlying cause of the HUD-window GUID mismatch* and long-session safety reliability remain **UNVERIFIED**. No new live D2 session was started this round.
+
+
+## Batch 20 — passive real Windows HUD window ownership reproduction (2026-10-24 MYT)
+
+**VERIFIED / LIVE FAILURE REPRODUCED; NOT FIXED OR DEPLOYED.** A standalone, candidate-only observer was built with the local .NET 10 SDK (0 warnings / 0 errors). It uses read-only Win32 window enumeration, exact DeskMCP Edge/HUD title and process-name filtering, `IVirtualDesktopManager`, and (in later runs) read-only HWND/style and `DWMWA_CLOAKED` inspection. It never calls MoveWindowToDesktop, launches GUI, authorizes computer input, writes production control state, changes foreground or switches desktops. A separate candidate WPF fixture explicitly moves **only its own** test windows and never touches an Agent Desktop lease.
+
+### Observed installed Control Panel evidence
+
+- **First real passive lease:** 52 samples, 5,705 ms, lease LOST. At **2026-10-23T20:23:32.643Z** Edge changed from target Desktop2 GUID to `desktop_id_unresolved` and `on_owner_desktop`, while HUD remained `correct_desktop` / `not_on_owner_desktop`. This repeated at 20:23:32.868Z. The Control Panel logged `Agent Desktop safety HUD is not on its bound desktop` at **20:23:32.929Z**, then `control.json` became empty. Owner remained Desktop1 in every sampled observation.
+- **Second real passive lease:** **75,077 ms / 686 samples / 0 anomaly** with Edge and HUD remaining on Desktop2; both HWND identities and extended styles stayed stable. This lease was explicitly stopped after the observation. A single 75s PASS cannot cancel the preceding real FAIL.
+- **Third live lease:** revoked before the separately launched observer could attach. Installed safety log gained the same message at **20:31:39.738Z**. This motivated a pre-armed read-only observer that waits for the *next* distinct control generation before monitoring.
+- **Pre-armed fourth live lease:** 20 samples / 2,139 ms, lease LOST. At **20:33:33.897Z** the **same Edge HWND** with the **same extended styles** (`WS_EX_LAYERED=true`, `WS_EX_NOACTIVATE=true`, `Topmost=true`, `WS_EX_TOOLWINDOW=false`) changed from correct Desktop2 assignment to `desktop_id_unresolved` / `on_owner_desktop`; the HUD retained its correct Desktop2 assignment and the same HWND. Installed Control Panel safety error at **20:33:34.104Z**; lease removed shortly thereafter. This directly rules out Edge HWND recreation or an extended-style change as the *necessary cause in this observed event*, but cannot identify who/what changed Shell desktop assignment.
+- **Pre-armed fifth live lease:** 31 samples / 3,343 ms, lease LOST; the installed Control Panel logged the same safety error at **20:35:14.920Z**. On the preceding safe samples, both windows had `DWMWA_CLOAKED=2` (Shell cloaked while owner stays on Desktop1); the sampled interval **did not catch the instant of the fifth failure**, so no claim about cloaking at failure is made.
+
+All newly acquired test leases ended as Desktop2 Free. No installed binary, Control Panel, Gateway, AQP service or credential was upgraded, restarted or modified. The existing safety revocation remains enabled. The read-only native observer is at `test-area/agent-desktop-hud-affinity-observer/`; original JSONL evidence remains **local ignored artifacts**, not Git-tracked. No independent WinEvent foreground hook or Desktop1 pixel capture ran; `owner_desktop1=true` means the virtual desktop did not switch, **not** full proof that no D1 window appeared.
+
+### Isolated self-owned GUI A/B; not a release gate
+
+- WPF Edge + HUD fixture with Edge `DropShadowEffect`: **FAIL twice** (14,565 ms and 5,657 ms).
+- Same WPF fixture without Edge effect: **PASS once** (35,034 ms / 372 checks), **FAIL once** (100 ms). The effect is **not** established as sole root cause or sufficient repair.
+- WPF fixture with an offscreen-created, non-layered single Edge bar and the same HUD: **FAIL at 2,897 ms**. Merely disabling layered transparency is not a proven repair.
+- Pure Win32 offscreen non-layered `STATIC` frame fixture: initial COM desktop binding **FAILED** with `TYPE_E_ELEMENTNOTFOUND`; it is not a viable drop-in replacement in this tested form. Its four owned HWNDs were destroyed on exit.
+- Corresponding candidate-only fixture sources: `test-area/hud-edge-production-repro/` and `test-area/native-hud-edge-fixture/`. Both compiled with 0 warnings/errors, but native runtime failure remains a genuine FAIL.
+
+Chromium independently documents that `IsWindowOnCurrentVirtualDesktop` and `GetWindowDesktopId` can be inconsistent for recently created HWNDs; see https://chromium.googlesource.com/chromium/src/+/e4f1aef5f3ec30a28950d766612cc2c04c822c71/ui/gfx/win/hwnd_util.cc . This is **external context**, not evidence that DeskMCP's repeated post-initialization failures are benign.
+
+**Current decision:** Keep real lease stability RED. Do **not** turn off Edge/HUD identity checks, auto-reassign a revoked lease, auto-switch desktops, extend a grace interval that authorizes unsafe GUI actions, merge, or deploy based on these tests. Next: instrument a complete, production-eligible non-layered top-level window alternative (not a `STATIC` popup) in isolated tests, and capture exact DWM Cloak / foreground provenance at the same failing HWND instant before considering any safety-preserving replacement.
+
+**Batch 20 source regression (fresh):** `npm run test:fast` completed **279/279 PASS**, exit code 0; all three candidate-only .NET fixture projects built with 0 warnings/0 errors. This is a source/test result, **not** HUD long-run release acceptance.
