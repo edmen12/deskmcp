@@ -19,9 +19,10 @@ function setup(agentDesktop?: AgentDesktopManager, targetClassName = 'FixtureWin
   const server = {
     registerTool(name: string, _schema: unknown, handler: Handler) { handlers.set(name, handler); }
   } as unknown as McpServer;
+  let auditFinishFails = false;
   const audit = {
     async begin() { return {}; },
-    async finish() { return undefined; }
+    async finish() { if(auditFinishFails) throw new Error('simulated audit persistence failure'); return undefined; }
   } as unknown as AuditLogger;
   const policy = {
     assertCanUseComputer() { return undefined; },
@@ -41,6 +42,7 @@ function setup(agentDesktop?: AgentDesktopManager, targetClassName = 'FixtureWin
   let listFailureOnCall = Number.POSITIVE_INFINITY;
   let listCalls = 0;
   let actCalls = 0;
+  let actFails = false;
   const backend = {
     async listWindows() {
       listCalls += 1;
@@ -53,7 +55,7 @@ function setup(agentDesktop?: AgentDesktopManager, targetClassName = 'FixtureWin
       if (inspectFails) throw new Error('screenshot or UIA unavailable');
       return { hwnd: target.hwnd, elements: interactiveOnly ? snapshotElements : (fullScanElements ?? snapshotElements), elementsTruncated };
     },
-    async act() { actCalls += 1; return {}; }
+    async act() { actCalls += 1; if(actFails) throw new Error('simulated backend timeout after possible dispatch'); return {}; }
   };
   const runtime = {
     backend,
@@ -87,7 +89,9 @@ function setup(agentDesktop?: AgentDesktopManager, targetClassName = 'FixtureWin
     setFullScanElements(value: UiElementSummary[]) { fullScanElements = value; },
     inspectModes() { return [...inspectModes]; },
     setListFails(value: boolean) { listFailureOnCall = value ? listCalls + 2 : Number.POSITIVE_INFINITY; },
-    getActCalls() { return actCalls; }
+    getActCalls() { return actCalls; },
+    setActFails(value: boolean) { actFails = value; },
+    setAuditFinishFails(value: boolean) { auditFinishFails = value; }
   };
 }
 
@@ -582,4 +586,182 @@ test('normal WinForms snapshot does not warn once a real app control is exposed'
   ]);
   const result = await f.snapshot();
   assert.equal(result.semantic_tree_warning, undefined);
+});
+
+test('postcondition verifies an exact UI value but never claims WinForms selection callback', async () => {
+  const f=setup();
+  f.setElementsTruncated(false);
+  f.setSnapshotElements([{selector:'NativeListState',type:'Text',value:'-1'}]);
+  const before=await f.snapshot();
+  f.setFullScanElements([{selector:'NativeListState',type:'Text',value:'7'}]);
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'invoke',selector:'Select',
+    ui_postcondition:{selector:'NativeListState',condition:'value_equals',expected_value:'7'},
+    observe_after:'none',settle_ms:0,allow_user_desktop:false,allow_system_keys:false
+  });
+  assert.equal(r.isError,undefined);
+  const result=f.decode(r);
+  assert.equal(f.getActCalls(),1);
+  assert.equal(result.action_dispatched,true);
+  assert.equal(result.outcome_verified,false);
+  assert.equal(result.app_event_verified,false);
+  assert.equal(result.business_outcome_verified,false);
+  assert.equal(result.outcome_evidence_level,'ui_state_only_business_unverified');
+  assert.equal((result.ui_postcondition as Record<string,unknown>).ui_postcondition_verified,true);
+  assert.deepEqual(f.inspectModes(),[true,false]);
+});
+
+test('changed UI state that does not match remains unverified with one dispatch',async()=>{
+  const f=setup();
+  f.setElementsTruncated(false);
+  const before=await f.snapshot();
+  f.setFullScanElements([{selector:'Status',type:'Text',value:'pending'}]);
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'invoke',selector:'Save',
+    ui_postcondition:{selector:'Status',condition:'value_equals',expected_value:'saved'},
+    observe_after:'none',settle_ms:0,allow_user_desktop:false,allow_system_keys:false
+  });
+  assert.equal(f.getActCalls(),1);
+  assert.equal((f.decode(r).ui_postcondition as Record<string,unknown>).ui_postcondition_status,'not_met');
+  assert.equal(f.decode(r).outcome_verified,false);
+});
+
+test('provider truncation, empty tree or provider error is inconclusive without action replay',async()=>{
+  for(const mode of ['truncated','empty','provider_error']) {
+    const f=setup();
+    if(mode!=='truncated') f.setElementsTruncated(false);
+    const before=await f.snapshot();
+    f.setFullScanElements(mode==='empty'?[]:[{selector:'Target',type:'Text',value:'ready'}]);
+    if(mode==='provider_error') f.setInspectFails(true);
+    const r=await f.tool('desktop_ui_action')({
+      window_id:(before.window as Record<string,unknown>).window_id,
+      computer_observation_id:before.computer_observation_id,
+      action:'invoke',selector:'Target',
+      ui_postcondition:{selector:'Target',condition:'value_equals',expected_value:'ready'},
+      observe_after:'none',settle_ms:0,allow_user_desktop:false,allow_system_keys:false
+    });
+    assert.equal(f.getActCalls(),1);
+    assert.equal((f.decode(r).ui_postcondition as Record<string,unknown>).ui_postcondition_status,'inconclusive');
+    assert.equal(f.decode(r).business_outcome_verified,false);
+  }
+});
+
+test('invalid requested UI postcondition cannot send an action',async()=>{
+  for(const condition of [
+    {selector:'Value',condition:'value_equals'},
+    {selector:'Value',condition:'enabled',expected_value:'yes'}
+  ]) {
+    const f=setup();
+    const before=await f.snapshot();
+    const r=await f.tool('desktop_ui_action')({
+      window_id:(before.window as Record<string,unknown>).window_id,
+      computer_observation_id:before.computer_observation_id,
+      action:'invoke',selector:'Value',ui_postcondition:condition,
+      observe_after:'none',settle_ms:0,allow_user_desktop:false,allow_system_keys:false
+    });
+    assert.equal(r.isError,true);
+    assert.equal(f.getActCalls(),0);
+  }
+});
+
+test('UI postcondition does not weaken Agent Desktop input prohibitions',async()=>{
+  const agentDesktop={
+    async activeLeaseForWindow(){return '11111111-1111-4111-8111-111111111111';},
+    async assertLease(){return undefined;},
+    async assertWindowOnLease(){return undefined;},
+    async filterWindowsForLease<T>(w:T[]){return w;},
+    async hasActiveControls(){return true;}
+  } as unknown as AgentDesktopManager;
+  const f=setup(agentDesktop);
+  const before=await f.snapshot();
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'click',selector:'Submit',
+    ui_postcondition:{selector:'Status',condition:'present'},
+    observe_after:'none',settle_ms:0,allow_user_desktop:false,allow_system_keys:false
+  });
+  assert.equal(r.isError,true);
+  assert.equal(f.getActCalls(),0);
+});
+
+test('postcondition rejects a recycled HWND/PID during its own UIA scan after one dispatch', async()=>{
+  const f=setup();
+  f.setElementsTruncated(false);
+  const before=await f.snapshot();
+  f.setFullScanElements([{selector:'Status',type:'Text',value:'done'}]);
+  f.setInspectHook(()=>f.changeProcessIdentity(999));
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'invoke',selector:'Submit',
+    ui_postcondition:{selector:'Status',condition:'value_equals',expected_value:'done'},
+    observe_after:'none',settle_ms:0,allow_system_keys:false,allow_user_desktop:false
+  });
+  assert.equal(f.getActCalls(),1);
+  const result=f.decode(r);
+  assert.equal(result.action_dispatched,true);
+  assert.equal(result.outcome_verified,false);
+  assert.equal((result.ui_postcondition as Record<string,unknown>).ui_postcondition_status,'inconclusive');
+  assert.equal((result.ui_postcondition as Record<string,unknown>).ui_postcondition_reason,'provider_or_window_identity_unavailable');
+});
+
+test('wait_for refuses a simultaneous action postcondition rather than silently ignoring it', async()=>{
+  const f=setup();
+  const before=await f.snapshot();
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'wait_for',selector:'Status',
+    wait_condition:'present',wait_ms:0,
+    ui_postcondition:{selector:'Status',condition:'present'},
+    allow_system_keys:false,allow_user_desktop:false
+  });
+  assert.equal(r.isError,true);
+  assert.match(r.content[0]?.text??'',/does not accept ui_postcondition/i);
+  assert.equal(f.getActCalls(),0);
+});
+
+test('backend timeout after possible Invoke dispatch is explicitly uncertain and never safe to retry',async()=>{
+  const f=setup();
+  const before=await f.snapshot();
+  f.setActFails(true);
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'invoke',selector:'Submit',settle_ms:0,observe_after:'none',
+    ui_postcondition:{selector:'Status',condition:'value_equals',expected_value:'Done'},
+    allow_system_keys:false,allow_user_desktop:false
+  });
+  const result=f.decode(r);
+  assert.equal(r.isError,true);
+  assert.equal(f.getActCalls(),1);
+  assert.equal(result.action_dispatched,'unknown');
+  assert.equal(result.outcome_status,'dispatch_uncertain');
+  assert.equal(result.safe_to_retry,false);
+  assert.equal(result.business_outcome_verified,false);
+  assert.equal(result.app_event_verified,false);
+  assert.match(String(result.next_step),/Do not automatically replay/);
+});
+
+test('audit finalization failure after successful action must not encourage replay',async()=>{
+  const f=setup();
+  const before=await f.snapshot();
+  f.setAuditFinishFails(true);
+  const r=await f.tool('desktop_ui_action')({
+    window_id:(before.window as Record<string,unknown>).window_id,
+    computer_observation_id:before.computer_observation_id,
+    action:'invoke',selector:'Submit',settle_ms:0,observe_after:'none',
+    allow_system_keys:false,allow_user_desktop:false
+  });
+  assert.equal(f.getActCalls(),1);
+  assert.equal(r.isError,true);
+  const result=f.decode(r);
+  assert.equal(result.action_dispatched,'unknown');
+  assert.equal(result.outcome_status,'audit_finalization_uncertain_after_action');
+  assert.equal(result.safe_to_retry,false);
 });

@@ -7,6 +7,24 @@ import type { ComputerWindow, UiAction, UiElementSummary } from './computer-use-
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
 import { diffUiSnapshots, waitForUiCondition, type WaitCondition } from './computer-use-read-model.js';
 import { uiSelectorCoverage, verifyUiTargetGuard } from './computer-use-target-guard.js';
+import { assessUiPostcondition, uiPostconditionNotChecked, validateUiPostcondition, type ComputerUiPostcondition } from './computer-use-postcondition.js';
+
+export class UncertainComputerDispatchError extends Error {
+  constructor(readonly actionType: UiAction['type']) {
+    super('Backend failed after action dispatch may have begun. Never auto-retry.');
+    this.name = 'UncertainComputerDispatchError';
+  }
+}
+
+function uncertainActionResponse(action: string, reason: string) {
+  return { isError: true as const, content: [{ type: 'text' as const, text: JSON.stringify({
+    action, succeeded: false, action_dispatched: 'unknown',
+    outcome_verified: false, outcome_status: reason,
+    ui_postcondition_verified: false, app_event_verified: false,
+    business_outcome_verified: false, safe_to_retry: false,
+    next_step: 'Capture a fresh window snapshot and independently establish the application result. Do not automatically replay this action.'
+  }, null, 2) }] };
+}
 
 function failure(prefix: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -44,12 +62,28 @@ async function auditedComputerCall<T>(
   try {
     policy.assertCanUseComputer();
     const result = await action();
-    await audit.finish(operation, 'allow');
+    try { await audit.finish(operation, 'allow'); }
+    catch (error) {
+      // The action already returned before audit persistence failed. Failure
+      // to log does not prove the action was rolled back or safe to repeat.
+      if (tool === 'desktop_ui_action') {
+        return uncertainActionResponse('unknown', 'audit_finalization_uncertain_after_action');
+      }
+      return failure('Audit finalization failed', error);
+    }
     return result;
   } catch (error) {
     const outcome = error instanceof PolicyDeniedError ? 'deny' : 'fail';
     try { await audit.finish(operation, outcome, error); }
-    catch (auditError) { return failure('Audit finalization failed', auditError); }
+    catch (auditError) {
+      if (error instanceof UncertainComputerDispatchError) {
+        return uncertainActionResponse(error.actionType, 'dispatch_and_audit_uncertain');
+      }
+      return failure('Audit finalization failed', auditError);
+    }
+    if (error instanceof UncertainComputerDispatchError) {
+      return uncertainActionResponse(error.actionType, 'dispatch_uncertain');
+    }
     return failure('Computer use denied or failed', error);
   }
 }
@@ -255,6 +289,7 @@ interface ComputerWaitForInput {
   readonly wait_ms?: number | undefined;
   readonly poll_ms?: number | undefined;
   readonly wait_scan_mode?: 'auto' | 'interactive' | 'full' | undefined;
+  readonly ui_postcondition?: ComputerUiPostcondition | undefined;
   readonly allow_user_desktop?: boolean | undefined;
 }
 
@@ -268,6 +303,7 @@ async function executeCooperativeWaitFor(
   agentDesktop?: AgentDesktopManager
 ) {
   if (!input.selector) throw new Error('wait_for requires selector.');
+  if (input.ui_postcondition) throw new Error('wait_for does not accept ui_postcondition; the wait itself is the read-only condition.');
   if (input.wait_condition === 'value_equals' && input.expected_value === undefined) {
     throw new Error('value_equals requires expected_value.');
   }
@@ -376,6 +412,9 @@ export function computerActionDispatchResult(
     action_dispatched: action !== 'wait',
     outcome_verified: false,
     outcome_status: 'unverified' as const,
+    app_event_verified: false as const,
+    business_outcome_verified: false as const,
+    outcome_evidence_level: 'backend_dispatch_only' as const,
     post_action_state: postActionState,
     requires_outcome_check: action !== 'wait'
   };
@@ -466,6 +505,41 @@ async function observeAfter(
     ...(agentDesktopLeaseId ? { agentDesktopLeaseId } : {}),
     ...(desktopObjectName ? { desktopObjectName } : {})
   });
+}
+
+/**
+ * One bounded, explicitly requested UI postcondition read. It is evidence of
+ * one observed control state, never of app event delivery or business success.
+ * Never retry the preceding action after any inspection/identity failure.
+ */
+async function inspectPostActionUiCondition(
+  runtime: ComputerUseRuntime,
+  windowId: string,
+  window: ComputerWindow,
+  agentDesktopLeaseId: string | undefined,
+  agentDesktop: AgentDesktopManager | undefined,
+  condition: ComputerUiPostcondition
+) {
+  try {
+    const verifyIdentity = async () => {
+      if (agentDesktopLeaseId) await agentDesktop!.assertLease(agentDesktopLeaseId);
+      const windows = await runtime.backend.listWindows();
+      const scoped = agentDesktopLeaseId
+        ? await agentDesktop!.filterWindowsForLease(windows, agentDesktopLeaseId)
+        : windows;
+      const resolved = runtime.windows.resolve(windowId, scoped);
+      if (resolved.hwnd !== window.hwnd || isAgentDesktopSafetyWindow(resolved)) {
+        throw new Error('Post-action window identity changed.');
+      }
+      if (agentDesktopLeaseId) await agentDesktop!.assertWindowOnLease(resolved.hwnd, agentDesktopLeaseId);
+    };
+    await verifyIdentity();
+    const inspected = await runtime.backend.inspect(window.hwnd, condition.scan_mode === 'interactive', 200);
+    await verifyIdentity();
+    return assessUiPostcondition(inspected, condition);
+  } catch {
+    return uiPostconditionNotChecked('provider_or_window_identity_unavailable');
+  }
 }
 
 export function registerComputerUseTools(
@@ -579,6 +653,12 @@ export function registerComputerUseTools(
         computer_observation_id: z.string().uuid(),
         action: z.enum(['invoke', 'set_value', 'click', 'hover', 'scroll', 'send_keys', 'drag', 'wait', 'wait_for']),
         selector: z.string().min(1).max(512).optional(),
+        ui_postcondition: z.object({
+          selector: z.string().min(1).max(512),
+          condition: z.enum(['present', 'enabled', 'value_equals']),
+          expected_value: z.string().max(65536).optional(),
+          scan_mode: z.enum(['full', 'interactive']).optional().default('full')
+        }).strict().optional(),
         target_guard: z.object({
           type: z.string().min(1).max(128).optional(),
           name: z.string().min(1).max(512).optional(),
@@ -617,6 +697,10 @@ export function registerComputerUseTools(
       ? executeCooperativeWaitFor(input, runtime, agentDesktop)
       : runtime.coordinator.exclusive(async () => {
       const parsedAction = parseAction(input);
+      if (input.ui_postcondition) {
+        if (input.action === 'wait') throw new Error('ui_postcondition requires an action; use wait_for for read-only checks.');
+        validateUiPostcondition(input.ui_postcondition);
+      }
       const observationLeaseHint = runtime.observations.peekLease(
         input.computer_observation_id,
         input.window_id,
@@ -683,10 +767,17 @@ export function registerComputerUseTools(
       // backend error can be partial, so all clients must re-observe afterward.
       runtime.observations.advance(input.window_id, usesGlobalDesktopInput(action));
 
-      await runtime.backend.act(target.hwnd, action);
-      if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
-      if (input.settle_ms > 0 && action.type !== 'wait') {
-        await new Promise(resolve => setTimeout(resolve, input.settle_ms));
+      try {
+        await runtime.backend.act(target.hwnd, action);
+        if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
+        if (input.settle_ms > 0 && action.type !== 'wait') {
+          await new Promise(resolve => setTimeout(resolve, input.settle_ms));
+        }
+      } catch (error) {
+        // Even when the backend rejects or times out, it may already have sent
+        // a click, Invoke or SetValue. Never make automatic retries look safe.
+        if (action.type !== 'wait') throw new UncertainComputerDispatchError(action.type);
+        throw error;
       }
 
       // The backend may have already delivered a non-idempotent click even if a later
@@ -699,6 +790,7 @@ export function registerComputerUseTools(
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({
             ...computerActionDispatchResult(action.type, 'observation_unavailable'),
+            ...(input.ui_postcondition ? {ui_postcondition: uiPostconditionNotChecked('window_listing_unavailable')} : {}),
             post_action_warning: 'Post-action window listing was unavailable. Inspect current app state before considering a retry.'
           }, null, 2) }]
         };
@@ -714,18 +806,31 @@ export function registerComputerUseTools(
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ ...computerActionDispatchResult(action.type, 'window_closed'), window_closed: true }, null, 2)
+            text: JSON.stringify({ ...computerActionDispatchResult(action.type, 'window_closed'), window_closed: true,
+              ...(input.ui_postcondition ? {ui_postcondition: uiPostconditionNotChecked('window_closed')} : {}) }, null, 2)
           }]
         };
       }
       if (effectiveAgentDesktopLeaseId) {
         await agentDesktop!.assertWindowOnLease(refreshed.hwnd, effectiveAgentDesktopLeaseId);
       }
+      const uiAssessment = input.ui_postcondition
+        ? await inspectPostActionUiCondition(
+          runtime, input.window_id, refreshed, effectiveAgentDesktopLeaseId,
+          agentDesktop, input.ui_postcondition
+        )
+        : undefined;
+      const uiEvidence = uiAssessment
+        ? { ui_postcondition: uiAssessment,
+            outcome_evidence_level: uiAssessment.ui_postcondition_verified
+              ? 'ui_state_only_business_unverified' : 'backend_dispatch_only' }
+        : {};
       if (input.observe_after === 'none') {
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ ...computerActionDispatchResult(action.type, 'not_observed'), observation_required_before_next_action: true }, null, 2)
+            text: JSON.stringify({ ...computerActionDispatchResult(action.type, 'not_observed'),
+              ...uiEvidence, observation_required_before_next_action: true }, null, 2)
           }]
         };
       }
@@ -743,6 +848,7 @@ export function registerComputerUseTools(
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({
             ...computerActionDispatchResult(action.type, 'observation_unavailable'),
+            ...uiEvidence,
             post_action_warning: 'Post-action snapshot was unavailable. Observe the app before deciding whether to retry.'
           }, null, 2) }]
         };
@@ -752,6 +858,7 @@ export function registerComputerUseTools(
       if (first?.type !== 'text') throw new Error('Computer observation metadata was unavailable.');
       first.text = JSON.stringify({
         ...computerActionDispatchResult(action.type, 'snapshot_available'),
+        ...uiEvidence,
         state: JSON.parse(first.text) as unknown
       }, null, 2);
       return snapshot;
