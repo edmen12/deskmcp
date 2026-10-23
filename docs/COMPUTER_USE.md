@@ -94,7 +94,7 @@ Windows virtual Desktop2 and a private Win32 Desktop Object are different namesp
 
 ## Isolated Win32 object Invoke experiment: fixture-only release gate
 
-An independent, **unregistered** one-shot UIA Invoke admission check is under test for an owned WinForms Button. It requires exact app identity, protected HUD lease, observed non-activating target and app callback proof; it cannot grant generalized `desktop_ui_action` permissions. **Real Invoke remains UNVERIFIED**: the owned fixture's read-only launch gate did not yet pass (process-host early exit / subsequent lease revocation). No Invoke was sent in those runs. See [COMPUTER_USE_OWNED_INVOKE_GATE.md](COMPUTER_USE_OWNED_INVOKE_GATE.md).
+An independent, **unregistered** one-shot UIA Invoke gate exists for a hash-pinned, owned WinForms Button. It requires exact app identity, protected HUD lease, non-activating target, unique supported UIA control and a true application `Click` callback. **Real owned-fixture Invoke PASS (2026-10-24):** after a successful protected read-only discovery (96 UIA elements), one Invoke produced exactly one `APP_BUTTON_CLICK=1` callback; Desktop1 stayed 1→1, the independent observer remained quiet, and Job/watcher cleanup and lease release passed. This is **not** proof for arbitrary apps, generic input or business transactions. No generalized `desktop_ui_action` permission was added. See [COMPUTER_USE_OWNED_INVOKE_GATE.md](COMPUTER_USE_OWNED_INVOKE_GATE.md).
 
 ## Native WinForms control evidence gate (2026-10-23)
 

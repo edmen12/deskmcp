@@ -1,7 +1,7 @@
 # Win32-object UIA Invoke: owned-fixture safety admission (candidate)
 
-Status: **SOURCE-ONLY / NEGATIVE GATES PASS / REAL INVOKE NOT YET ACCEPTED**.
-No production service, installed gateway, main branch, regular Computer Use action, or third-party application gained any new input permission.
+Status: **OWNED-FIXTURE REAL ISOLATED INVOKE PASS (ONE TARGET, ONE SHOT) / GENERAL THIRD-PARTY NATIVE ACTIONS STILL RED**.
+The successful one-shot experiment and its evidence are isolated to a self-owned, hash-pinned WinForms test application. No installed service, main branch, regular Computer Use action, or arbitrary third-party application gained input permission.
 
 ## What this batch implemented
 
@@ -11,18 +11,36 @@ No production service, installed gateway, main branch, regular Computer Use acti
 - Only one `APP_BUTTON_CLICK=1` application log entry, no recorded root/button focus messages, owner remaining Desktop1, quiet independent observer, owned Job cleanup, observer exit and lease retained through teardown can produce a **fixture-only callback-attested** outcome. UIA `Invoke` return values alone are not accepted as app success.
 - `test-area/isolated-thirdparty-prelaunch/probe-owned-winforms-ui.mjs`: a disposable standalone harness, with separate explicit READ and INVOKE one-shot sentinels, hash-pinned local test EXE+DLL, safe memory gate and mandatory exact active lease. Uses `ProcessHost` preassigned `STARTUPINFO.lpDesktop` and read-only WinApp discovery first; **never** falls back to user-desktop input, native button messages or desktop switching.
 
-## Real protected test observations
+## Real protected test observations — October 24, 2026 (Malaysia)
 
-The **read-only preflight** was attempted before allowing any button Invoke:
+Earlier failed attempts were genuinely **pre-action denials**:
+1. The original read-only fixture readiness wait ran until its foreground observer was unavailable. After introducing a bounded wait and process-exit check, another launch ended with ProcessHost exit code 1, before any fixture-ready file. Shell invocation was later changed to the explicit PowerShell quoting used by the working isolated process path. The earlier code-1 message did not preserve enough text to conclusively identify its underlying cause.
+2. One new Desktop2 HUD lease was revoked before fixture launch. The control document was empty afterward. Source review confirms that Gateway startup calls `AgentDesktopManager.init()`, which resets previous controls, but there is **no contemporaneous evidence proving that a Gateway restart caused this particular revocation**. Lease failure correctly blocked execution.
+3. A subsequent protected read-only test **did start the WinForms fixture** and returned the expected `DWM cloak=1`, `WS_EX_NOACTIVATE=true`, and zero foreground HWNDs. Its readiness predicate rejected the actual Windows class `WindowsForms10.Button.*` because the test mistakenly required `WindowsForms10.BUTTON.*` (case mismatch). This false rejection was corrected without relaxing the HWND/PID/lease guards.
 
-1. Owned fixture did not emit its startup proof in time. The independent observer later became unavailable; the guarded harness aborted and cleaned the owned process; no Invoke was sent.
-2. After adding a bounded startup check, the owned ProcessHost exited with code `1` before the fixture could emit its ready proof. Independent observer quiet and cleanup were recorded; no Invoke was sent. The exact underlying process-host/fixture reason has **not been established**.
-3. After adjusting shell quoting, the newly started Agent Desktop lease was revoked before any fixture launch; the harness refused further work. The user desktop remained Desktop1; no Invoke was sent. The control state was empty when inspected afterward; the precise reason for revocation is **not yet verified**.
+After this fix, a **fresh leased read-only test PASSED**:
+- Self-owned WinForms EXE/DLL hash verification and non-activating isolated startup PASS
+- **96 UIA elements**, with exactly **one matching `OwnedNativePushButton`**
+- Desktop1 **1 → 1**, independent monitor quiet; owned process Job and watcher exited; lease retained through cleanup and explicitly released
+- **0 Invoke calls** in read-only mode
 
-The installed Agent Desktop control error log did not provide a contemporaneous, unambiguous reason for the observed lease revocation. No testing policy or HUD heartbeat budget was weakened, no Desktop1 window was opened, and no new native-action route was enabled.
+Finally, a **separately leased, strict-observer single Invoke test PASSED**:
+- 96 UIA elements, unique target button, exact WinForms app process and fixed hash
+- Exactly **1 `Invoke` sent**, exactly **1 real `APP_BUTTON_CLICK=1`** application callback
+- Raw local app event log contained only `APP_SHOWN_FOREGROUND=0`, `UNCLOAK_SUCCESS`, then `APP_BUTTON_CLICK=1`; no duplicate callback or unexpected activation event
+- Desktop1 stayed **1 → 1**, no independent observer alarm, process and watcher cleanup both PASS, lease retained through teardown and explicitly released
+- `production_action_authorized=false` throughout
+
+The one-shot native GUI test was performed inside the **private Win32 desktop object** and is distinct from the Windows virtual Desktop2 application list. Neither test enabled any generic `desktop_ui_action` capability.
+
+For subsequent runs, `src/computer-use-owned-launch-diagnostics.ts` classifies early ProcessHost failures and tracks lease generation without guessing revocation cause. An offline consistency check is available:
+
+```cmd
+node scripts\verify-owned-winforms-invoke-evidence.mjs <owned-run-stamp>
+```
+
+For the existing passing run, use stamp `mvlc141h`. This checks the saved result against the app log. Its output explicitly reports `log_run_binding=legacy_unbound` (the older saved result had no embedded run stamp) and `raw_observer_trace_reverified=false`; do not mistake this offline check for an independent full foreground trace reinspection. New runs carry an explicit `run_stamp` field.
 
 ## Release status
 
-**RED: real owned-fixture isolated-object UIA Invoke not established.** Do not run `invoke` mode without first passing an identical safe **read-only** fixture discovery, independent observer readiness and full cleanup in this environment. A source-level PASS or a Winver read-only UIA PASS does not establish native UIA Invoke callback safety.
-
-Next engineering gate: recover ProcessHost failure diagnostics from the prelaunch controlled subprocess without leaking secrets; distinguish non-start, early process exit, fixture initialization exception and provider invisibility; then get read-only fixture discovery PASS while the HUD/lease remains valid. Only then run at most one explicitly authorized Invoke experiment.
+**GREEN for one owned WinForms fixture Button Invoke under exact protected conditions; RED for general native third-party application control.** One call and one callback under a safe isolated desktop show that UIA Invoke **can** preserve WinForms business event semantics for this precise control class/fixture; they do not guarantee behavior on all Windows apps or controls. More control types, third-party profiles, long-session reliability, and independent monitor attribution need separately approved tests before any wider release.

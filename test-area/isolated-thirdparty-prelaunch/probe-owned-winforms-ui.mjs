@@ -4,6 +4,7 @@ import {existsSync} from 'node:fs';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {OwnedWinFormsInvokeTrial, OWNED_WINFORMS_FIXTURE_DLL_SHA256} from '../../dist/src/computer-use-owned-invoke-gate.js';
+import {classifyOwnedLaunchFailure,describeLeaseLoss} from '../../dist/src/computer-use-owned-launch-diagnostics.js';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {AgentDesktopManager} from '../../dist/src/agent-desktop-state.js';
@@ -47,20 +48,35 @@ const events=path.join(out,'owned-winforms-'+stamp+'.events.log');
 let watch,hostPid,started=false,windowHwnd=null,expectedPid=null;
 const invokeGate=new OwnedWinFormsInvokeTrial();
 let objectName='';
-const result={mode,pass:false,owner_before:null,owner_after:null,
+const result={mode,run_stamp:stamp,pass:false,owner_before:null,owner_after:null,
   fixture_verified:false,uncloaked:false,observer_armed:false,
   fixture_hash_verified:false,app_callback_attested:false,
   provider_controls:0,matched_owned_button:0,invoke_dispatched:false,
   app_click_callbacks:0,unexpected_focus_events:0,
   observer_quiet:false,owned_job_terminated:false,watcher_terminated:false,
-  lease_held_to_cleanup:false,production_action_authorized:false,errors:[]};
+  lease_held_to_cleanup:false,production_action_authorized:false,
+  launch_failure_diagnostic:null,lease_loss_diagnostic:null,errors:[]};
+let initialGeneration=null;
+const controlGeneration=async()=>{
+  const state=JSON.parse(await readFile(path.join(manager.root,'control.json'),'utf8'));
+  return Number.isSafeInteger(state.generation)?state.generation:null;
+};
 const verify=async()=>{
   await watcher.assertHealthy(lease);
   const current=await native.info();
   if(current.virtualDesktopAccessor!==true||current.currentDesktopNumber!==1)
     throw Error('OWNER_DESKTOP_CHANGED');
-  const scope=await manager.assertWin32ObjectReadLease(lease);
-  if(scope!==objectName)throw Error('DESKTOP_OBJECT_LEASE_CHANGED');
+  try{
+    const scope=await manager.assertWin32ObjectReadLease(lease);
+    if(scope!==objectName)throw Error('DESKTOP_OBJECT_LEASE_CHANGED');
+  }catch(e){
+    if(e instanceof Error && /revoked or replaced/.test(e.message)
+      &&initialGeneration!==null){
+      const after=await controlGeneration().catch(()=>null);
+      result.lease_loss_diagnostic=describeLeaseLoss(initialGeneration,after);
+    }
+    throw e;
+  }
 };
 const readReady=async()=>{
   const deadline=Date.now()+8500;
@@ -71,8 +87,13 @@ const readReady=async()=>{
       throw Error('OWNED_FIXTURE_FAILED_BEFORE_READY');
     if(hostPid) {
       const report=await backend.read(hostPid,0,0,30);
-      if(/Process completed with exit code/u.test(report.text))
-        throw Error('OWNED_PROCESS_HOST_EARLY_EXIT_'+(report.text.match(/exit code (\d+)/u)?.[1]??'unknown'));
+      if(/Process completed with exit code/u.test(report.text)) {
+        result.launch_failure_diagnostic=classifyOwnedLaunchFailure(report.text);
+        await writeFile(path.join(out,'owned-winforms-'+stamp+'.host-diagnostic.log'),
+          report.text.slice(-12000),'utf8');
+        throw Error('OWNED_PROCESS_HOST_EARLY_EXIT_'+
+          (result.launch_failure_diagnostic.process_host_exit_code??'unknown'));
+      }
     }
     await delay(100);
   }
@@ -87,6 +108,7 @@ try {
     throw Error('OWNED_WINFORMS_FIXTURE_DIGEST_MISMATCH');
   result.fixture_hash_verified=true;
   const proof=await manager.assertLease(lease);
+  initialGeneration=await controlGeneration();
   const info=await native.info();
   if(proof.control.desktopNumber!==2||info.virtualDesktopAccessor!==true
     ||info.currentDesktopNumber!==1)throw Error('OWNER_D1_AND_HUD_D2_REQUIRED');
@@ -111,7 +133,7 @@ try {
   if(!Number.isSafeInteger(windowHwnd)||windowHwnd<=0||!Number.isSafeInteger(expectedPid)
     ||expectedPid<=0||app.dwmCloaked!==1||app.rootNoActivate!==true
     ||app.initialForeground!==app.afterForeground
-    ||app.buttonClass?.startsWith('WindowsForms10.BUTTON.')!==true)
+    ||app.buttonClass?.startsWith('WindowsForms10.Button.')!==true)
     throw Error('OWNED_WINFORMS_CLOAK_PID_OR_NOACTIVATE_PROOF_FAILED');
   result.fixture_verified=true;
   await verify();
