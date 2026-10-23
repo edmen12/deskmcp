@@ -42,7 +42,12 @@ export type AgentDesktopControlMutationReason =
   | 'lease_allocated'
   | 'hud_readiness_timeout'
   | 'explicit_stop'
-  | 'linked_task_completed';
+  | 'linked_task_completed'
+  | 'control_panel_startup_reset'
+  | 'control_panel_safety_revocation'
+  | 'control_panel_manual_exit'
+  | 'control_panel_desktop_renumber'
+  | 'control_panel_shutdown';
 
 export interface AgentDesktopControlMutation {
   readonly reason: AgentDesktopControlMutationReason;
@@ -162,7 +167,10 @@ function validControlDocument(value: unknown): value is AgentDesktopControlDocum
   const validMutation = (value: unknown): value is AgentDesktopControlMutation => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     const record = value as Record<string, unknown>;
-    return ['gateway_initialization','lease_allocated','hud_readiness_timeout','explicit_stop','linked_task_completed'].includes(String(record.reason))
+    return ['gateway_initialization','lease_allocated','hud_readiness_timeout','explicit_stop','linked_task_completed',
+      'control_panel_startup_reset','control_panel_safety_revocation',
+      'control_panel_manual_exit','control_panel_desktop_renumber',
+      'control_panel_shutdown'].includes(String(record.reason))
       && Number.isSafeInteger(record.generation) && Number(record.generation) >= 0
       && validIso(record.atUtc)
       && Number.isSafeInteger(record.beforeCount) && Number(record.beforeCount) >= 0

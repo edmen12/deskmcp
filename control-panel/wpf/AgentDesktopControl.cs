@@ -61,6 +61,22 @@ internal sealed class AgentDesktopControlDocument
     public string RevokedAtUtc { get; set; }
 }
 
+internal sealed class AgentDesktopControlMutationDocument
+{
+    [JsonPropertyName("reason")]
+    public string Reason { get; set; }
+    [JsonPropertyName("generation")]
+    public int Generation { get; set; }
+    [JsonPropertyName("atUtc")]
+    public string AtUtc { get; set; }
+    [JsonPropertyName("beforeCount")]
+    public int BeforeCount { get; set; }
+    [JsonPropertyName("afterCount")]
+    public int AfterCount { get; set; }
+    [JsonPropertyName("writerPid")]
+    public int WriterPid { get; set; }
+}
+
 internal sealed class AgentDesktopControlPoolDocument
 {
     [JsonPropertyName("schemaVersion")]
@@ -69,6 +85,12 @@ internal sealed class AgentDesktopControlPoolDocument
     public int Generation { get; set; }
     [JsonPropertyName("controls")]
     public List<AgentDesktopControlDocument> Controls { get; set; }
+    [JsonPropertyName("lastMutation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentDesktopControlMutationDocument LastMutation { get; set; }
+    [JsonPropertyName("recentMutations")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AgentDesktopControlMutationDocument> RecentMutations { get; set; }
 }
 
 internal sealed class AgentDesktopCurrentDesktopDocument
@@ -177,6 +199,34 @@ internal static class AgentDesktopWindowMover
         finally
         {
             if (Marshal.IsComObject(manager)) Marshal.FinalReleaseComObject(manager);
+        }
+    }
+
+    public static string DescribeOwnWindowDesktop(Window window, Guid expectedDesktop)
+    {
+        if (window == null) return "window_missing";
+        IntPtr hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero) return "window_handle_missing";
+        IVirtualDesktopManager manager = null;
+        try
+        {
+            manager = CreateManager();
+            Guid actual = manager.GetWindowDesktopId(hwnd);
+            if (actual == Guid.Empty) return "desktop_id_unresolved";
+            return actual == expectedDesktop ? "correct_desktop" : "wrong_desktop";
+        }
+        catch (COMException error)
+        {
+            return "com_hresult_0x" + unchecked((uint)error.ErrorCode).ToString("X8");
+        }
+        catch
+        {
+            return "desktop_query_failed";
+        }
+        finally
+        {
+            if (manager != null && Marshal.IsComObject(manager))
+                Marshal.FinalReleaseComObject(manager);
         }
     }
 
@@ -529,6 +579,16 @@ internal sealed class AgentDesktopOverlay : IDisposable
         SetWindowLongPtr(hwnd, GwlExStyle, new IntPtr(style));
     }
 
+    public string DescribeEdgeDesktop(Guid desktopId)
+    {
+        return AgentDesktopWindowMover.DescribeOwnWindowDesktop(edgeWindow, desktopId);
+    }
+
+    public string DescribeHudDesktop(Guid desktopId)
+    {
+        return AgentDesktopWindowMover.DescribeOwnWindowDesktop(hudWindow, desktopId);
+    }
+
     public bool IsOnDesktop(Guid desktopId)
     {
         if (!IsShown || desktopId == Guid.Empty) return false;
@@ -603,7 +663,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             AgentDesktopControlPoolDocument stale = ReadControlPoolFile(controlPath);
             if (stale != null && stale.Controls != null && stale.Controls.Count > 0)
             {
-                RevokeAllControls();
+                RevokeAllControls("control_panel_startup_reset");
                 try { if (File.Exists(hudPath)) File.Delete(hudPath); } catch { }
                 if (notify != null) notify("Previous Agent Desktop controls were revoked after Control Panel restart.", false);
             }
@@ -1123,7 +1183,10 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             }
         }
         if (!safetyOverlay.IsOnDesktop(desktopId))
-            throw new InvalidOperationException("Agent Desktop safety HUD is not on its bound desktop.");
+            throw new InvalidOperationException(
+                "Agent Desktop safety HUD is not on its bound desktop. edge=" +
+                safetyOverlay.DescribeEdgeDesktop(desktopId) + ", hud=" +
+                safetyOverlay.DescribeHudDesktop(desktopId));
     }
 
     private AgentDesktopControlPoolDocument UpdateControlDesktopNumbers(Dictionary<string, int> updates)
@@ -1148,6 +1211,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             if (changed)
             {
                 live.Generation = checked(live.Generation + 1);
+                RecordMutation(live, "control_panel_desktop_renumber", live.Controls.Count);
                 WriteControlPool(live);
             }
             return live;
@@ -1186,8 +1250,8 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         catch { }
         try
         {
-            if (!String.IsNullOrWhiteSpace(leaseId)) RevokeControl(leaseId);
-            else RevokeAllControls();
+            if (!String.IsNullOrWhiteSpace(leaseId)) RevokeControl(leaseId, "control_panel_safety_revocation");
+            else RevokeAllControls("control_panel_safety_revocation");
         }
         catch { }
         if (notify != null && !String.IsNullOrWhiteSpace(detail))
@@ -1195,7 +1259,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         RaiseStateChanged();
     }
 
-    private void RevokeControl(string leaseId)
+    private void RevokeControl(string leaseId, string reason = "control_panel_manual_exit")
     {
         using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
         {
@@ -1211,11 +1275,12 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             if (state.Controls.Count == before) return;
             state.SchemaVersion = 2;
             state.Generation = checked(state.Generation + 1);
+            RecordMutation(state, reason, before);
             WriteControlPool(state);
         }
     }
 
-    private void RevokeAllControls()
+    private void RevokeAllControls(string reason = "control_panel_safety_revocation")
     {
         using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
         {
@@ -1225,13 +1290,13 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 Generation = 0,
                 Controls = new List<AgentDesktopControlDocument>()
             };
-            int nextGeneration = state.Controls != null && state.Controls.Count > 0 ? checked(state.Generation + 1) : state.Generation;
-            WriteControlPool(new AgentDesktopControlPoolDocument
-            {
-                SchemaVersion = 2,
-                Generation = nextGeneration,
-                Controls = new List<AgentDesktopControlDocument>()
-            });
+            int before = state.Controls?.Count ?? 0;
+            if (before == 0) return;
+            state.SchemaVersion = 2;
+            state.Generation = checked(state.Generation + 1);
+            state.Controls = new List<AgentDesktopControlDocument>();
+            RecordMutation(state, reason, before);
+            WriteControlPool(state);
         }
     }
 
@@ -1295,6 +1360,28 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             Bindings = bindings ?? new List<AgentDesktopBindingDocument>()
         };
         RuntimeReliability.WriteAllTextAtomic(configPath, JsonSerializer.Serialize(document) + Environment.NewLine, false);
+    }
+
+    private static void RecordMutation(AgentDesktopControlPoolDocument state, string reason, int beforeCount)
+    {
+        var entry = new AgentDesktopControlMutationDocument
+        {
+            Reason = reason,
+            Generation = state.Generation,
+            AtUtc = DateTime.UtcNow.ToString("O"),
+            BeforeCount = beforeCount,
+            AfterCount = state.Controls?.Count ?? 0,
+            WriterPid = Environment.ProcessId
+        };
+        var history = state.RecentMutations != null
+            ? new List<AgentDesktopControlMutationDocument>(state.RecentMutations)
+            : state.LastMutation != null
+                ? new List<AgentDesktopControlMutationDocument> { state.LastMutation }
+                : new List<AgentDesktopControlMutationDocument>();
+        history.Add(entry);
+        if (history.Count > 32) history.RemoveRange(0, history.Count - 32);
+        state.LastMutation = entry;
+        state.RecentMutations = history;
     }
 
     private void WriteControlPool(AgentDesktopControlPoolDocument document)
@@ -1431,7 +1518,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         timer.Stop();
         if (revokeActive)
         {
-            try { RevokeAllControls(); } catch { }
+            try { RevokeAllControls("control_panel_shutdown"); } catch { }
         }
         HideOverlayAndHud();
         try { UnregisterDesktopSwitchNotifications(); } catch { }

@@ -66,3 +66,47 @@ Isolated non-production tests include:
 - Equivalent JSON with reordered keys remains accepted
 
 **Decision:** candidate state/event attribution improvements pass isolated tests; **real extended lease stability remains RED**. No installed Gateway restart, update, merge or production migration was executed.
+
+
+
+## Batch 19 — identified the missing writer and the matching real HUD safety failure
+
+### Observed incident (strong time/cause match)
+
+The installed Control Panel's own `agent-desktop/control-error.log` contains the **exact incident**:
+
+```
+2026-10-23T19:28:51.5683257Z Agent Desktop safety HUD is not on its bound desktop.
+```
+
+The live `agent-desktop/control.json` file was modified at **2026-10-23 19:28:51 UTC**, ended up with `generation=559` and `controls=[]`, and `hud-state.json` disappeared. This log line and the exact code path strongly support the following sequence:
+
+1. The WPF Control Panel's periodic `AgentDesktopControlCoordinator.Tick()` detects a HUD desktop-identity failure inside `EnsureSafetyOverlayAsync` → `AgentDesktopOverlay.IsOnDesktop`.
+2. The catch calls `TryRevokeAfterSafetyFailure`, which writes **control-error.log**, then invokes `RevokeControl` under the existing cross-process directory lock.
+3. `RevokeControl` increments generation and rewrites `control.json`; a later tick removes the inactive HUD state.
+
+Thus the **immediate safety-revocation trigger is identified**. What remains unknown is **why** the check failed: the blue edge window may have lost its desktop GUID, the HUD toolbar may have lost its GUID, the COM `GetWindowDesktopId` call may have failed/transiently returned an empty GUID, or the HWND may actually have moved. Historical logging only recorded the combined Boolean failure; we cannot retrospectively determine which window was responsible. Control-panel-error.log shows the same general warning on **October 17–23**, so this is not a one-off.
+
+### Candidate-only cross-component correction
+
+The WPF Control Panel is a **second writer** of `control.json`, separate from the Gateway. The earlier candidate-only `recentMutations` logic existed only in TypeScript. Existing WPF writers serialized a document without these fields, silently discarding the history whenever the Control Panel revoked controls.
+
+Now **all Control Panel mutating writes** record the same atomic `lastMutation` + bounded `recentMutations` fields under the shared lock, with origin-specific reasons:
+
+- `control_panel_safety_revocation` for a HUD/binding/provider safety failure
+- `control_panel_startup_reset` for its active-control reset at Control Panel start
+- `control_panel_manual_exit` when the HUD Exit button is used
+- `control_panel_shutdown` for explicit active-control cleanup at Control Panel shutdown
+- `control_panel_desktop_renumber` for a native desktop number update
+
+The Gateway validator was extended to recognize these exact reason strings. Empty startup/reset calls leave unchanged idle documents intact. WPF HUD verification **still revokes immediately** on a failed safety check; there is no auto-retry, focus stealing, desktop switching, safety bypass or broad action permission.
+
+The safety failure message for **future candidate deployments** will additionally contain independently queried bounded diagnostic categories for **edge and HUD separately**: `correct_desktop`, `wrong_desktop`, `desktop_id_unresolved`, `window_handle_missing`, `com_hresult_0x...`, or `desktop_query_failed`. No HWND, window title, target GUID or private application details are added to that new category log. A diagnostic re-query may itself race with shell state, so this is **evidence**, not an infallible ground truth.
+
+### Verification and release boundary
+
+- WPF candidate Control Panel build: **0 warnings, 0 errors**.
+- Candidate TypeScript build and focused control-panel provenance tests: PASS.
+- **Actual .NET ↔ TypeScript bidirectional serialization compatibility:** `scripts/verify-agent-desktop-provenance-interop.mjs` loaded the built WPF assembly in a **non-GUI console process**, emitted a native `control_panel_safety_revocation` control document read by the Gateway, then round-tripped a Gateway `control_panel_shutdown` document through the native model. Both preserved their mutation history. Temporary synthetic data only; production `control.json` was **not touched**.
+
+**Important:** this is a **candidate source fix**, not installed. The installed Control Panel cannot yet emit the additional diagnostic categories/history until an explicitly approved installation. The historical event’s **immediate revocation reason is known**; the *underlying cause of the HUD-window GUID mismatch* and long-session safety reliability remain **UNVERIFIED**. No new live D2 session was started this round.
