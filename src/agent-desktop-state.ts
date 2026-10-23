@@ -10,6 +10,7 @@ const TASK_ID_PATTERN = /^tsk_[0-9a-f]{16}$/u;
 const HUD_HEARTBEAT_MAX_AGE_MS = 2500;
 const HUD_READY_TIMEOUT_MS = 3500;
 const LOCK_TIMEOUT_MS = 2500;
+const MAX_CONTROL_MUTATION_HISTORY = 32;
 
 export interface AgentDesktopBinding {
   readonly schemaVersion: 1;
@@ -57,6 +58,15 @@ interface AgentDesktopControlDocument {
   readonly generation: number;
   readonly controls: readonly AgentDesktopControlState[];
   readonly lastMutation?: AgentDesktopControlMutation;
+  readonly recentMutations?: readonly AgentDesktopControlMutation[];
+}
+
+function nextControlMutationHistory(
+  document: AgentDesktopControlDocument,
+  entry: AgentDesktopControlMutation
+): readonly AgentDesktopControlMutation[] {
+  const previous = document.recentMutations ?? (document.lastMutation ? [document.lastMutation] : []);
+  return [...previous, entry].slice(-MAX_CONTROL_MUTATION_HISTORY);
 }
 
 function controlMutation(
@@ -149,15 +159,39 @@ function validControlDocument(value: unknown): value is AgentDesktopControlDocum
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (row.schemaVersion !== 2 || !Number.isSafeInteger(row.generation) || Number(row.generation) < 0 || !Array.isArray(row.controls)) return false;
-  if (row.lastMutation !== undefined) {
-    const record = row.lastMutation as Record<string, unknown>;
-    if (!record || typeof record !== 'object' || Array.isArray(record)
-      || !['gateway_initialization','lease_allocated','hud_readiness_timeout','explicit_stop','linked_task_completed'].includes(String(record.reason))
-      || record.generation !== row.generation
-      || !validIso(record.atUtc)
-      || !Number.isSafeInteger(record.beforeCount) || Number(record.beforeCount) < 0
-      || !Number.isSafeInteger(record.afterCount) || record.afterCount !== row.controls.length
-      || !Number.isSafeInteger(record.writerPid) || Number(record.writerPid) <= 0) return false;
+  const validMutation = (value: unknown): value is AgentDesktopControlMutation => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    return ['gateway_initialization','lease_allocated','hud_readiness_timeout','explicit_stop','linked_task_completed'].includes(String(record.reason))
+      && Number.isSafeInteger(record.generation) && Number(record.generation) >= 0
+      && validIso(record.atUtc)
+      && Number.isSafeInteger(record.beforeCount) && Number(record.beforeCount) >= 0
+      && Number.isSafeInteger(record.afterCount) && Number(record.afterCount) >= 0
+      && Number.isSafeInteger(record.writerPid) && Number(record.writerPid) > 0;
+  };
+  if (row.lastMutation !== undefined &&
+    (!validMutation(row.lastMutation)
+      || row.lastMutation.generation !== row.generation
+      || row.lastMutation.afterCount !== row.controls.length)) return false;
+  if (row.recentMutations !== undefined) {
+    if (!Array.isArray(row.recentMutations)
+      || row.recentMutations.length < 1
+      || row.recentMutations.length > MAX_CONTROL_MUTATION_HISTORY
+      || !row.recentMutations.every(validMutation)) return false;
+    const history = row.recentMutations as AgentDesktopControlMutation[];
+    const last = history[history.length - 1]!;
+    if (!row.lastMutation || row.lastMutation.reason !== last.reason
+      || row.lastMutation.generation !== last.generation
+      || row.lastMutation.atUtc !== last.atUtc
+      || row.lastMutation.beforeCount !== last.beforeCount
+      || row.lastMutation.afterCount !== last.afterCount
+      || row.lastMutation.writerPid !== last.writerPid
+      || last.generation !== row.generation
+      || last.afterCount !== row.controls.length) return false;
+    for (let i = 1; i < history.length; i++) {
+      if (history[i]!.generation !== history[i - 1]!.generation + 1
+        || history[i]!.beforeCount !== history[i - 1]!.afterCount) return false;
+    }
   }
   if (!row.controls.every(control => validControl(control, true) && (control as AgentDesktopControlState).active)) return false;
   const leases = new Set<string>();
@@ -237,16 +271,25 @@ export class AgentDesktopManager {
   async init(): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     await this.withCrossProcessLock(async () => {
+      const existing = await readJson(this.controlPath);
       const current = await this.readControlDocument();
-      const nextGeneration = current.generation + (current.controls.length > 0 ? 1 : 0);
+      if (current.controls.length === 0) {
+        // A Gateway starting while no lease exists must NOT overwrite an earlier
+        // stop/revocation record at the same generation. Preserve its history.
+        if (existing === undefined) await atomicJson(this.controlPath, {
+          schemaVersion: 2, generation: 0, controls: []
+        } satisfies AgentDesktopControlDocument);
+        return;
+      }
+      const nextGeneration = current.generation + 1;
+      const mutation = controlMutation('gateway_initialization', nextGeneration,
+        current.controls.length, 0);
       await atomicJson(this.controlPath, {
-        schemaVersion: 2,
-        generation: nextGeneration,
-        controls: [],
-        lastMutation: controlMutation('gateway_initialization', nextGeneration,
-          current.controls.length, 0)
+        schemaVersion: 2, generation: nextGeneration, controls: [],
+        lastMutation: mutation,
+        recentMutations: nextControlMutationHistory(current, mutation)
       } satisfies AgentDesktopControlDocument);
-      if (current.controls.length > 0) await rm(this.hudPath, { force: true }).catch(() => undefined);
+      await rm(this.hudPath, { force: true }).catch(() => undefined);
     });
   }
 
@@ -295,6 +338,12 @@ export class AgentDesktopManager {
   /** Last *committed* control-document mutation. Legacy documents may omit it. */
   async lastControlMutation(): Promise<AgentDesktopControlMutation | undefined> {
     return (await this.readControlDocument()).lastMutation;
+  }
+
+  /** Bounded atomic control-document history; not tamper-proof durable audit. */
+  async recentControlMutations(): Promise<readonly AgentDesktopControlMutation[]> {
+    const doc = await this.readControlDocument();
+    return doc.recentMutations ?? (doc.lastMutation ? [doc.lastMutation] : []);
   }
 
   async bindings(): Promise<readonly AgentDesktopBinding[]> {
@@ -457,12 +506,14 @@ export class AgentDesktopManager {
         ...(normalizedTaskId ? { taskId: normalizedTaskId } : {}),
         startedAtUtc: new Date().toISOString()
       };
+      const mutation = controlMutation('lease_allocated', nextGeneration,
+        document.controls.length, document.controls.length + 1);
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: nextGeneration,
         controls: [...document.controls, next],
-        lastMutation: controlMutation('lease_allocated', nextGeneration,
-          document.controls.length, document.controls.length + 1)
+        lastMutation: mutation,
+        recentMutations: nextControlMutationHistory(document, mutation)
       } satisfies AgentDesktopControlDocument);
       return next;
     }));
@@ -477,12 +528,14 @@ export class AgentDesktopManager {
       const document = await this.readControlDocument();
       const remaining = document.controls.filter(row => row.leaseId?.toLowerCase() !== control.leaseId?.toLowerCase());
       if (remaining.length !== document.controls.length) {
+        const mutation = controlMutation('hud_readiness_timeout', document.generation + 1,
+          document.controls.length, remaining.length);
         await atomicJson(this.controlPath, {
           schemaVersion: 2,
           generation: document.generation + 1,
           controls: remaining,
-          lastMutation: controlMutation('hud_readiness_timeout', document.generation + 1,
-            document.controls.length, remaining.length)
+          lastMutation: mutation,
+          recentMutations: nextControlMutationHistory(document, mutation)
         } satisfies AgentDesktopControlDocument);
       }
     }));
@@ -495,12 +548,14 @@ export class AgentDesktopManager {
       const document = await this.readControlDocument();
       const live = document.controls.find(row => row.leaseId?.toLowerCase() === leaseId.toLowerCase());
       if (!live) return;
+      const mutation = controlMutation('explicit_stop', document.generation + 1,
+        document.controls.length, document.controls.length - 1);
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: document.generation + 1,
         controls: document.controls.filter(row => row !== live),
-        lastMutation: controlMutation('explicit_stop', document.generation + 1,
-          document.controls.length, document.controls.length - 1)
+        lastMutation: mutation,
+        recentMutations: nextControlMutationHistory(document, mutation)
       } satisfies AgentDesktopControlDocument);
     }));
     return this.status(leaseId);
@@ -515,12 +570,14 @@ export class AgentDesktopManager {
       const live = document.controls.find(row => row.taskId === normalizedTaskId && row.leaseId);
       if (!live?.leaseId) return;
       stoppedLeaseId = live.leaseId;
+      const mutation = controlMutation('linked_task_completed', document.generation + 1,
+        document.controls.length, document.controls.length - 1);
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: document.generation + 1,
         controls: document.controls.filter(row => row !== live),
-        lastMutation: controlMutation('linked_task_completed', document.generation + 1,
-          document.controls.length, document.controls.length - 1)
+        lastMutation: mutation,
+        recentMutations: nextControlMutationHistory(document, mutation)
       } satisfies AgentDesktopControlDocument);
     }));
     return {
