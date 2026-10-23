@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { AuditLogger } from '../src/audit.js';
 import type { DesktopPolicy } from '../src/desktop-policy.js';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import type { ComputerUseRuntime } from '../src/computer-use-runtime.js';
 import type { ComputerWindow } from '../src/computer-use-backend.js';
 import { ComputerObservationRegistry } from '../src/computer-use-observation.js';
@@ -13,7 +14,7 @@ import { ComputerSnapshotRegistry } from '../src/computer-use-read-model.js';
 type Response = { content: Array<{ type: string; text: string }>; isError?: boolean };
 type Handler = (input: Record<string, unknown>) => Promise<Response>;
 
-function setup() {
+function setup(agentDesktop?: AgentDesktopManager) {
   const handlers = new Map<string, Handler>();
   const server = {
     registerTool(name: string, _schema: unknown, handler: Handler) { handlers.set(name, handler); }
@@ -31,6 +32,8 @@ function setup() {
     className: 'FixtureWindow', width: 800, height: 600, isForeground: true
   };
   let inspectFails = false;
+  let onInspect: (() => void) | undefined;
+  let currentProcessId = target.processId;
   let snapshotElements = [{ type: 'Window', selector: 'Root', value: '' }];
   let listFailureOnCall = Number.POSITIVE_INFINITY;
   let listCalls = 0;
@@ -39,9 +42,10 @@ function setup() {
     async listWindows() {
       listCalls += 1;
       if (listCalls >= listFailureOnCall) throw new Error('postaction enumeration lost');
-      return [target];
+      return [{ ...target, processId: currentProcessId }];
     },
     async inspect() {
+      onInspect?.();
       if (inspectFails) throw new Error('screenshot or UIA unavailable');
       return { hwnd: target.hwnd, elements: snapshotElements, elementsTruncated: true };
     },
@@ -54,7 +58,7 @@ function setup() {
     windows: new ComputerWindowRegistry(),
     coordinator: new ComputerUseCoordinator()
   } as unknown as ComputerUseRuntime;
-  registerComputerUseTools(server, policy, audit, runtime);
+  registerComputerUseTools(server, policy, audit, runtime, agentDesktop);
   const tool = (name: string) => {
     const handler = handlers.get(name);
     assert.ok(handler);
@@ -72,6 +76,8 @@ function setup() {
   return {
     runtime, tool, decode, snapshot,
     setInspectFails(value: boolean) { inspectFails = value; },
+    setInspectHook(callback: (() => void) | undefined) { onInspect = callback; },
+    changeProcessIdentity(value: number) { currentProcessId = value; },
     setSnapshotElements(value: typeof snapshotElements) { snapshotElements = value; },
     setListFails(value: boolean) { listFailureOnCall = value ? listCalls + 2 : Number.POSITIVE_INFINITY; },
     getActCalls() { return actCalls; }
@@ -240,4 +246,103 @@ test('UI diff baseline remains readable after its one-time action token is consu
   });
   assert.equal(replay.isError, true);
   assert.equal(fixture.getActCalls(), 1);
+});
+
+test('cooperative wait_for releases GUI coordinator between polls for a separate agent', async () => {
+  const fixture = setup();
+  fixture.setSnapshotElements([{ type: 'Edit', selector: 'Root', value: 'pending' }]);
+  const before = await fixture.snapshot();
+  let completed = false;
+  let notifyPoll!: () => void;
+  const firstPoll = new Promise<void>(resolve => { notifyPoll = resolve; });
+  fixture.setInspectHook(() => notifyPoll());
+  const waiting = fixture.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'wait_for', selector: 'Root', wait_condition: 'value_equals',
+    expected_value: 'ready', wait_ms: 1400, poll_ms: 250,
+    allow_user_desktop: false, allow_system_keys: false
+  }).then(response => { completed = true; return response; });
+
+  // Wait for the initial scan; avoid timing-dependent sleeps in CI.
+  await firstPoll;
+  const snap = await fixture.snapshot();
+  assert.equal(completed, false, 'a read-only snapshot must not queue behind an entire wait');
+  const second = await fixture.tool('desktop_ui_action')({
+    window_id: (snap.window as Record<string, unknown>).window_id,
+    computer_observation_id: snap.computer_observation_id,
+    action: 'set_value', selector: 'Root', value: 'ready',
+    settle_ms: 0, observe_after: 'none',
+    allow_user_desktop: false, allow_system_keys: false
+  });
+  assert.equal(second.isError, undefined);
+  fixture.setSnapshotElements([{ type: 'Edit', selector: 'Root', value: 'ready' }]);
+  const result = fixture.decode(await waiting);
+  assert.equal(result.condition_met, true);
+  assert.equal(result.action_dispatched, false);
+  assert.equal(fixture.getActCalls(), 1, 'wait must not dispatch input');
+});
+
+test('cooperative wait_for fails closed when window identity changes between polls', async () => {
+  const fixture = setup();
+  const before = await fixture.snapshot();
+  const windowId = (before.window as Record<string, unknown>).window_id;
+  let notifyPoll!: () => void;
+  const firstPoll = new Promise<void>(resolve => { notifyPoll = resolve; });
+  fixture.setInspectHook(() => notifyPoll());
+  // Under the same coordinator, a revoked window capability is detected on the next scan.
+  const waiting = fixture.tool('desktop_ui_action')({
+    window_id: windowId, computer_observation_id: before.computer_observation_id,
+    action: 'wait_for', selector: 'unavailable', wait_ms: 1200, poll_ms: 200,
+    allow_user_desktop: false, allow_system_keys: false
+  });
+  await firstPoll;
+  fixture.changeProcessIdentity(303);
+  // A reused HWND with a new PID must fail rather than match the old capability.
+  const response = await waiting;
+  assert.equal(response.isError, true);
+  assert.match(response.content[0]?.text ?? '', /stale|unknown|changed/i);
+});
+
+test('cooperative wait_for rechecks Agent Desktop lease and fails closed after revocation', async () => {
+  const leaseId = '11111111-1111-4111-8111-111111111111';
+  let valid = true;
+  let guardChecks = 0;
+  const agentDesktop = {
+    async activeLeaseForWindow() { return leaseId; },
+    async assertLease(id: string) {
+      assert.equal(id, leaseId);
+      guardChecks += 1;
+      if (!valid) throw new Error('Agent Desktop lease revoked');
+    },
+    async assertWindowOnLease(_hwnd: number, id: string) {
+      assert.equal(id, leaseId);
+      guardChecks += 1;
+      if (!valid) throw new Error('Agent Desktop lease revoked');
+    },
+    async filterWindowsForLease<T>(windows: T[], id: string) {
+      assert.equal(id, leaseId);
+      if (!valid) throw new Error('Agent Desktop lease revoked');
+      return windows;
+    },
+    async hasActiveControls() { return true; }
+  } as unknown as AgentDesktopManager;
+  const fixture = setup(agentDesktop);
+  const before = await fixture.snapshot();
+  let notifyPoll!: () => void;
+  const firstPoll = new Promise<void>(resolve => { notifyPoll = resolve; });
+  fixture.setInspectHook(() => notifyPoll());
+  const waiting = fixture.tool('desktop_ui_action')({
+    window_id: (before.window as Record<string, unknown>).window_id,
+    computer_observation_id: before.computer_observation_id,
+    action: 'wait_for', selector: 'NotPresent', wait_ms: 700, poll_ms: 100,
+    allow_user_desktop: false, allow_system_keys: false
+  });
+  await firstPoll;
+  valid = false;
+  const result = await waiting;
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]?.text ?? '', /lease revoked/i);
+  assert.ok(guardChecks >= 3);
+  assert.equal(fixture.getActCalls(), 0);
 });

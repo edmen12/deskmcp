@@ -223,6 +223,106 @@ function parseAction(input: {
 
 type ObserveMode = 'none' | 'tree' | 'screenshot' | 'both';
 
+interface ComputerWaitForInput {
+  readonly window_id: string;
+  readonly computer_observation_id: string;
+  readonly agent_desktop_lease_id?: string | undefined;
+  readonly selector?: string | undefined;
+  readonly wait_condition?: WaitCondition | undefined;
+  readonly expected_value?: string | undefined;
+  readonly wait_ms?: number | undefined;
+  readonly poll_ms?: number | undefined;
+  readonly allow_user_desktop?: boolean | undefined;
+}
+
+/**
+ * Only the preflight and each individual UIA scan hold the shared coordinator.
+ * The polling delay is outside the lock, so other agents can observe or act.
+ */
+async function executeCooperativeWaitFor(
+  input: ComputerWaitForInput,
+  runtime: ComputerUseRuntime,
+  agentDesktop?: AgentDesktopManager
+) {
+  if (!input.selector) throw new Error('wait_for requires selector.');
+  if (input.wait_condition === 'value_equals' && input.expected_value === undefined) {
+    throw new Error('value_equals requires expected_value.');
+  }
+  const validated = await runtime.coordinator.exclusive(async () => {
+    const observationLeaseHint = runtime.observations.peekLease(
+      input.computer_observation_id, input.window_id, Date.now()
+    );
+    const scopedLeaseId = input.agent_desktop_lease_id ?? observationLeaseHint;
+    if (scopedLeaseId) {
+      if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+      await agentDesktop.assertLease(scopedLeaseId);
+    }
+    const live = await runtime.backend.listWindows();
+    const scoped = scopedLeaseId
+      ? await agentDesktop!.filterWindowsForLease(live, scopedLeaseId)
+      : live;
+    const target = runtime.windows.resolve(input.window_id, scoped);
+    if (isAgentDesktopSafetyWindow(target)) {
+      throw new Error('DeskMCP Agent Desktop safety HUD cannot be targeted by Computer Use.');
+    }
+    const resolvedLeaseId = scopedLeaseId ?? await resolveAgentDesktopWindowLease(agentDesktop, target.hwnd);
+    const recordedLeaseId = runtime.observations.consume(
+      input.computer_observation_id, input.window_id, Date.now(), resolvedLeaseId
+    );
+    const leaseId = recordedLeaseId ?? resolvedLeaseId;
+    await assertUnscopedUserDesktopActionAllowed(
+      agentDesktop, leaseId, input.allow_user_desktop ?? false
+    );
+    if (leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, leaseId);
+    return { leaseId };
+  });
+
+  const verifyLease = async () => {
+    if (validated.leaseId) await agentDesktop!.assertLease(validated.leaseId);
+  };
+  const inspectOne = () => runtime.coordinator.exclusive(async () => {
+    await verifyLease();
+    const live = await runtime.backend.listWindows();
+    const scoped = validated.leaseId
+      ? await agentDesktop!.filterWindowsForLease(live, validated.leaseId)
+      : live;
+    const target = runtime.windows.resolve(input.window_id, scoped);
+    if (isAgentDesktopSafetyWindow(target)) throw new Error('Agent Desktop safety HUD cannot be inspected.');
+    const currentLease = await resolveAgentDesktopWindowLease(agentDesktop, target.hwnd);
+    if (currentLease !== validated.leaseId) {
+      throw new PolicyDeniedError('Target window Agent Desktop lease changed during wait_for.');
+    }
+    await assertUnscopedUserDesktopActionAllowed(
+      agentDesktop, validated.leaseId, input.allow_user_desktop ?? false
+    );
+    if (validated.leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, validated.leaseId);
+    const inspected = await runtime.backend.inspect(target.hwnd, true, 200);
+    if (validated.leaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, validated.leaseId);
+    return inspected;
+  });
+
+  const outcome = await waitForUiCondition(
+    inspectOne, verifyLease, input.selector, input.wait_condition ?? 'present',
+    input.expected_value, input.wait_ms ?? 5000, input.poll_ms ?? 250
+  );
+  return { content: [{ type: 'text' as const, text: JSON.stringify({
+    action: 'wait_for',
+    succeeded: outcome.condition_met,
+    check_completed: true,
+    action_dispatched: false,
+    condition: input.wait_condition ?? 'present',
+    condition_met: outcome.condition_met,
+    outcome_verified: outcome.condition_met,
+    outcome_status: outcome.condition_met ? 'condition_verified' : 'timeout_inconclusive',
+    selector: input.selector,
+    attempts: outcome.attempts,
+    timed_out: outcome.timed_out,
+    semantic_tree_truncated: outcome.last_inspection_truncated,
+    semantic_tree_scope: 'winapp_depth_and_filter_limited',
+    observation_required_before_next_action: true
+  }, null, 2) }] };
+}
+
 /** Legacy succeeded=true only acknowledges the backend call; it never proves an app outcome. */
 export function computerActionDispatchResult(
   action: UiAction['type'],
@@ -425,7 +525,7 @@ export function registerComputerUseTools(
     'desktop_ui_action',
     {
       title: 'Act on Desktop UI',
-      description: 'Perform one globally serialized semantic Windows UI action. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop Computer Use targets windows by their verified Windows virtual-desktop GUID (not by a separate Win32 desktop object), and the observation retains its lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, and wait are allowed. Physical click, hover, drag, wheel injection, and keyboard injection remain fail-closed until those global-input paths are proven not to target the user input desktop. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
+      description: 'Perform one serialized Windows UI action, or cooperative wait_for that locks only each individual UIA scan. Requires a fresh one-time computer_observation_id from desktop_ui_snapshot. Agent Desktop Computer Use targets windows by their verified Windows virtual-desktop GUID (not by a separate Win32 desktop object), and the observation retains its lease even if the caller omits agent_desktop_lease_id on the following action. In isolated mode, invoke, set_value, semantic direction/to scroll, and wait are allowed. Physical click, hover, drag, wheel injection, and keyboard injection remain fail-closed until those global-input paths are proven not to target the user input desktop. While any Agent Desktop lease is active, unscoped user-desktop actions require allow_user_desktop=true.',
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
@@ -456,7 +556,9 @@ export function registerComputerUseTools(
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
     },
-    async input => auditedComputerCall(audit, policy, 'desktop_ui_action', `window:${input.window_id}`, async () => runtime.coordinator.exclusive(async () => {
+    async input => auditedComputerCall(audit, policy, 'desktop_ui_action', `window:${input.window_id}`, async () => input.action === 'wait_for'
+      ? executeCooperativeWaitFor(input, runtime, agentDesktop)
+      : runtime.coordinator.exclusive(async () => {
       const parsedAction = parseAction(input);
       const observationLeaseHint = runtime.observations.peekLease(
         input.computer_observation_id,
@@ -499,43 +601,6 @@ export function registerComputerUseTools(
       if (effectiveAgentDesktopLeaseId) {
         if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
         await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
-      }
-
-      if (input.action === 'wait_for') {
-        // This is an observational poll, not global input. Retain sibling observations,
-        // but revalidate window identity and exact lease around every UIA inspection.
-        const verifyTarget = async () => {
-          const live = await runtime.backend.listWindows();
-          runtime.windows.resolve(input.window_id, live);
-          if (effectiveAgentDesktopLeaseId) {
-            await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
-          }
-        };
-        const result = await waitForUiCondition(
-          () => runtime.backend.inspect(target.hwnd, true, 200),
-          verifyTarget,
-          input.selector!,
-          input.wait_condition as WaitCondition,
-          input.expected_value,
-          input.wait_ms ?? 5000,
-          input.poll_ms
-        );
-        return { content: [{ type: 'text' as const, text: JSON.stringify({
-          action: 'wait_for',
-          succeeded: result.condition_met,
-          check_completed: true,
-          action_dispatched: false,
-          condition: input.wait_condition,
-          condition_met: result.condition_met,
-          outcome_verified: result.condition_met,
-          outcome_status: result.condition_met ? 'condition_verified' : 'timeout_inconclusive',
-          selector: input.selector,
-          attempts: result.attempts,
-          timed_out: result.timed_out,
-          semantic_tree_truncated: result.last_inspection_truncated,
-          semantic_tree_scope: 'winapp_depth_and_filter_limited',
-          observation_required_before_next_action: true
-        }, null, 2) }] };
       }
 
       // Invalidate every sibling observation before attempting the action. Even a

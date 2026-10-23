@@ -35,7 +35,7 @@ Snapshots default to the interactive UI Automation tree without a screenshot. Re
 
 `desktop_ui_snapshot(diff_from_observation_id=..., diff_only=true)` returns `ui_diff` (added/removed/changed/unchanged) rather than the full `elements` array, plus a fresh action-capable observation ID. Capture an initial full snapshot first. The baseline is held in a bounded 128-entry, 120-second memory cache, even after its action capability is consumed; it is matched against the **same window, same Agent Desktop lease, same max_elements, and same interactive_only** setting. A diff baseline never grants an action capability. Unique selectors are compared by identity; ambiguous selectors fall back to array position. Reordering and WinApp depth/filter limits can produce incomplete or approximate differences: `scope_complete=false` is always explicit. Screenshot images, when requested, are not diffed.
 
-`wait_for` currently holds the shared GUI coordinator during its bounded poll; long waits can delay other agents. A future per-poll nonblocking coordinator is a separate optimization requiring concurrency tests.
+`wait_for` now acquires the shared coordinator for its initial observation/lease preflight and for **each individual** identity-checked UIA scan. Polling delays run outside the lock, allowing other agents to inspect or modify UI between scans. A fresh `computer_observation_id` is still required before any later action. The 10-second budget bounds polling decisions, but one in-flight WinApp inspect can exceed that elapsed limit due to backend timeout; it is not a hard deadline.
 
 Normal user desktop actions keep their existing input options and policy checks. Only a valid Agent Desktop lease applies the separate isolated-desktop action restrictions.
 
@@ -77,6 +77,10 @@ DeskMCP Computer Use does not bypass:
 - Host-session isolation.
 
 If Windows switches to Secure Desktop for UAC, normal desktop UI automation must fail rather than attempt to synthesize consent. Administrator process elevation continues to use DeskMCP's separate ProcessHost/UAC flow.
+
+## Backend startup measurement (2026-10-23; local read-only sample)
+
+Run `node scripts/benchmark-winapp-startup.mjs <trusted-absolute-winapp-exe-path>` to time six separate CLI launches for each of `--help` and `ui list-windows --json`, without printing any window metadata. A local installed WinApp CLI v0.5.0 sample yielded 6/6 successful calls in each case, with medians of about 54.7ms for help and 55.7ms for read-only window enumeration. These numbers do **not** include a complex UIA tree scan, network round-trips, or a persistent worker baseline. Persistent UIA worker adoption remains proposed pending isolated benchmarks showing meaningful latency benefits after accounting for COM lifecycle, recovery, memory, and Agent Desktop isolation.
 
 ## Backend and packaging
 
