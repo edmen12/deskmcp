@@ -113,3 +113,36 @@ test('isolated Coordinator drives the real HUD heartbeat without touching the li
   assert.doesNotMatch(src,/RegisterDesktopSwitchNotifications\(\)|GoToDesktopNumber\(|StartGateway\(/);
   assert.doesNotMatch(src,/new ControlPanelRuntime\(/);
 });
+
+test('cross-process Manager and single-tool MCP proof remain confined to a private test root',()=>{
+  const probe=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'AgentDesktopManagerHandoffIsolatedProbe.cs'),'utf8');
+  const manager=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'manager-handoff.mjs'),'utf8');
+  const mcp=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'mcp-handoff.mjs'),'utf8');
+  const source=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'DeskMCPControlPanel.cs'),'utf8');
+  assert.match(source,/--agent-desktop-manager-handoff-isolated-probe/);
+  assert.match(probe,/EXACT_TEST_DATA_ROOT_REQUIRED/);
+  assert.match(probe,/NATIVE_DESKTOP_SWITCH_HOOK_NOT_REGISTERED/);
+  assert.match(probe,/coordinator\.Start\(\)/);
+  assert.match(probe,/HUD_HEARTBEAT_INVARIANT_FAILED/);
+  assert.match(manager,/new AgentDesktopManager\(/);
+  assert.match(manager,/startControl\(/);
+  assert.match(manager,/stopControl\(/);
+  assert.match(mcp,/registerAgentDesktopTools\(/);
+  assert.match(mcp,/tools\.length/);
+  assert.match(mcp,/127\.0\.0\.1/);
+  assert.match(mcp,/otherToolsExposed/);
+  assert.match(mcp,/callTool\(/);
+  assert.doesNotMatch(mcp,/createDesktopMcpServer\(|DesktopBackendBridge\(|GoToDesktopNumber\(/);
+});
+test('unsafe taskbar DeleteTab experiment stays absent from safety overlays',()=>{
+  assert.doesNotMatch(source,/ITaskbarList|HideOnlyOwnSafetyTaskbarButton|TASKBAR_HIDE_EXPERIMENT/);
+  const observer=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'taskbar-privacy-observer.ps1'),'utf8');
+  assert.match(observer,/GrabOnlyCenterTaskbar/);
+  assert.match(observer,/changedPixels/);
+  assert.match(observer,/screenshotsSaved=0/);
+});
