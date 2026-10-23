@@ -11,7 +11,7 @@ using System.Threading;
 
 namespace DeskMCP.AgentDesktopHost;
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly Guid ClsidVirtualDesktopManager = new("AA509086-5CA9-4C25-8F95-589D3C07B48A");
 
@@ -267,6 +267,7 @@ internal static class Program
                     ToNativeDesktopNumber(ParsePositiveInt(Required(options, "fallback-number"), "fallback-number")),
                     vda),
                 "window-info" => WindowInfo(ParseHwnd(Required(options, "hwnd")), vda),
+                "list-virtual-windows" => ListVirtualWindows(ParseDesktopId(Required(options, "desktop-id")), vda),
                 "move-window" => MoveWindow(ParseHwnd(Required(options, "hwnd")), ParseDesktopId(Required(options, "desktop-id")), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),

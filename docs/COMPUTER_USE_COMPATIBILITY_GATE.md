@@ -26,6 +26,23 @@ The archived Chrome E2E result files are in the **separate** `DeskMCP-D2-Native-
 node scripts/verify-thirdparty-chrome-evidence.mjs "C:\Users\User\Desktop\DeskMCP-D2-Native-Acceptance\test-area\desktop2-real-acceptance\runs"
 ```
 
+## Fresh passive real Desktop2 census — 2026-10-23
+
+The source-only candidate gained a **strictly read-only** `list-virtual-windows` native host operation and `scripts/passive-desktop2-thirdparty-inventory.mjs`. The native implementation checks the real user desktop is D1, the target is exactly D2, and each returned window belongs to the **non-current** virtual desktop rather than the foreground/pinned/shared desktop. It does not start, move, activate, screenshot or send input to a GUI. It excludes the Agent Desktop safety HUD and strips window **titles** from native output; the runner further omits raw HWND, PID, private process names and class names. Windows processes on an inert allowlist may be categorized by executable filename, but **file names are not verified signatures** and confer no permission to control apps.
+
+The initial attempt to run the archived inspection harness failed before enumeration because its standalone AgentDesktopHost lacked a local `VirtualDesktopAccessor.dll` and had no `DESKTOP_MCP_VDA_PATH` configured. The native `info` returned `virtualDesktopAccessor=false` and an **unknown** desktop number. This was a missing capability, **not evidence the user switched to Desktop2**. Using the existing installed DeskMCP VDA DLL path as an **explicit read-only environment setting** restored capability without touching installed files. The archived inspector and the new candidate's own native host independently returned a verified `Desktop1 1→1`, **0 D2 windows**, and no input authorization. No third-party GUI was launched, moved, inspected through UIA or acted upon in this round. Since there were no candidate windows, **third-party native GUI compatibility has not been tested**.
+
+Reproducible candidate-only probe (requires local built native host and a previously installed trusted VDA DLL):
+
+```cmd
+set "DOTNET_ROOT=C:\Users\User\Desktop\DeskMCP\runtime\dotnet-sdk"
+set "DOTNET_ROOT_X64=C:\Users\User\Desktop\DeskMCP\runtime\dotnet-sdk"
+set "DESKTOP_MCP_VDA_PATH=C:\Users\User\AppData\Local\Programs\DesktopMCP\virtual-desktop-accessor\VirtualDesktopAccessor.dll"
+node scripts\passive-desktop2-thirdparty-inventory.mjs
+```
+
+Without an explicitly available VDA dependency the tool **fails closed**; it does not guess the active desktop. Error `PASSIVE_D2_VDA_UNAVAILABLE` is distinct from `PASSIVE_D2_OWNER_NOT_DESKTOP1`; an active D2 lease, missing/broken desktop GUID or changing state also refuse the read. `no_candidate_windows` is a **no-target outcome**, not a verified empty application or a compatibility PASS. This remains **source-only**: it does not register an MCP GUI action and does not change production app-control policy. Native window enumeration is visibility-limited and can omit unavailable/closing windows; the result is not a complete inventory guarantee.
+
 ## Product-facing outcome contract
 
 After a mutating `desktop_ui_action`, `succeeded=true` only means the backend call returned; it **never** establishes application callback or business outcome. Candidate `ui_postcondition` is an optional bounded one-off read of an *exact* selector using `present`, `enabled` or `value_equals` (default `scan_mode=full`). For example:
