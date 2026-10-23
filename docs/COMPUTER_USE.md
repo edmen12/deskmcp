@@ -23,6 +23,14 @@ Prefer semantic actions when the target supports them:
 
 Snapshots default to the interactive UI Automation tree without a screenshot. Request `include_screenshot=true` only when visual context is needed. This reduces image bandwidth, model tokens, focus changes, and coordinate mistakes.
 
+### UI tree coverage and action outcomes
+
+`desktop_ui_snapshot` exposes `semantic_tree_truncated` when DeskMCP's `max_elements` projection actually omits a node from the tree returned by WinApp. The scope is `winapp_depth_and_filter_limited`: even `semantic_tree_truncated=false` does **not** mean the application has no deeper or inaccessible controls. A warning is returned when the projection is clipped; missing controls are not proof of absence.
+
+`desktop_ui_action` preserves legacy `succeeded=true` for a successfully completed backend call, and additionally returns `action_dispatched`, `outcome_verified=false`, `outcome_status=unverified`, and `post_action_state`. A window closing or a new screenshot is **not** proof that a Save, Submit, or navigation finished. Explicitly inspect the resulting application state. If post-action observation fails, the action may already have happened; never blindly replay non-idempotent actions.
+
+Normal user desktop actions keep their existing input options and policy checks. Only a valid Agent Desktop lease applies the separate isolated-desktop action restrictions.
+
 Windows Forms controls can lose their child UI Automation providers when the app window is isolated on a non-current Windows virtual desktop. DeskMCP detects the known degraded shape and returns `semantic_tree_status: "limited"` plus `semantic_tree_warning`; callers must not treat that element list as complete. DeskMCP does not move the app back to Desktop 1 or steal the user's foreground merely to recover a richer tree.
 
 ## Observation safety

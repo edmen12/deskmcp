@@ -71,6 +71,8 @@ export interface WindowInspection {
   readonly hwnd: number;
   readonly title?: string;
   readonly elements: readonly UiElementSummary[];
+  /** True only when DeskMCP discarded elements returned by WinApp due to maxElements. */
+  readonly elementsTruncated?: boolean;
 }
 
 export interface ScreenshotResult {
@@ -165,18 +167,28 @@ export function sanitizeUiElementForMcp(value: UiElementSummary): UiElementSumma
   };
 }
 
-export function flattenUiElementsForMcp(values: readonly unknown[], maxElements: number): UiElementSummary[] {
-  const result: UiElementSummary[] = [];
+/** Limit the outgoing UI tree without silently treating clipped elements as absent.
+ * Only the projection's cap is measured; WinApp's own depth/filtering is independent.
+ */
+export function flattenUiElementsWithStatusForMcp(
+  values: readonly unknown[], maxElements: number
+): { elements: UiElementSummary[]; truncated: boolean } {
+  const elements: UiElementSummary[] = [];
   const limit = Math.max(0, Math.trunc(maxElements));
+  let truncated = false;
 
   const visit = (value: unknown, ancestors: readonly string[]): void => {
-    if (result.length >= limit || !value || typeof value !== 'object' || Array.isArray(value)) return;
+    if (truncated || !value || typeof value !== 'object' || Array.isArray(value)) return;
+    if (elements.length >= limit) {
+      truncated = true;
+      return;
+    }
     const record = value as Record<string, unknown>;
     const projected = sanitizeUiElementForMcp(record as UiElementSummary);
     const withAncestors = projected.ancestorPath || ancestors.length === 0
       ? projected
       : { ...projected, ancestorPath: [...ancestors] };
-    result.push(withAncestors);
+    elements.push(withAncestors);
 
     const nextAncestors = typeof projected.type === 'string'
       ? [...ancestors, projected.type]
@@ -184,16 +196,20 @@ export function flattenUiElementsForMcp(values: readonly unknown[], maxElements:
     if (Array.isArray(record.children)) {
       for (const child of record.children) {
         visit(child, nextAncestors);
-        if (result.length >= limit) break;
+        if (truncated) break;
       }
     }
   };
 
   for (const value of values) {
     visit(value, []);
-    if (result.length >= limit) break;
+    if (truncated) break;
   }
-  return result;
+  return { elements, truncated };
+}
+
+export function flattenUiElementsForMcp(values: readonly unknown[], maxElements: number): UiElementSummary[] {
+  return flattenUiElementsWithStatusForMcp(values, maxElements).elements;
 }
 
 function normalizeExecutablePath(raw: string): string {
@@ -406,10 +422,12 @@ export class WinAppComputerBackend {
     const window = windows.find(item => item.hwnd === hwnd) ?? windows[0];
     if (!window) throw new Error('Target window no longer exists.');
     if (window.hwnd !== hwnd) throw new Error('Computer backend inspection did not return the requested window.');
+    const projection = flattenUiElementsWithStatusForMcp(window.elements, maxElements);
     return {
       hwnd: window.hwnd,
       ...(window.title ? { title: window.title } : {}),
-      elements: flattenUiElementsForMcp(window.elements, maxElements)
+      elements: projection.elements,
+      elementsTruncated: projection.truncated
     };
   }
 

@@ -219,6 +219,22 @@ function parseAction(input: {
 
 type ObserveMode = 'none' | 'tree' | 'screenshot' | 'both';
 
+/** Legacy succeeded=true only acknowledges the backend call; it never proves an app outcome. */
+export function computerActionDispatchResult(
+  action: UiAction['type'],
+  postActionState: 'not_observed' | 'window_closed' | 'snapshot_available' | 'observation_unavailable'
+) {
+  return {
+    action,
+    succeeded: true,
+    action_dispatched: action !== 'wait',
+    outcome_verified: false,
+    outcome_status: 'unverified' as const,
+    post_action_state: postActionState,
+    requires_outcome_check: action !== 'wait'
+  };
+}
+
 async function snapshotContent(
   runtime: ComputerUseRuntime,
   window: ComputerWindow,
@@ -235,15 +251,23 @@ async function snapshotContent(
       : Promise.resolve(undefined)
   ]);
 
-  const semanticTreeWarning = options.agentDesktopLeaseId && inspection
+  const agentDesktopWarning = options.agentDesktopLeaseId && inspection
     ? agentDesktopSemanticTreeWarning(window, inspection.elements)
     : undefined;
+  const truncationWarning = inspection?.elementsTruncated
+    ? `semantic_tree_truncated: DeskMCP returned at most ${options.maxElements} controls from WinApp's depth-limited result; omitted controls must not be treated as absent. Increase max_elements (up to 200) or narrow the target.`
+    : undefined;
+  const semanticTreeWarning = [agentDesktopWarning, truncationWarning].filter(Boolean).join(' ');
   const metadata = {
     computer_observation_id: observationId,
     captured_at: new Date().toISOString(),
     window: publicWindow(window, windowId),
     ...(screenshot ? { screenshot: { width: screenshot.width, height: screenshot.height } } : {}),
-    ...(inspection ? { elements: inspection.elements } : {}),
+    ...(inspection ? {
+      elements: inspection.elements,
+      semantic_tree_truncated: inspection.elementsTruncated === true,
+      semantic_tree_scope: 'winapp_depth_and_filter_limited'
+    } : {}),
     ...(semanticTreeWarning ? {
       semantic_tree_status: 'limited',
       semantic_tree_warning: semanticTreeWarning
@@ -460,7 +484,19 @@ export function registerComputerUseTools(
         await new Promise(resolve => setTimeout(resolve, input.settle_ms));
       }
 
-      const refreshedWindows = await runtime.backend.listWindows();
+      // The backend may have already delivered a non-idempotent click even if a later
+      // observation fails. Do not misreport that as a safe-to-retry action failure.
+      let refreshedWindows: ComputerWindow[];
+      try {
+        refreshedWindows = await runtime.backend.listWindows();
+      } catch {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({
+            ...computerActionDispatchResult(action.type, 'observation_unavailable'),
+            post_action_warning: 'Post-action window listing was unavailable. Inspect current app state before considering a retry.'
+          }, null, 2) }]
+        };
+      }
       const refreshed = refreshedWindows.find(window => (
         window.hwnd === target.hwnd &&
         window.processId === target.processId &&
@@ -472,7 +508,7 @@ export function registerComputerUseTools(
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ action: action.type, succeeded: true, window_closed: true }, null, 2)
+            text: JSON.stringify({ ...computerActionDispatchResult(action.type, 'window_closed'), window_closed: true }, null, 2)
           }]
         };
       }
@@ -483,23 +519,32 @@ export function registerComputerUseTools(
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ action: action.type, succeeded: true, observation_required_before_next_action: true }, null, 2)
+            text: JSON.stringify({ ...computerActionDispatchResult(action.type, 'not_observed'), observation_required_before_next_action: true }, null, 2)
           }]
         };
       }
 
-      const snapshot = await observeAfter(
-        runtime,
-        refreshed,
-        input.observe_after,
-        effectiveAgentDesktopLeaseId
-      );
+      let snapshot;
+      try {
+        snapshot = await observeAfter(
+          runtime,
+          refreshed,
+          input.observe_after,
+          effectiveAgentDesktopLeaseId
+        );
+      } catch {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({
+            ...computerActionDispatchResult(action.type, 'observation_unavailable'),
+            post_action_warning: 'Post-action snapshot was unavailable. Observe the app before deciding whether to retry.'
+          }, null, 2) }]
+        };
+      }
       if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
       const first = snapshot.content[0];
       if (first?.type !== 'text') throw new Error('Computer observation metadata was unavailable.');
       first.text = JSON.stringify({
-        action: action.type,
-        succeeded: true,
+        ...computerActionDispatchResult(action.type, 'snapshot_available'),
         state: JSON.parse(first.text) as unknown
       }, null, 2);
       return snapshot;
