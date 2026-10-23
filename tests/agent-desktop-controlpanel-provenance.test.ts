@@ -63,3 +63,13 @@ test('Control Panel emitted reason fields remain part of the candidate Gateway e
     'control_panel_shutdown','control_panel_startup_reset','control_panel_desktop_renumber'])
     assert.match(sourceTs,new RegExp(reason));
 });
+
+test('ownerless safety-window experiment is opt-in and preserves fail-closed checks',()=>{
+  assert.match(source,/DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT/);
+  assert.match(source,/"1", StringComparison\.Ordinal/);
+  assert.equal((source.match(/ShowInTaskbar = ownerlessShellWindows/g) ?? []).length,2);
+  assert.match(source,/if \(!safetyOverlay\.IsOnDesktop\(desktopId\)\)/);
+  assert.match(source,/TryRevokeAfterSafetyFailure\(checkedLeaseId, error\.Message\)/);
+  assert.match(source,/ShowActivated = false/);
+  assert.match(source,/StartEdgePulse\(edgeWindow\)/);
+});
