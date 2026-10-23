@@ -36,10 +36,35 @@ export interface AgentDesktopControlState {
   readonly revokedAtUtc?: string;
 }
 
+export type AgentDesktopControlMutationReason =
+  | 'gateway_initialization'
+  | 'lease_allocated'
+  | 'hud_readiness_timeout'
+  | 'explicit_stop'
+  | 'linked_task_completed';
+
+export interface AgentDesktopControlMutation {
+  readonly reason: AgentDesktopControlMutationReason;
+  readonly generation: number;
+  readonly atUtc: string;
+  readonly beforeCount: number;
+  readonly afterCount: number;
+  readonly writerPid: number;
+}
+
 interface AgentDesktopControlDocument {
   readonly schemaVersion: 2;
   readonly generation: number;
   readonly controls: readonly AgentDesktopControlState[];
+  readonly lastMutation?: AgentDesktopControlMutation;
+}
+
+function controlMutation(
+  reason: AgentDesktopControlMutationReason,
+  generation: number, beforeCount: number, afterCount: number
+): AgentDesktopControlMutation {
+  return { reason, generation, atUtc: new Date().toISOString(),
+    beforeCount, afterCount, writerPid: process.pid };
 }
 
 export interface AgentDesktopHudState {
@@ -124,6 +149,16 @@ function validControlDocument(value: unknown): value is AgentDesktopControlDocum
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (row.schemaVersion !== 2 || !Number.isSafeInteger(row.generation) || Number(row.generation) < 0 || !Array.isArray(row.controls)) return false;
+  if (row.lastMutation !== undefined) {
+    const record = row.lastMutation as Record<string, unknown>;
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || !['gateway_initialization','lease_allocated','hud_readiness_timeout','explicit_stop','linked_task_completed'].includes(String(record.reason))
+      || record.generation !== row.generation
+      || !validIso(record.atUtc)
+      || !Number.isSafeInteger(record.beforeCount) || Number(record.beforeCount) < 0
+      || !Number.isSafeInteger(record.afterCount) || record.afterCount !== row.controls.length
+      || !Number.isSafeInteger(record.writerPid) || Number(record.writerPid) <= 0) return false;
+  }
   if (!row.controls.every(control => validControl(control, true) && (control as AgentDesktopControlState).active)) return false;
   const leases = new Set<string>();
   const desktops = new Set<string>();
@@ -207,7 +242,9 @@ export class AgentDesktopManager {
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: nextGeneration,
-        controls: []
+        controls: [],
+        lastMutation: controlMutation('gateway_initialization', nextGeneration,
+          current.controls.length, 0)
       } satisfies AgentDesktopControlDocument);
       if (current.controls.length > 0) await rm(this.hudPath, { force: true }).catch(() => undefined);
     });
@@ -253,6 +290,11 @@ export class AgentDesktopManager {
     } finally {
       await lock.release();
     }
+  }
+
+  /** Last *committed* control-document mutation. Legacy documents may omit it. */
+  async lastControlMutation(): Promise<AgentDesktopControlMutation | undefined> {
+    return (await this.readControlDocument()).lastMutation;
   }
 
   async bindings(): Promise<readonly AgentDesktopBinding[]> {
@@ -418,7 +460,9 @@ export class AgentDesktopManager {
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: nextGeneration,
-        controls: [...document.controls, next]
+        controls: [...document.controls, next],
+        lastMutation: controlMutation('lease_allocated', nextGeneration,
+          document.controls.length, document.controls.length + 1)
       } satisfies AgentDesktopControlDocument);
       return next;
     }));
@@ -436,7 +480,9 @@ export class AgentDesktopManager {
         await atomicJson(this.controlPath, {
           schemaVersion: 2,
           generation: document.generation + 1,
-          controls: remaining
+          controls: remaining,
+          lastMutation: controlMutation('hud_readiness_timeout', document.generation + 1,
+            document.controls.length, remaining.length)
         } satisfies AgentDesktopControlDocument);
       }
     }));
@@ -452,7 +498,9 @@ export class AgentDesktopManager {
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: document.generation + 1,
-        controls: document.controls.filter(row => row !== live)
+        controls: document.controls.filter(row => row !== live),
+        lastMutation: controlMutation('explicit_stop', document.generation + 1,
+          document.controls.length, document.controls.length - 1)
       } satisfies AgentDesktopControlDocument);
     }));
     return this.status(leaseId);
@@ -470,7 +518,9 @@ export class AgentDesktopManager {
       await atomicJson(this.controlPath, {
         schemaVersion: 2,
         generation: document.generation + 1,
-        controls: document.controls.filter(row => row !== live)
+        controls: document.controls.filter(row => row !== live),
+        lastMutation: controlMutation('linked_task_completed', document.generation + 1,
+          document.controls.length, document.controls.length - 1)
       } satisfies AgentDesktopControlDocument);
     }));
     return {

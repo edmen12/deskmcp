@@ -73,7 +73,18 @@ const verify=async()=>{
     if(e instanceof Error && /revoked or replaced/.test(e.message)
       &&initialGeneration!==null){
       const after=await controlGeneration().catch(()=>null);
-      result.lease_loss_diagnostic=describeLeaseLoss(initialGeneration,after);
+      const last=await manager.lastControlMutation().catch(()=>undefined);
+      result.lease_loss_diagnostic={
+        ...describeLeaseLoss(initialGeneration,after),
+        ...(last ? {
+          last_committed_reason:last.reason,
+          last_writer_pid:last.writerPid,
+          last_mutation_generation:last.generation,
+          last_mutation_matches_current_generation:last.generation===after,
+          directly_adjacent_generation:after===initialGeneration+1
+        } : { last_committed_reason:'legacy_or_unavailable' }),
+        actor_root_cause_independently_verified:false
+      };
     }
     throw e;
   }
