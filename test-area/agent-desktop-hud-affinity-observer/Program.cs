@@ -145,7 +145,8 @@ internal static class Program
     private static int Main(string[] args)
     {
         bool prearm = args.Length == 5 && args[4] == "WAIT_NEXT_LEASE_READ_ONLY";
-        if ((!prearm && args.Length != 4) || !int.TryParse(args[2], out int seconds) || seconds < 15 || seconds > 150)
+        if (args.Length < 4 || (!prearm && args.Length != 4)
+            || !int.TryParse(args[2], out int seconds) || seconds < 15 || seconds > 150)
         {
             Console.Error.WriteLine("EXACT_PASSIVE_OBSERVER_ARGUMENTS_REQUIRED");
             return 9;
@@ -249,7 +250,9 @@ internal static class Program
                 if (windows.edge.Affinity != "correct_desktop" || windows.hud.Affinity != "correct_desktop") failures++;
                 if (owner != 0) { exit = 4; break; }
                 if (!leaseActive) { exit = 2; break; }
-                Thread.Sleep(100);
+                // Higher-frequency, still read-only sampling is needed because
+                // Control Panel revokes within one 450ms HUD tick after GUID loss.
+                Thread.Sleep(25);
             }
             Console.WriteLine(JsonSerializer.Serialize(new {
                 status = exit == 0 ? "PASSIVE_WINDOW_OBSERVER_COMPLETED" :
