@@ -52,16 +52,29 @@ const exe = process.argv[2];
 const fixture = process.argv[3];
 const dotnet = process.argv[4];
 const sentinel = process.argv[5];
+const allowedFixtures = {
+  OWNED_CLOAKED_WINFORMS_READ_ONLY_ONCE: {
+    name: 'DeskMCP.Desktop2NativeEditProbe.dll',
+    sha256: 'f6d064ad5d42b20d168423f678cc45241d22029b8d88c529a9349bc5e0dc2d03',
+    expectedSelected: -1, expectedTop: 0
+  },
+  OWNED_SELECTED_WINFORMS_READ_ONLY_ONCE: {
+    name: 'DeskMCP.WinFormsListStateFixture.dll',
+    sha256: 'dc2d60213082279c82bb246cf02568fd2e0541e231848bee7b47ae5728fddbd6',
+    expectedSelected: 7, expectedTop: 12
+  }
+};
 if (process.argv[1] && path.basename(process.argv[1]) === 'benchmark-cloaked-winforms-uia.mjs') {
-  if (process.argv.length !== 6 || sentinel !== 'OWNED_CLOAKED_WINFORMS_READ_ONLY_ONCE'
+  const fixtureProfile = allowedFixtures[sentinel];
+  if (process.argv.length !== 6 || !fixtureProfile
     || ![exe, fixture, dotnet].every(file => path.isAbsolute(file) && fs.existsSync(file))
     || path.basename(exe).toLowerCase() !== 'winapp.exe'
-    || path.basename(fixture) !== 'DeskMCP.Desktop2NativeEditProbe.dll'
+    || path.basename(fixture) !== fixtureProfile.name
     || path.basename(dotnet).toLowerCase() !== 'dotnet.exe') {
-    throw new Error('OWNED_CLOAKED_WINFORMS_READ_ONLY_ONCE_AND_EXACT_EXISTING_PATHS_REQUIRED');
+    throw new Error('PINNED_OWNED_WINFORMS_READ_ONLY_FIXTURE_REQUIRED');
   }
   const fixtureDigest = createHash('sha256').update(await readFile(fixture)).digest('hex');
-  if (fixtureDigest !== 'f6d064ad5d42b20d168423f678cc45241d22029b8d88c529a9349bc5e0dc2d03') {
+  if (fixtureDigest !== fixtureProfile.sha256) {
     throw new Error('OWNED_WINFORMS_FIXTURE_SHA256_MISMATCH');
   }
   const folder = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-cloaked-winforms-'));
@@ -138,7 +151,20 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'benchmark-cloaked-win
         item?.present === true && item.inspection_only === true)) {
       throw new Error('OWNED_NATIVE_INVENTORY_CONTRACT_FAILED');
     }
+    if (native.list.list_single_selection !== true
+      || native.list_state?.item_count !== proof.listCount
+      || native.list_state?.top_index !== proof.listTop
+      || native.list_state?.selected_index !== fixtureProfile.expectedSelected
+      || native.list_state?.selected_index !== (proof.listSelected ?? -1)
+      || native.list_state?.top_index !== fixtureProfile.expectedTop
+      || native.list_state?.selection_none !== (fixtureProfile.expectedSelected === -1)
+      || native.list_state?.state_double_read_consistent !== true
+      || native.list_state?.read_only_query_messages !== 6
+      || native.list_state?.item_text_read !== false) {
+      throw new Error('OWNED_LIST_STATE_READBACK_MISMATCH_OR_UNSAFE');
+    }
     safeResult.native_child_inventory = native;
+    safeResult.fixture_list_state_ground_truth_match = true;
     const denials = [
       ['wrong_process', 'OWNED_WINFORMS_INVENTORY_READ_ONLY',
         proof.pid + 1, proof.childHwnd, proof.buttonHwnd, proof.listHwnd],
@@ -146,6 +172,8 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'benchmark-cloaked-win
         proof.pid, proof.buttonHwnd, proof.childHwnd, proof.listHwnd],
       ['invalid_capability', 'OWNED_WINFORMS_INVENTORY_READ_ONLY',
         proof.pid, 0, proof.buttonHwnd, proof.listHwnd],
+      ['wrong_list_handle', 'OWNED_WINFORMS_INVENTORY_READ_ONLY',
+        proof.pid, proof.childHwnd, proof.buttonHwnd, proof.childHwnd],
       ['wrong_sentinel', 'NO_NATIVE_ACCESS',
         proof.pid, proof.childHwnd, proof.buttonHwnd, proof.listHwnd]
     ];

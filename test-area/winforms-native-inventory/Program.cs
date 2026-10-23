@@ -1,5 +1,6 @@
 // Owned WinForms fixture read-only Win32 child-window evidence.
-// Never sends a window message, synthesizes input, activates a window, or reads text.
+// Only bounded LB_GETCOUNT/LB_GETCURSEL/LB_GETTOPINDEX read messages are allowed.
+// Never sends input, mutates a control, activates a window, or reads item text.
 // Not a general-purpose remote HWND inspection endpoint.
 using System;
 using System.Collections.Generic;
@@ -14,6 +15,11 @@ internal static class Program
     private const int GwlStyle = -16;
     private const long EsMultiline = 0x0004, EsPassword = 0x0020, EsReadOnly = 0x0800;
     private const int MaxChildren = 128;
+    private const int MaxListItems = 4096;
+    private const long LbsMultipleSel = 0x0008, LbsExtendedSel = 0x0800;
+    private const uint LbGetCurSel = 0x0188, LbGetCount = 0x018B, LbGetTopIndex = 0x018E;
+    private const uint SmtoBlock = 0x0001, SmtoAbortIfHung = 0x0002, SmtoErrorOnExit = 0x0020;
+    private const uint ReadTimeoutMs = 350;
     private delegate bool EnumChildCallback(IntPtr hwnd, IntPtr context);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -36,6 +42,9 @@ internal static class Program
     private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int size);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
+    private static extern IntPtr SendReadOnlyListMessage(IntPtr hwnd, uint message,
+        IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out IntPtr result);
 
     private static string Class(IntPtr hwnd)
     {
@@ -59,11 +68,14 @@ internal static class Program
     private static object Verify(IntPtr child, IntPtr root, int pid, string expectedKind,
         IReadOnlyCollection<IntPtr> enumerated)
     {
-        if (child == IntPtr.Zero || child == root || !IsWindow(child) ||
+        if (child == IntPtr.Zero || child == root || !IsWindow(root) || !IsWindow(child) ||
             !enumerated.Contains(child) || GetAncestor(child, GaRoot) != root)
             throw new InvalidOperationException("OWNED_CHILD_NOT_ENUMERATED_OR_ROOT_CHANGED");
+        GetWindowThreadProcessId(root, out uint actualRootOwner);
         GetWindowThreadProcessId(child, out uint owner);
-        if (owner != (uint)pid) throw new InvalidOperationException("OWNED_CHILD_PID_CHANGED");
+        if (actualRootOwner != (uint)pid || owner != (uint)pid ||
+            !Class(root).StartsWith("WindowsForms10.Window.", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("OWNED_ROOT_OR_CHILD_IDENTITY_CHANGED");
         string klass = Class(child);
         if (Kind(klass) != expectedKind) throw new InvalidOperationException("OWNED_CHILD_CLASS_CHANGED");
         var style = GetWindowLongPtr(child, GwlStyle).ToInt64();
@@ -78,7 +90,57 @@ internal static class Program
             edit_not_password = expectedKind == "edit" && (style & EsPassword) == 0,
             edit_not_readonly = expectedKind == "edit" && (style & EsReadOnly) == 0,
             button_system_push_style = expectedKind == "button" && ((style & 0xF) is 0 or 1),
+            list_single_selection = expectedKind == "list" &&
+                (style & (LbsMultipleSel | LbsExtendedSel)) == 0,
             inspection_only = true,
+            app_callback_verified = false
+        };
+    }
+
+    // These LB_GET* commands are non-mutating Win32 ListBox queries. They
+    // synchronously enter the target app's WindowProc, so an untrusted custom
+    // provider could still have side effects: fixture-only until separately gated.
+    private static long ReadListMessage(IntPtr child, uint message, IntPtr root, int pid,
+        IReadOnlyCollection<IntPtr> enumerated)
+    {
+        if (message != LbGetCount && message != LbGetCurSel && message != LbGetTopIndex)
+            throw new InvalidOperationException("LIST_READ_MESSAGE_NOT_ALLOWLISTED");
+        _ = Verify(child, root, pid, "list", enumerated);
+        var status = SendReadOnlyListMessage(child, message, IntPtr.Zero, IntPtr.Zero,
+            SmtoBlock | SmtoAbortIfHung | SmtoErrorOnExit, ReadTimeoutMs, out IntPtr result);
+        if (status == IntPtr.Zero)
+            throw new InvalidOperationException("LIST_READ_MESSAGE_TIMEOUT_OR_ACCESS_DENIED");
+        _ = Verify(child, root, pid, "list", enumerated);
+        return result.ToInt64();
+    }
+
+    private static object ReadListState(IntPtr root, IntPtr child, int pid,
+        IReadOnlyCollection<IntPtr> enumerated)
+    {
+        var style = GetWindowLongPtr(child, GwlStyle).ToInt64();
+        if ((style & (LbsMultipleSel | LbsExtendedSel)) != 0)
+            throw new InvalidOperationException("LIST_READ_REQUIRES_SINGLE_SELECTION");
+        var firstCount = ReadListMessage(child, LbGetCount, root, pid, enumerated);
+        var firstSelected = ReadListMessage(child, LbGetCurSel, root, pid, enumerated);
+        var firstTop = ReadListMessage(child, LbGetTopIndex, root, pid, enumerated);
+        var secondCount = ReadListMessage(child, LbGetCount, root, pid, enumerated);
+        var secondSelected = ReadListMessage(child, LbGetCurSel, root, pid, enumerated);
+        var secondTop = ReadListMessage(child, LbGetTopIndex, root, pid, enumerated);
+        if (firstCount != secondCount || firstSelected != secondSelected || firstTop != secondTop)
+            throw new InvalidOperationException("LIST_STATE_CHANGED_DURING_READ");
+        if (firstCount < 1 || firstCount > MaxListItems ||
+            firstSelected < -1 || firstSelected >= firstCount ||
+            firstTop < 0 || firstTop >= firstCount)
+            throw new InvalidOperationException("LIST_STATE_INVALID_OR_UNSUPPORTED");
+        return new
+        {
+            item_count = firstCount,
+            selected_index = firstSelected,
+            top_index = firstTop,
+            selection_none = firstSelected == -1,
+            state_double_read_consistent = true,
+            read_only_query_messages = 6,
+            item_text_read = false,
             app_callback_verified = false
         };
     }
@@ -122,6 +184,7 @@ internal static class Program
                 edit = Verify(new IntPtr(editValue), root, pid, "edit", children),
                 button = Verify(new IntPtr(buttonValue), root, pid, "button", children),
                 list = Verify(new IntPtr(listValue), root, pid, "list", children),
+                list_state = ReadListState(root, new IntPtr(listValue), pid, children),
                 supports_native_action = false,
                 dispatch_count = 0
             };
