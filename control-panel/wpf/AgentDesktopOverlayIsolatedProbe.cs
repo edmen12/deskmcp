@@ -10,6 +10,8 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using System.Windows.Interop;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 
 // Candidate-only integration of the REAL AgentDesktopOverlay. No Gateway,
 // ControlPanelRuntime, lease allocations, audit writes or production state.
@@ -84,6 +86,7 @@ internal static class AgentDesktopOverlayIsolatedProbe
         public bool test_lease_created {get;set;} = false;
         public bool overlay_exit_callback_checked {get;set;} = false;
         public bool hud_exit_event_simulated {get;set;} = false;
+        public bool hud_uia_provider_invoke_checked {get;set;} = false;
     }
 
     internal static Button FindExitButton(DependencyObject current)
@@ -114,7 +117,8 @@ internal static class AgentDesktopOverlayIsolatedProbe
         try
         {
             bool simulateExit=args.Length == 3 && args[2] == "SYNTHETIC_HUD_BUTTON_EVENT";
-            if ((args.Length != 2 && !simulateExit) || !Int32.TryParse(args[1],out requestedSeconds)
+            bool uiaInvoke=args.Length == 3 && args[2] == "OWN_HUD_UIA_PROVIDER_INVOKE";
+            if ((args.Length != 2 && !simulateExit && !uiaInvoke) || !Int32.TryParse(args[1],out requestedSeconds)
                 || requestedSeconds < 30 || requestedSeconds > 300)
                 throw new InvalidOperationException("EXACT_BOUNDED_OVERLAY_TEST_ARGS_REQUIRED");
             if (Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT") != "1"
@@ -157,6 +161,8 @@ internal static class AgentDesktopOverlayIsolatedProbe
             Stopwatch runtime=Stopwatch.StartNew();
             // The callback can be tested by a local WPF RoutedEvent, not physical input.
             bool running=false;
+            bool awaitingUiaExit=false;
+            long invokedAtMilliseconds=0;
             Guid expected=targetId;
             overlay=new AgentDesktopOverlay("Isolated Overlay Test — No Lease",()=>{
                 // The real HUD Exit button's WPF routed event reaches this callback.
@@ -199,12 +205,17 @@ internal static class AgentDesktopOverlayIsolatedProbe
                             timer.Stop();
                             app.Shutdown();
                         }
-                        else if (runtime.Elapsed.TotalSeconds >= requestedSeconds)
+                        else if (awaitingUiaExit && runtime.ElapsedMilliseconds - invokedAtMilliseconds > 2500)
                         {
+                            result.status="HUD_UIA_CALLBACK_TIMED_OUT";
                             timer.Stop();
-                            if (simulateExit)
+                            app.Shutdown();
+                        }
+                        else if (runtime.Elapsed.TotalSeconds >= requestedSeconds && !awaitingUiaExit)
+                        {
+                            if(!uiaInvoke)timer.Stop();
+                            if (simulateExit || uiaInvoke)
                             {
-                                result.hud_exit_event_simulated=true;
                                 var field=typeof(AgentDesktopOverlay).GetField("hudWindow",
                                     BindingFlags.NonPublic|BindingFlags.Instance);
                                 Window window=field?.GetValue(overlay) as Window;
@@ -218,8 +229,37 @@ internal static class AgentDesktopOverlayIsolatedProbe
                                 {
                                     // No mouse, keyboard or UIA dispatch; verify only
                                     // that the real WPF Click wiring reaches the callback.
-                                    exit.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent,exit));
-                                    if(!result.overlay_exit_callback_checked)
+                                    if (uiaInvoke)
+                                    {
+                                        // Dispatch the real WPF UIA provider's Invoke pattern.
+                                        // This is NOT a physical click or a Desktop1 input event.
+                                        var peer=new ButtonAutomationPeer(exit);
+                                        var provider=peer.GetPattern(PatternInterface.Invoke) as IInvokeProvider;
+                                        if(provider==null)
+                                        {
+                                            result.status="HUD_UIA_INVOKE_PROVIDER_MISSING";
+                                            app.Shutdown();
+                                        }
+                                        else
+                                        {
+                                            result.hud_uia_provider_invoke_checked=true;
+                                            awaitingUiaExit=true;
+                                            invokedAtMilliseconds=runtime.ElapsedMilliseconds;
+                                            try {provider.Invoke();}
+                                            catch(Exception error)
+                                            {
+                                                result.status="HUD_UIA_PROVIDER_INVOKE_FAILED";
+                                                result.error=error.GetType().Name+":"+error.Message;
+                                                app.Shutdown();
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        result.hud_exit_event_simulated=true;
+                                        exit.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent,exit));
+                                    }
+                                    if(!result.overlay_exit_callback_checked && !uiaInvoke)
                                     {
                                         result.status="HUD_EXIT_CALLBACK_NOT_CALLED";
                                         app.Shutdown();
@@ -248,7 +288,7 @@ internal static class AgentDesktopOverlayIsolatedProbe
             if (!running && result.status=="not_started")
                 result.status="OVERLAY_NEVER_STARTED";
             if(result.status=="OWNERLESS_OVERLAY_LIFECYCLE_PASS" ||
-                (result.status=="overlay_exit_callback_fired" && result.hud_exit_event_simulated))
+                (result.status=="overlay_exit_callback_fired" && (result.hud_exit_event_simulated || result.hud_uia_provider_invoke_checked)))
                 exitCode=0;
             else exitCode=2;
         }

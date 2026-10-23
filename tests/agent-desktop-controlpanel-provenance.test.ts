@@ -146,3 +146,58 @@ test('unsafe taskbar DeleteTab experiment stays absent from safety overlays',()=
   assert.match(observer,/changedPixels/);
   assert.match(observer,/screenshotsSaved=0/);
 });
+
+test('real HUD Exit via UIA Invoke provider is scoped and waits for its dispatcher callback',()=>{
+  const src=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'AgentDesktopOverlayIsolatedProbe.cs'),'utf8');
+  assert.match(src,/OWN_HUD_UIA_PROVIDER_INVOKE/);
+  assert.match(src,/new ButtonAutomationPeer\(exit\)/);
+  assert.match(src,/PatternInterface\.Invoke/);
+  assert.match(src,/IInvokeProvider/);
+  assert.match(src,/awaitingUiaExit=true/);
+  assert.match(src,/HUD_UIA_CALLBACK_TIMED_OUT/);
+  assert.match(src,/owner_desktop1/);
+  assert.match(src,/own_foreground_events/);
+  assert.doesNotMatch(src,/SetForegroundWindow\(|SendInput\(|SwitchDesktop\(/);
+});
+test('full candidate Gateway smoke uses strict read-only loopback and private audit',()=>{
+  const ps1=readFileSync(path.join(PROJECT_ROOT,'test-area',
+    'ownerless-gateway-handoff','full-readonly-runtime.ps1'),'utf8');
+  const js=readFileSync(path.join(PROJECT_ROOT,'test-area',
+    'ownerless-gateway-handoff','full-readonly-client.mjs'),'utf8');
+  const visual=readFileSync(path.join(PROJECT_ROOT,'test-area',
+    'ownerless-gateway-handoff','taskbar-all-observer.ps1'),'utf8');
+  assert.match(ps1,/DESKTOP_MCP_PROFILE='read-only'/);
+  assert.match(ps1,/DESKTOP_MCP_DATA_ROOT/);
+  assert.match(ps1,/DESKTOP_MCP_ALLOWED_ROOTS/);
+  assert.match(ps1,/DESKTOP_MCP_AUDIT_LOG/);
+  assert.match(ps1,/127\.0\.0\.1/);
+  assert.match(ps1,/Get-NetTCPConnection/);
+  assert.match(ps1,/dist\/src\/stop\.js/);
+  assert.match(js,/readOnlyComputerUseDenied/);
+  assert.match(js,/unauthorizedLeaseAllocationDenied/);
+  assert.match(visual,/imagesSaved=0/);
+  assert.match(visual,/privateOnly/);
+  assert.doesNotMatch(visual,/\.Save\(|WriteAllBytes|Copy-Item.*\.png/);
+});
+
+test('MCP-issued lease can be revoked by own WPF UIA Exit without global input or an explicit Node stop',()=>{
+  const wpf=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'AgentDesktopManagerHandoffIsolatedProbe.cs'),'utf8');
+  const node=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'mcp-hud-uia-exit.mjs'),'utf8');
+  assert.match(wpf,/OWN_HUD_UIA_EXIT/);
+  assert.match(wpf,/new ButtonAutomationPeer\(exit\)/);
+  assert.match(wpf,/PatternInterface\.Invoke/);
+  assert.match(wpf,/UIA_EXIT_DESKTOP2_PRECONDITION_FAILED/);
+  assert.match(wpf,/control_panel_manual_exit/);
+  assert.match(wpf,/uia_exit_mutation_confirmed/);
+  assert.match(node,/registerAgentDesktopTools\(/);
+  assert.match(node,/toolCount!==1/);
+  assert.match(node,/MCP_LEASE_OWN_HUD_UIA_EXIT_PASS/);
+  assert.match(node,/manualExitJournalVerified/);
+  assert.match(node,/staleLeaseRejected/);
+  assert.match(node,/hudHeartbeatFileRemoved/);
+  assert.match(node,/if\(await manager\.isLeaseActive\(lease\)\)await manager\.stopControl\(lease\)/);
+  assert.doesNotMatch(wpf,/SendInput\(|SetForegroundWindow\(|GoToDesktopNumber\(/);
+});
