@@ -68,7 +68,8 @@ test('benchmark preserves fixture hash pin, no-activate and negative read-only t
 test('native HWND read-only proof is not an automatic Desktop2 or production action grant', () => {
   assert.match(documentation, /NOT EXPOSED/);
   assert.match(documentation, /Release gate remains RED/i);
-  assert.match(documentation, /ListBox.*selection and scrolling actions remain NOT TESTED/is);
+  assert.match(documentation, /ListBox.*Selection remains NOT TESTED/is);
+  assert.match(documentation, /Native scroll and selection remain NOT EXPOSED/is);
   assert.match(documentation, /current.*virtual desktop/i);
   assert.match(documentation, /historical.*Desktop2/i);
 });

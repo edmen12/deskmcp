@@ -17,12 +17,32 @@ The Win32 evidence is *control discovery only*; an enabled/visible HWND or suppo
 | Current-session owned **cloaked** fixture, UIA discovery | Not seen (0/1) | Not seen (0/1) | Not seen (0/1) |
 | Same fixture, native HWND **read-only** enumeration | PASS | PASS | PASS |
 | Owned cloaked ListBox, native **state read** (2026-10-23) | N/A | N/A | PASS: 80 items, selected = -1/top = 0 and selected = 7/top = 12, each double-read consistent |
-| Historical 2026-10-09 **Desktop2 leased, monitored** native inspect | PASS for single-line Edit | PASS for system PushButton | Not verified |
-| Historical owned-fixture Desktop2 **action + app callback** | PASS: bounded WM_SETTEXT, exact TextChanged once | PASS: bounded BM_CLICK, exactly one Click event | **NOT TESTED** |
+| Historical 2026-10-09 **Desktop2 leased, monitored** native inspect | PASS for single-line Edit | PASS for system PushButton | **PASS** native ListBox capability |
+| Owned-fixture Desktop2 **action + application effect** | PASS: bounded WM_SETTEXT, exact TextChanged once | PASS: bounded BM_CLICK, exactly one Click event | **SCROLL PASS**: bounded LB_SETTOPINDEX, application-observed TopIndex=20; selection NOT TESTED |
+| **2026-10-23** Desktop2 leased, guarded, monitored repeat | Not rerun | Not rerun | **3/3 PASS**: discovery, stale top-index rejection, scroll to 20; no recorded foreground/desktop alarms |
 | Arbitrary third-party app / all Windows control variants | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Authorized native action on production MCP | **NOT EXPOSED** | **NOT EXPOSED** | **NOT EXPOSED** |
 
-**Source evidence:** existing independent acceptance worktree reports `test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md` and `native-winforms-button-findings-20261009.md`. Raw incident/acceptance logs are deliberately *not* copied into this branch. Historical WPF direct UIA ValuePattern.SetValue stole foreground; do not replay or reinstate it.
+**Source evidence:** existing independent acceptance worktree reports `test-area/desktop2-real-acceptance/native-winforms-edit-findings-20261009.md` and `native-winforms-button-findings-20261009.md`, plus `runs/native-list-*-2026-10-09*/result.json`. Raw incident/acceptance logs are deliberately *not* copied into this branch. Historical WPF direct UIA ValuePattern.SetValue stole foreground; do not replay or reinstate it.
+
+### Real Desktop2 ListBox rerun — 2026-10-23
+
+An existing isolated candidate harness (`test-area/desktop2-real-acceptance/run-native-edit-once.mjs` in the separate Desktop2 acceptance worktree) was run using an explicitly started **Desktop 2 lease**, native blue safety HUD and independent observer. The target was a **self-owned, initially DWM-cloaked and non-activating WinForms fixture**. The harness checked Desktop1 before, during and after execution, started the independent monitor **before** moving/uncloaking the owned window, armed the window foreground hook before the native operation, and held the lease through GUI/observer teardown.
+
+Three independent stages produced fresh **PASS** records for 2026-10-23:
+- `list-inspect`: one verified native ListBox capability, no app-state mutation
+- `list-deny-stale`: incorrect previous TopIndex rejected, no app-state mutation
+- `list-scroll`: single guarded `LB_SETTOPINDEX` to 20 and **exactly one** `APP_LIST_TOP=20` in the application timer's observed state-change log
+
+Every stage reported `desktopBefore=1`, `desktopAfter=1`, `tripwire=false`, `appFocusEvents=[]`, `ownedGuiExitConfirmed=true`, `observerExitConfirmed=true`, and `leaseHeldThroughTeardown=true`. Each independent observer event file contained only `START` and `READY_AFTER_MESSAGE_PUMP`, no abort notification. The three fixture processes exited; the user-bound Desktop2 test lease was explicitly stopped and Desktop2 returned to **free**. These are bounded fixture-specific observations, **not** proof of zero transient foreground events outside the monitored signals and not universal Windows Forms safety.
+
+Offline verification command (candidate branch, after `npm run build`):
+
+```powershell
+node scripts/verify-desktop2-list-evidence.mjs "C:\Users\User\Desktop\DeskMCP-D2-Native-Acceptance\test-area\desktop2-real-acceptance\runs" 2026-10-23
+```
+
+This verifier reads the archived result, timeline, owned app log and passive observer records and prints only sanitized pass/fail flags; it never launches a GUI, creates a lease or authorizes actions. It refuses missing lifecycle evidence, unexpected focus events, monitor alarms, an incorrect/missing `APP_LIST_TOP=20` state witness and a stale operation without explicit rejection.
 
 ## Read-only negative checks
 
@@ -42,10 +62,10 @@ The runner validates the source fixture's hash and cloak/no-activate proof, quer
 
 Native WinForms editing and clicking must remain **unsupported in the general MCP API** until there is a separate authorized, lease-scoped implementation and the exact targeted control class/style, root and child PID/HWND identity, latest observation, safe desktop, expected prior state, and monitor readiness are checked **before and after** the operation. Dispatch must be one-shot, bounded, and never retry unknown outcomes. Verify actual application callback/effect, not just a Windows message acknowledgment.
 
-For **ListBox**, the read-only count/selection/top-index path is now validated for two owned fixture states; **selection and scrolling actions remain NOT TESTED and NOT EXPOSED**.
+For **ListBox**, read-only count/selection/top-index is validated in two owned fixture states. A separate, pre-existing **isolated candidate-only native scroll** path was confirmed by archived 2026-10-09 evidence and rerun on actual leased Desktop2 on **2026-10-23**: one guarded `LB_SETTOPINDEX` to index 20 produced `APP_LIST_TOP=20` in the application's own timer-based state witness, with stale index rejection, monitor and cleanup PASS. **This is an observed application state change, not a ListBox selection/click/scroll event callback. Selection remains NOT TESTED. Native scroll and selection remain NOT EXPOSED through production MCP.**
 
 The official [LBN_SELCHANGE documentation](https://learn.microsoft.com/en-us/windows/win32/controls/lbn-selchange) explicitly says that `LB_SETCURSEL` and other programmatic selection messages **do not send `LBN_SELCHANGE`**. Thus, a successful `LB_SETCURSEL` index readback would **not** prove the same application-level behavior as a real user's selection. The official [LB_SETTOPINDEX documentation](https://learn.microsoft.com/en-us/windows/win32/controls/lb-settopindex) says it ensures an item is visible and may stop at the maximum scroll range; the requested row is **not guaranteed** to become the exact top index. Do not assume a scrolling callback from the message return either. Finally, [SendMessageTimeoutW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagetimeoutw) is bounded with `SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT`, though cross-process custom control implementations may still have side effects in WindowProc.
 
-A future action gate must demonstrate **real application-level effects/callbacks** on Desktop2 under a fresh lease and independent foreground monitor, including rejection of stale selection/top-index, wrong class/style, invalid PID and hung providers. **No selection/scroll action path should be wired into general Computer Use until those gates pass.** Never infer a successful app callback merely from a returned Windows message value. Never use global SendInput, clipboard substitution, direct UIA ValuePattern, SetForegroundWindow, SetActiveWindow, or automatic desktop switching as fallbacks.
+A future general action gate must demonstrate reproducible third-party **application-level effects/callbacks** on Desktop2 under a fresh lease and independent foreground monitor, including rejection of stale selection/top-index, wrong class/style, invalid PID and hung providers. The owned-fixture scroll guard already established *its own* state-effect evidence, but **no native selection/scroll path should be wired into general Computer Use until broader gates pass.** Never infer a successful app callback merely from a returned Windows message value. Never use global SendInput, clipboard substitution, direct UIA ValuePattern, SetForegroundWindow, SetActiveWindow, or automatic desktop switching as fallbacks.
 
 **Release gate remains RED for generalized third-party WinForms/WPF/Electron GUI actions.** Do not merge/deploy just because the owned fixture passed.
