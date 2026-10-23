@@ -73,3 +73,43 @@ test('ownerless safety-window experiment is opt-in and preserves fail-closed che
   assert.match(source,/ShowActivated = false/);
   assert.match(source,/StartEdgePulse\(edgeWindow\)/);
 });
+
+test('isolated native-overlay acceptance does not create a Gateway or lease',()=>{
+  const src=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'AgentDesktopOverlayIsolatedProbe.cs'),'utf8');
+  const host=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'DeskMCPControlPanel.cs'),'utf8');
+  assert.match(host,/--agent-desktop-overlay-isolated-probe/);
+  assert.match(src,/new AgentDesktopOverlay\(/);
+  assert.match(src,/DESKTOP_MCP_DATA_ROOT/);
+  assert.match(src,/EXACT_CANDIDATE_DATA_ROOT_REQUIRED/);
+  assert.match(src,/DESKTOP_MCP_INSTANCE_NAMESPACE/);
+  assert.match(src,/SYNTHETIC_HUD_BUTTON_EVENT/);
+  assert.match(src,/ForegroundWatcher/);
+  assert.match(src,/DwmGetWindowAttribute/);
+  assert.match(src,/edge_dwm_cloaked != 2/);
+  assert.match(src,/hud_dwm_cloaked != 2/);
+  assert.match(src,/GetWindow\(windows\.edge,4\)/);
+  assert.match(src,/GetWindow\(windows\.hud,4\)/);
+  assert.doesNotMatch(src,/GoToDesktopNumber\(|StartGateway\(|new AgentDesktopControlCoordinator\(/);
+  assert.doesNotMatch(src,/WriteAllText\(.*control\.json|RevokeControl\(/);
+});
+
+test('isolated Coordinator drives the real HUD heartbeat without touching the live Gateway',()=>{
+  const src=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'AgentDesktopCoordinatorIsolatedProbe.cs'),'utf8');
+  const host=readFileSync(path.join(PROJECT_ROOT,'control-panel','wpf',
+    'DeskMCPControlPanel.cs'),'utf8');
+  assert.match(host,/--agent-desktop-coordinator-isolated-probe/);
+  assert.match(src,/new AgentDesktopControlCoordinator\(/);
+  assert.match(src,/GetMethod\("Tick"/);
+  assert.match(src,/DESKTOP_MCP_DATA_ROOT/);
+  assert.match(src,/EXACT_PRIVATE_TEST_ROOT_REQUIRED/);
+  assert.match(src,/ISOLATED_ROOT_HAS_ACTIVE_CONTROL/);
+  assert.match(src,/Heartbeat\(hudPath,lease,generation/);
+  assert.match(src,/control_panel_manual_exit/);
+  assert.match(src,/ButtonBase\.ClickEvent/);
+  assert.match(src,/Shutdown\(true\)/);
+  assert.doesNotMatch(src,/RegisterDesktopSwitchNotifications\(\)|GoToDesktopNumber\(|StartGateway\(/);
+  assert.doesNotMatch(src,/new ControlPanelRuntime\(/);
+});

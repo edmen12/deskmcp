@@ -3548,6 +3548,10 @@ internal static class Program
                 return CrossProcessDirectoryLock.RunSelfTest();
             if (args.Length > 0 && args[0] == "--agent-desktop-binding-self-test")
                 return AgentDesktopControlCoordinator.RunBindingSelfTest();
+            if (args.Length > 0 && args[0] == "--agent-desktop-overlay-isolated-probe")
+                return AgentDesktopOverlayIsolatedProbe.Run(args);
+            if (args.Length > 0 && args[0] == "--agent-desktop-coordinator-isolated-probe")
+                return AgentDesktopCoordinatorIsolatedProbe.Run(args);
             if (args.Length > 0 && args[0] == "--browser-settings-self-test")
                 return ControlPanelRuntime.RunBrowserSettingsSelfTest();
             if (args.Length == 4 && args[0] == "--agent-control-lock-hold")
