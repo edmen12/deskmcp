@@ -13,6 +13,8 @@ import { AgentDesktopManager } from '../../dist/src/agent-desktop-state.js';
 import { AgentDesktopNativeBridge } from '../../dist/src/agent-desktop-native.js';
 import { NativeWindowsProcessBackend } from '../../dist/src/native-process-backend.js';
 import { WinAppComputerBackend } from '../../dist/src/computer-use-backend.js';
+import { createComputerUseRuntime } from '../../dist/src/computer-use-runtime.js';
+import { registerComputerUseTools } from '../../dist/src/computer-use-tools.js';
 import { resolveDeskMcpStateRoot } from '../../dist/src/data-root.js';
 
 const invoke=promisify(execFile);
@@ -51,6 +53,8 @@ const result={
   owned_system_winver_window_found:false,
   system_app_window_count:0,
   isolated_ui_inspection_status:'not_attempted', isolated_ui_elements:0,
+  object_mcp_windows_verified:false, object_mcp_snapshot_verified:false,
+  object_mcp_action_token_issued:false,
   app_business_effect_verified:false,
   windows_virtual_desktop2_visibility_verified:false,
   observer_quiet:false, owned_job_terminated:false,
@@ -123,6 +127,46 @@ try {
   }catch {
     result.isolated_ui_inspection_status='provider_error_or_timeout';
   }
+  if(result.isolated_ui_inspection_status!=='elements_visible')
+    throw Error('DIRECT_ISOLATED_UIA_READ_FAILED');
+  // End-to-end read-only verification through the actual candidate MCP tool
+  // handlers. A fake local policy/audit only permits invocation of read paths
+  // inside this instrumented owner-controlled fixture; no production service.
+  const calls=new Map();
+  const localServer={ registerTool(name, _schema, handler){calls.set(name,handler);} };
+  const runtime={...createComputerUseRuntime(),backend:uiBackend};
+  registerComputerUseTools(localServer,
+    {assertCanUseComputer(){},isFullyUnlocked(){return false;}},
+    {async begin(){return {};},async finish(){}},runtime,manager);
+  const objectWindows=await calls.get('desktop_ui_object_windows')({
+    agent_desktop_lease_id:lease,app:'winver'
+  });
+  if(objectWindows?.isError)throw Error('ISOLATED_OBJECT_MCP_WINDOW_READ_DENIED');
+  const listing=JSON.parse(objectWindows.content[0].text);
+  const ownedDialogCandidates=listing.windows.filter(row=>
+    row.app?.toLowerCase()==='winver' && row.class_name==='#32770');
+  if(listing.desktop_scope!=='isolated_win32_object'
+    ||listing.action_authorized!==false
+    ||ownedDialogCandidates.length!==1)
+    throw Error('ISOLATED_OBJECT_MCP_SCOPE_INVALID:'+JSON.stringify({
+      count:listing.windows.length,matchingDialogs:ownedDialogCandidates.length,
+      appNames:listing.windows.map(row=>row.app), classes:listing.windows.map(row=>row.class_name)
+    }));
+  result.object_mcp_windows_verified=true;
+  const objectSnapshot=await calls.get('desktop_ui_object_snapshot')({
+    agent_desktop_lease_id:lease,window_id:ownedDialogCandidates[0].window_id,
+    interactive_only:false,max_elements:100
+  });
+  if(objectSnapshot?.isError)throw Error('ISOLATED_OBJECT_MCP_SNAPSHOT_DENIED');
+  const verified=JSON.parse(objectSnapshot.content[0].text);
+  if(verified.desktop_scope!=='isolated_win32_object'
+    ||verified.action_authorized!==false
+    ||verified.read_only!==true
+    ||verified.elements.length!==result.isolated_ui_elements
+    ||Object.hasOwn(verified,'computer_observation_id'))
+    throw Error('ISOLATED_OBJECT_MCP_ACTION_CAPABILITY_LEAK');
+  result.object_mcp_snapshot_verified=true;
+  result.object_mcp_action_token_issued=false;
   await verify();
   result.pass=true;
 }catch(e){

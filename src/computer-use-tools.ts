@@ -5,6 +5,7 @@ import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { ComputerWindow, UiAction, UiElementSummary } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
+import { ComputerWindowRegistry } from './computer-use-registry.js';
 import { diffUiSnapshots, waitForUiCondition, type WaitCondition } from './computer-use-read-model.js';
 import { uiSelectorCoverage, verifyUiTargetGuard } from './computer-use-target-guard.js';
 import { assessUiPostcondition, uiPostconditionNotChecked, validateUiPostcondition, type ComputerUiPostcondition } from './computer-use-postcondition.js';
@@ -549,6 +550,110 @@ export function registerComputerUseTools(
   runtime: ComputerUseRuntime,
   agentDesktop?: AgentDesktopManager
 ): void {
+  // Separate opaque capability namespace: object-window IDs cannot resolve
+  // through runtime.windows in desktop_ui_action. These are READ-ONLY tokens.
+  const win32ObjectWindowsByLease = new Map<string, ComputerWindowRegistry>();
+  const objectRegistryForLease = (leaseId: string, create = false): ComputerWindowRegistry => {
+    const key = leaseId.toLowerCase();
+    let registry = win32ObjectWindowsByLease.get(key);
+    if (!registry && create) {
+      registry = new ComputerWindowRegistry();
+      win32ObjectWindowsByLease.set(key, registry);
+      while (win32ObjectWindowsByLease.size > 16) {
+        const oldest = win32ObjectWindowsByLease.keys().next().value as string | undefined;
+        if (oldest) win32ObjectWindowsByLease.delete(oldest);
+      }
+    }
+    if (!registry) throw new Error('Win32 object window capability belongs to an expired or another lease.');
+    return registry;
+  };
+  const requireWin32ReadScope = async (leaseId: string): Promise<string> => {
+    if (!agentDesktop) throw new Error('Agent Desktop runtime is unavailable.');
+    return agentDesktop.assertWin32ObjectReadLease(leaseId);
+  };
+  server.registerTool(
+    'desktop_ui_object_windows',
+    {
+      title: 'List Isolated Win32 Desktop Object Windows',
+      description: 'READ-ONLY: list windows in a lease-created isolated Win32 desktop object, not Windows virtual Desktop2. Requires an active Desktop2 HUD lease and owner on Desktop1. Returned IDs cannot be used by desktop_ui_action.',
+      inputSchema: z.object({
+        agent_desktop_lease_id: z.string().uuid(),
+        app: z.string().min(1).max(256).optional()
+      }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    },
+    async ({ agent_desktop_lease_id, app }) => auditedComputerCall(
+      audit, policy, 'desktop_ui_object_windows', 'win32-object-read',
+      async () => runtime.coordinator.exclusive(async () => {
+        const objectName = await requireWin32ReadScope(agent_desktop_lease_id);
+        const list = await runtime.backend.listWindows(app, objectName);
+        if (await requireWin32ReadScope(agent_desktop_lease_id) !== objectName) {
+          throw new Error('Win32 object lease identity changed during enumeration.');
+        }
+        const leaseRegistry = objectRegistryForLease(agent_desktop_lease_id, true);
+        const results = list
+          .filter(window => window.width >= 32 && window.height >= 24)
+          .filter(window => !isAgentDesktopSafetyWindow(window))
+          .slice(0, 100)
+          .map(window => publicWindow(window, leaseRegistry.issue(window)));
+        return { content: [{ type: 'text' as const, text: JSON.stringify({
+          desktop_scope: 'isolated_win32_object',
+          read_only: true, action_authorized: false,
+          agent_desktop_lease_id,
+          windows: results
+        }, null, 2) }] };
+      })
+    )
+  );
+  server.registerTool(
+    'desktop_ui_object_snapshot',
+    {
+      title: 'Inspect Isolated Win32 Desktop Object Window',
+      description: 'READ-ONLY: UI Automation tree from a fresh isolated-object window capability. No screenshot, action observation token or semantic action permission is issued.',
+      inputSchema: z.object({
+        agent_desktop_lease_id: z.string().uuid(),
+        window_id: z.string().uuid(),
+        interactive_only: z.boolean().optional().default(true),
+        max_elements: z.number().int().min(1).max(200).optional().default(80)
+      }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    },
+    async ({ agent_desktop_lease_id, window_id, interactive_only, max_elements }) =>
+      auditedComputerCall(audit, policy, 'desktop_ui_object_snapshot',
+        'win32-object-read', async () => runtime.coordinator.exclusive(async () => {
+          const leaseRegistry = objectRegistryForLease(agent_desktop_lease_id);
+          const objectName = await requireWin32ReadScope(agent_desktop_lease_id);
+          const liveBefore = await runtime.backend.listWindows(undefined, objectName);
+          const target = leaseRegistry.resolve(window_id, liveBefore);
+          if (isAgentDesktopSafetyWindow(target)) throw new Error('Agent Desktop safety HUD cannot be inspected.');
+          if (await requireWin32ReadScope(agent_desktop_lease_id) !== objectName) {
+            throw new Error('Win32 object lease identity changed before inspection.');
+          }
+          const inspection = await runtime.backend.inspect(
+            target.hwnd, interactive_only, max_elements, objectName
+          );
+          if (await requireWin32ReadScope(agent_desktop_lease_id) !== objectName) {
+            throw new Error('Win32 object lease identity changed after inspection.');
+          }
+          const liveAfter = await runtime.backend.listWindows(undefined, objectName);
+          leaseRegistry.resolve(window_id, liveAfter);
+          if (await requireWin32ReadScope(agent_desktop_lease_id) !== objectName) {
+            throw new Error('Win32 object lease identity changed after window verification.');
+          }
+          return { content: [{ type: 'text' as const, text: JSON.stringify({
+            desktop_scope: 'isolated_win32_object',
+            read_only: true, action_authorized: false,
+            app_event_verified: false, business_outcome_verified: false,
+            agent_desktop_lease_id, window: publicWindow(target, window_id),
+            elements: inspection.elements,
+            selector_coverage: uiSelectorCoverage(inspection.elements),
+            semantic_tree_truncated: inspection.elementsTruncated === true,
+            semantic_tree_scope: 'winapp_depth_and_filter_limited',
+            ...(inspection.elementsTruncated ? { warning: 'UIA tree truncated; no absence inference allowed.' } : {})
+          }, null, 2) }] };
+        })
+      )
+  );
   server.registerTool(
     'desktop_ui_windows',
     {

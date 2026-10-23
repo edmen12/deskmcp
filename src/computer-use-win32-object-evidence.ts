@@ -15,6 +15,9 @@ export interface IsolatedWinverReadEvidence {
   readonly system_app_window_count?: number;
   readonly isolated_ui_inspection_status?: string;
   readonly isolated_ui_elements?: number;
+  readonly object_mcp_windows_verified?: boolean;
+  readonly object_mcp_snapshot_verified?: boolean;
+  readonly object_mcp_action_token_issued?: boolean;
   readonly app_business_effect_verified?: boolean;
   readonly windows_virtual_desktop2_visibility_verified?: boolean;
   readonly observer_quiet?: boolean;
@@ -35,6 +38,9 @@ export function assessIsolatedWinverReadEvidence(value: IsolatedWinverReadEviden
     || value.owned_system_winver_window_found!==true
     || !Number.isSafeInteger(value.system_app_window_count)
     || !(value.system_app_window_count!>=1 && value.system_app_window_count!<=3)
+    || value.object_mcp_windows_verified!==true
+    || value.object_mcp_snapshot_verified!==true
+    || value.object_mcp_action_token_issued!==false
     || value.isolated_ui_inspection_status!=='elements_visible'
     || !Number.isSafeInteger(value.isolated_ui_elements)
     || !(value.isolated_ui_elements!>0 && value.isolated_ui_elements!<=100)
@@ -50,6 +56,8 @@ export function assessIsolatedWinverReadEvidence(value: IsolatedWinverReadEviden
   return {
     verified_isolated_win32_object_launch: true as const,
     verified_read_only_winapp_uia: true as const,
+    candidate_mcp_object_windows_and_snapshot_verified: true as const,
+    generic_action_capability_issued: false as const,
     observed_ui_element_count: value.isolated_ui_elements,
     desktop1_foreground_monitor_clear: true as const,
     windows_virtual_desktop2_visibility_proven: false as const,

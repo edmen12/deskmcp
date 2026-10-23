@@ -11,7 +11,9 @@ const accepted = {
   hud_lease_verified:true,strict_observer_ready:true,
   preassigned_desktop_object:true,owned_system_winver_window_found:true,
   system_app_window_count:1,isolated_ui_inspection_status:'elements_visible',
-  isolated_ui_elements:12,app_business_effect_verified:false,
+  isolated_ui_elements:12,object_mcp_windows_verified:true,
+  object_mcp_snapshot_verified:true,object_mcp_action_token_issued:false,
+  app_business_effect_verified:false,
   windows_virtual_desktop2_visibility_verified:false,
   observer_quiet:true,owned_job_terminated:true,watcher_terminated:true,
   lease_held_through_teardown:true,production_action_authorized:false,errors:[]
@@ -20,6 +22,7 @@ test('real isolated Win32 third-party launch/UIA proof does not claim Windows vi
   const result=assessIsolatedWinverReadEvidence(accepted);
   assert.equal(result.verified_isolated_win32_object_launch,true);
   assert.equal(result.verified_read_only_winapp_uia,true);
+  assert.equal(result.candidate_mcp_object_windows_and_snapshot_verified,true);
   assert.equal(result.observed_ui_element_count,12);
   assert.equal(result.windows_virtual_desktop2_visibility_proven,false);
   assert.equal(result.generic_mcp_computer_use_action_proven,false);
@@ -31,7 +34,9 @@ test('monitor, startup isolation, lease, cleanup or output mismatch invalidate e
     ['hud_lease_verified',false],['strict_observer_ready',false],
     ['preassigned_desktop_object',false],['owned_system_winver_window_found',false],
     ['system_app_window_count',0],['isolated_ui_inspection_status','provider_empty'],
-    ['isolated_ui_elements',0],['observer_quiet',false],['owned_job_terminated',false],
+    ['isolated_ui_elements',0],['object_mcp_windows_verified',false],
+    ['object_mcp_snapshot_verified',false],['object_mcp_action_token_issued',true],
+    ['observer_quiet',false],['owned_job_terminated',false],
     ['watcher_terminated',false],['lease_held_through_teardown',false],
     ['production_action_authorized',true],['errors',['FOCUS_CHANGE']]
   ] as const;

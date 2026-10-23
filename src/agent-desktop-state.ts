@@ -504,6 +504,24 @@ export class AgentDesktopManager {
     return `DeskMCP-Agent-${leaseId.replaceAll('-', '')}`;
   }
 
+  /**
+   * Read-only Win32 desktop-object operations require a live HUD, an exact
+   * Desktop2 lease and the owner remaining on Windows virtual Desktop1.
+   * This object is not the Windows virtual Desktop2 and grants NO input.
+   */
+  async assertWin32ObjectReadLease(leaseId: string): Promise<string> {
+    const { binding, control } = await this.assertLease(leaseId);
+    if (!control.active || control.desktopNumber !== 2
+      || !control.desktopId || control.desktopId.toLowerCase() !== binding.desktopId.toLowerCase()) {
+      throw new Error('Win32 object read requires an active Desktop2 HUD-backed lease.');
+    }
+    const info = await this.native.info();
+    if (info.virtualDesktopAccessor !== true || info.currentDesktopNumber !== 1) {
+      throw new Error('Win32 object read denied: owner is not verified on Desktop1.');
+    }
+    return this.desktopObjectNameForLease(leaseId);
+  }
+
   async hasActiveControls(): Promise<boolean> {
     return (await this.readControlDocument()).controls.length > 0;
   }
