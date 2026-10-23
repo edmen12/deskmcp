@@ -84,6 +84,10 @@ DeskMCP Computer Use does not bypass:
 
 If Windows switches to Secure Desktop for UAC, normal desktop UI automation must fail rather than attempt to synthesize consent. Administrator process elevation continues to use DeskMCP's separate ProcessHost/UAC flow.
 
+## Native WinForms control evidence gate (2026-10-23)
+
+See [NATIVE_WINFORMS_CAPABILITY_MATRIX.md](NATIVE_WINFORMS_CAPABILITY_MATRIX.md) for the controlled Edit, PushButton and ListBox evidence matrix. A new source-only, bounded Win32 inventory helper in `test-area/winforms-native-inventory/` confirmed native child ownership, class/style and read-only discoverability for the three controls in the **same owned DWM-cloaked fixture** where WinApp's UIA returned 0/3. Four adversarial reads (wrong process, swapped child roles, missing child capability, wrong sentinel) all failed closed. The native helper reports `supports_native_action=false` and `dispatch_count=0`; it does not register a production MCP action. Historical one-fixture Edit WM_SETTEXT and Button BM_CLICK app-callback PASS do not establish a general privilege. List action remains untested.
+
 ## Controlled WinForms provider benchmark (2026-10-23; read-only candidate)
 
 Reused the hash-pinned existing `DeskMCP.Desktop2NativeEditProbe.dll` under `test-area/desktop2-native-edit-probe/` of the independent acceptance worktree. The source fixture has its WinForms root marked `WS_EX_NOACTIVATE` during HWND creation and DWM-cloaks itself before Show. We never supplied its uncloak sentinel, moved it to virtual Desktop2, or sent any input. Run `node scripts/benchmark-cloaked-winforms-uia.mjs <absolute-winapp-exe> <absolute-owned-native-edit-fixture-dll> <absolute-dotnet-exe> OWNED_CLOAKED_WINFORMS_READ_ONLY_ONCE`. The runner checks the trusted fixture DLL SHA-256 and source executable basenames, bounds all child commands, suppresses native handles/names/window metadata, and terminates its owned fixture.

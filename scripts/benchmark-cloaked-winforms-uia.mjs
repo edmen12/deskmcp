@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const EXPECTED = new Set(['OwnedSingleLineEdit', 'OwnedNativePushButton', 'OwnedScrollableList']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -92,6 +93,69 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'benchmark-cloaked-win
       throw new Error('OWNED_NONACTIVATING_CLOAK_PROOF_FAILED');
     }
     safeResult.fixture_verified = true;
+    // Independent, read-only Win32 child enumeration verifies the *same*
+    // owned PID/HWND fixture capabilities that WinApp UIA may omit.
+    const nativeDll = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
+      '..', 'test-area', 'winforms-native-inventory', 'bin', 'Release', 'net10.0',
+      'DeskMCP.WinFormsNativeInventory.dll');
+    if (!fs.existsSync(nativeDll)) throw new Error('NATIVE_INVENTORY_BUILD_REQUIRED');
+    if (![proof.childHwnd, proof.buttonHwnd, proof.listHwnd].every(
+      value => Number.isSafeInteger(value) && value > 0
+    )) throw new Error('OWNED_CHILD_CAPABILITIES_NOT_PRESENT');
+    const runNativeInventory = async (sentinel, pid, edit, button, list) => {
+      const inventory = spawn(dotnet, [
+        nativeDll, sentinel, String(proof.hwnd), String(pid),
+        String(edit), String(button), String(list)
+      ], {
+        windowsHide: true, shell: false,
+        env: { ...process.env, DOTNET_ROOT: path.dirname(dotnet),
+          DOTNET_ROOT_X64: path.dirname(dotnet) },
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      let output = '';
+      const timer = setTimeout(() => inventory.kill(), 5000);
+      inventory.stdout.on('data', chunk => {
+        if (output.length + chunk.length > 8192) inventory.kill();
+        else output += chunk.toString();
+      });
+      const exit = await new Promise(resolve => {
+        inventory.once('error', () => resolve(-1));
+        inventory.once('close', code => resolve(code));
+      });
+      clearTimeout(timer);
+      return { exit, output };
+    };
+    const inventoryArgs = [proof.pid, proof.childHwnd, proof.buttonHwnd, proof.listHwnd];
+    const accepted = await runNativeInventory('OWNED_WINFORMS_INVENTORY_READ_ONLY', ...inventoryArgs);
+    if (accepted.exit !== 0) throw new Error('OWNED_NATIVE_INVENTORY_READ_DENIED');
+    let native;
+    try { native = JSON.parse(accepted.output); }
+    catch { throw new Error('OWNED_NATIVE_INVENTORY_INVALID_JSON'); }
+    if (native.status !== 'native_hwnd_read_only_verified'
+      || native.fixture_root_owned !== true || native.dispatch_count !== 0
+      || native.supports_native_action !== false
+      || ![native.edit, native.button, native.list].every(item =>
+        item?.present === true && item.inspection_only === true)) {
+      throw new Error('OWNED_NATIVE_INVENTORY_CONTRACT_FAILED');
+    }
+    safeResult.native_child_inventory = native;
+    const denials = [
+      ['wrong_process', 'OWNED_WINFORMS_INVENTORY_READ_ONLY',
+        proof.pid + 1, proof.childHwnd, proof.buttonHwnd, proof.listHwnd],
+      ['swapped_control_roles', 'OWNED_WINFORMS_INVENTORY_READ_ONLY',
+        proof.pid, proof.buttonHwnd, proof.childHwnd, proof.listHwnd],
+      ['invalid_capability', 'OWNED_WINFORMS_INVENTORY_READ_ONLY',
+        proof.pid, 0, proof.buttonHwnd, proof.listHwnd],
+      ['wrong_sentinel', 'NO_NATIVE_ACCESS',
+        proof.pid, proof.childHwnd, proof.buttonHwnd, proof.listHwnd]
+    ];
+    safeResult.native_denial_checks = [];
+    for (const [name, token, pid, edit, button, list] of denials) {
+      const denial = await runNativeInventory(token, pid, edit, button, list);
+      const rejected = denial.exit === 2 && denial.output.trim() === '';
+      safeResult.native_denial_checks.push({ name, rejected });
+      if (!rejected) throw new Error('OWNED_NATIVE_READ_ONLY_FAIL_CLOSED_TEST_FAILED');
+    }
     for (const mode of ['depth4', 'interactive8']) {
       const runs = [];
       const locatorEvidence = [];
