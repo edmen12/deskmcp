@@ -29,6 +29,14 @@ Snapshots default to the interactive UI Automation tree without a screenshot. Re
 
 `desktop_ui_action` preserves legacy `succeeded=true` for a successfully completed backend call, and additionally returns `action_dispatched`, `outcome_verified=false`, `outcome_status=unverified`, and `post_action_state`. A window closing or a new screenshot is **not** proof that a Save, Submit, or navigation finished. Explicitly inspect the resulting application state. If post-action observation fails, the action may already have happened; never blindly replay non-idempotent actions.
 
+### Condition waits and diff snapshots (candidate)
+
+`desktop_ui_action(action="wait_for", selector=...)` checks an **exact** selector for `present`, `enabled`, or `value_equals` with `expected_value`. `wait_ms` is bounded to 10 seconds and `poll_ms` to 100–1000 ms. Each poll revalidates the window identity and an active Agent Desktop lease if present. It sends no physical mouse/keyboard input. A timeout returns `succeeded=false`, `condition_met=false`, and `outcome_status=timeout_inconclusive`; it does not prove an element is absent. A satisfied UIA condition proves only that observed predicate, not an application-level business transaction.
+
+`desktop_ui_snapshot(diff_from_observation_id=..., diff_only=true)` returns `ui_diff` (added/removed/changed/unchanged) rather than the full `elements` array, plus a fresh action-capable observation ID. Capture an initial full snapshot first. The baseline is held in a bounded 128-entry, 120-second memory cache, even after its action capability is consumed; it is matched against the **same window, same Agent Desktop lease, same max_elements, and same interactive_only** setting. A diff baseline never grants an action capability. Unique selectors are compared by identity; ambiguous selectors fall back to array position. Reordering and WinApp depth/filter limits can produce incomplete or approximate differences: `scope_complete=false` is always explicit. Screenshot images, when requested, are not diffed.
+
+`wait_for` currently holds the shared GUI coordinator during its bounded poll; long waits can delay other agents. A future per-poll nonblocking coordinator is a separate optimization requiring concurrency tests.
+
 Normal user desktop actions keep their existing input options and policy checks. Only a valid Agent Desktop lease applies the separate isolated-desktop action restrictions.
 
 Windows Forms controls can lose their child UI Automation providers when the app window is isolated on a non-current Windows virtual desktop. DeskMCP detects the known degraded shape and returns `semantic_tree_status: "limited"` plus `semantic_tree_warning`; callers must not treat that element list as complete. DeskMCP does not move the app back to Desktop 1 or steal the user's foreground merely to recover a richer tree.

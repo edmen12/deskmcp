@@ -5,6 +5,7 @@ import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { ComputerWindow, UiAction, UiElementSummary } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
+import { diffUiSnapshots, waitForUiCondition, type WaitCondition } from './computer-use-read-model.js';
 
 function failure(prefix: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -212,6 +213,9 @@ function parseAction(input: {
       };
     case 'wait':
       return { type: 'wait', milliseconds: input.wait_ms ?? 800 };
+    case 'wait_for':
+      if (!input.selector) throw new Error('wait_for requires selector.');
+      return { type: 'wait', milliseconds: 0 };
     default:
       throw new Error(`Unsupported computer action: ${input.action}`);
   }
@@ -238,10 +242,17 @@ export function computerActionDispatchResult(
 async function snapshotContent(
   runtime: ComputerUseRuntime,
   window: ComputerWindow,
-  options: { includeTree: boolean; includeScreenshot: boolean; interactiveOnly: boolean; maxElements: number; agentDesktopLeaseId?: string; desktopObjectName?: string }
+  options: { includeTree: boolean; includeScreenshot: boolean; interactiveOnly: boolean; maxElements: number; agentDesktopLeaseId?: string; desktopObjectName?: string; diffFromObservationId?: string; diffOnly?: boolean }
 ) {
   const windowId = runtime.windows.issue(window);
-  const observationId = runtime.observations.issue(windowId, Date.now(), options.agentDesktopLeaseId);
+  if (options.diffFromObservationId && !options.includeTree) throw new Error('UI diff requires include_tree=true.');
+  if (options.diffOnly && !options.diffFromObservationId) throw new Error('diff_only requires diff_from_observation_id.');
+  const baseline = options.diffFromObservationId
+    ? runtime.snapshots.get(options.diffFromObservationId, windowId, options.agentDesktopLeaseId)
+    : undefined;
+  if (baseline && (baseline.maxElements !== options.maxElements || baseline.interactiveOnly !== options.interactiveOnly)) {
+    throw new Error('UI diff requires the same max_elements and interactive_only as the baseline.');
+  }
   const [inspection, screenshot] = await Promise.all([
     options.includeTree
       ? runtime.backend.inspect(window.hwnd, options.interactiveOnly, options.maxElements, options.desktopObjectName)
@@ -251,6 +262,14 @@ async function snapshotContent(
       : Promise.resolve(undefined)
   ]);
 
+  const observationId = runtime.observations.issue(windowId, Date.now(), options.agentDesktopLeaseId);
+  const current = inspection ? {
+    windowId, ...(options.agentDesktopLeaseId ? { leaseId: options.agentDesktopLeaseId } : {}), capturedAt: Date.now(),
+    elements: inspection.elements, truncated: inspection.elementsTruncated === true,
+    maxElements: options.maxElements, interactiveOnly: options.interactiveOnly
+  } : undefined;
+  if (current) runtime.snapshots.add(observationId, current);
+  const uiDiff = baseline && current ? diffUiSnapshots(baseline, current) : undefined;
   const agentDesktopWarning = options.agentDesktopLeaseId && inspection
     ? agentDesktopSemanticTreeWarning(window, inspection.elements)
     : undefined;
@@ -264,7 +283,8 @@ async function snapshotContent(
     window: publicWindow(window, windowId),
     ...(screenshot ? { screenshot: { width: screenshot.width, height: screenshot.height } } : {}),
     ...(inspection ? {
-      elements: inspection.elements,
+      ...(!options.diffOnly ? { elements: inspection.elements } : {}),
+      ...(uiDiff ? { ui_diff: uiDiff, diff_from_observation_id: options.diffFromObservationId } : {}),
       semantic_tree_truncated: inspection.elementsTruncated === true,
       semantic_tree_scope: 'winapp_depth_and_filter_limited'
     } : {}),
@@ -350,11 +370,13 @@ export function registerComputerUseTools(
         include_screenshot: z.boolean().optional().default(false),
         interactive_only: z.boolean().optional().default(true),
         max_elements: z.number().int().min(1).max(200).optional().default(80),
+        diff_from_observation_id: z.string().uuid().optional(),
+        diff_only: z.boolean().optional().default(false),
         agent_desktop_lease_id: z.string().uuid().optional()
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false }
     },
-    async ({ window_id, app, include_tree, include_screenshot, interactive_only, max_elements, agent_desktop_lease_id }) => auditedComputerCall(
+    async ({ window_id, app, include_tree, include_screenshot, interactive_only, max_elements, diff_from_observation_id, diff_only, agent_desktop_lease_id }) => auditedComputerCall(
       audit,
       policy,
       'desktop_ui_snapshot',
@@ -389,6 +411,8 @@ export function registerComputerUseTools(
           includeScreenshot: include_screenshot,
           interactiveOnly: interactive_only,
           maxElements: max_elements,
+          ...(diff_from_observation_id ? { diffFromObservationId: diff_from_observation_id } : {}),
+          diffOnly: diff_only,
           ...(effectiveAgentDesktopLeaseId ? { agentDesktopLeaseId: effectiveAgentDesktopLeaseId } : {})
         });
         if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
@@ -405,7 +429,7 @@ export function registerComputerUseTools(
       inputSchema: z.object({
         window_id: z.string().uuid(),
         computer_observation_id: z.string().uuid(),
-        action: z.enum(['invoke', 'set_value', 'click', 'hover', 'scroll', 'send_keys', 'drag', 'wait']),
+        action: z.enum(['invoke', 'set_value', 'click', 'hover', 'scroll', 'send_keys', 'drag', 'wait', 'wait_for']),
         selector: z.string().min(1).max(512).optional(),
         value: z.string().max(65536).optional(),
         keys: z.string().max(4096).optional(),
@@ -423,6 +447,9 @@ export function registerComputerUseTools(
         hold_ms: z.number().int().min(0).max(5000).optional(),
         dwell_ms: z.number().int().min(0).max(5000).optional(),
         wait_ms: z.number().int().min(0).max(10000).optional(),
+        wait_condition: z.enum(['present', 'enabled', 'value_equals']).optional().default('present'),
+        expected_value: z.string().max(65536).optional(),
+        poll_ms: z.number().int().min(100).max(1000).optional().default(250),
         settle_ms: z.number().int().min(0).max(5000).optional().default(150),
         observe_after: z.enum(['none', 'tree', 'screenshot', 'both']).optional().default('tree'),
         agent_desktop_lease_id: z.string().uuid().optional()
@@ -474,6 +501,43 @@ export function registerComputerUseTools(
         await agentDesktop.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
       }
 
+      if (input.action === 'wait_for') {
+        // This is an observational poll, not global input. Retain sibling observations,
+        // but revalidate window identity and exact lease around every UIA inspection.
+        const verifyTarget = async () => {
+          const live = await runtime.backend.listWindows();
+          runtime.windows.resolve(input.window_id, live);
+          if (effectiveAgentDesktopLeaseId) {
+            await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
+          }
+        };
+        const result = await waitForUiCondition(
+          () => runtime.backend.inspect(target.hwnd, true, 200),
+          verifyTarget,
+          input.selector!,
+          input.wait_condition as WaitCondition,
+          input.expected_value,
+          input.wait_ms ?? 5000,
+          input.poll_ms
+        );
+        return { content: [{ type: 'text' as const, text: JSON.stringify({
+          action: 'wait_for',
+          succeeded: result.condition_met,
+          check_completed: true,
+          action_dispatched: false,
+          condition: input.wait_condition,
+          condition_met: result.condition_met,
+          outcome_verified: result.condition_met,
+          outcome_status: result.condition_met ? 'condition_verified' : 'timeout_inconclusive',
+          selector: input.selector,
+          attempts: result.attempts,
+          timed_out: result.timed_out,
+          semantic_tree_truncated: result.last_inspection_truncated,
+          semantic_tree_scope: 'winapp_depth_and_filter_limited',
+          observation_required_before_next_action: true
+        }, null, 2) }] };
+      }
+
       // Invalidate every sibling observation before attempting the action. Even a
       // backend error can be partial, so all clients must re-observe afterward.
       runtime.observations.advance(input.window_id, usesGlobalDesktopInput(action));
@@ -490,6 +554,7 @@ export function registerComputerUseTools(
       try {
         refreshedWindows = await runtime.backend.listWindows();
       } catch {
+        if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertLease(effectiveAgentDesktopLeaseId);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({
             ...computerActionDispatchResult(action.type, 'observation_unavailable'),
@@ -533,6 +598,7 @@ export function registerComputerUseTools(
           effectiveAgentDesktopLeaseId
         );
       } catch {
+        if (effectiveAgentDesktopLeaseId) await agentDesktop!.assertWindowOnLease(target.hwnd, effectiveAgentDesktopLeaseId);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({
             ...computerActionDispatchResult(action.type, 'observation_unavailable'),
