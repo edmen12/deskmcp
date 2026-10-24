@@ -1,5 +1,5 @@
 import type { PdfInsertOperationSchema, PdfDeleteOperationSchema, PdfOperationSchema } from '../schemas.js';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 type PdfInsertOperation = z.infer<typeof PdfInsertOperationSchema>;
 type PdfDeleteOperation = z.infer<typeof PdfDeleteOperationSchema>;
 type PdfOperations = z.infer<typeof PdfOperationSchema>;

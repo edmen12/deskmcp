@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v3";
 export declare const GetConfigArgsSchema: z.ZodObject<{
     origin: z.ZodOptional<z.ZodEnum<["ui", "llm"]>>;
 }, "strip", z.ZodTypeAny, {

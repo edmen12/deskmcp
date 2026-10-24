@@ -244,3 +244,31 @@ test('exact installed rollback snapshot and isolated installer failure tests can
   assert.match(regression,/sourceReleaseIsNotCandidate/);
   assert.doesNotMatch(regression,/--install-current-user|Stop-Process -Name DeskMCP/);
 });
+
+test('patched Zod4 retains the vendored Desktop Commander V3 MCP argument schemas',async()=>{
+  const pkg=JSON.parse(readFileSync(path.join(PROJECT_ROOT,'package.json'),'utf8'));
+  const vendorPkg=JSON.parse(readFileSync(path.join(PROJECT_ROOT,'vendor',
+    'desktop-commander','package.json'),'utf8'));
+  const lock=JSON.parse(readFileSync(path.join(PROJECT_ROOT,'package-lock.json'),'utf8'));
+  assert.equal(pkg.dependencies.zod,'4.6.7');
+  assert.equal(vendorPkg.dependencies.zod,'^4.6.7');
+  assert.equal(lock.packages['node_modules/zod']?.version,'4.6.7');
+  assert.equal(lock.packages['vendor/desktop-commander/node_modules/zod'],undefined);
+  const {pathToFileURL}=await import('node:url');
+  const src=path.join(PROJECT_ROOT,'vendor','desktop-commander','dist','tools','schemas.js');
+  assert.match(readFileSync(src,'utf8'),/from "zod\/v3"/);
+  const mod=await import(pathToFileURL(src).href);
+  const {zodToJsonSchema}=await import('zod-to-json-schema');
+  assert.equal(mod.ReadFileArgsSchema.safeParse({path:'test-only.txt'}).success,true);
+  assert.equal(mod.ReadFileArgsSchema.safeParse({path:123}).success,false);
+  assert.equal(mod.StartProcessArgsSchema.safeParse({command:'echo demo',timeout_ms:1000}).success,true);
+  assert.equal(mod.StartProcessArgsSchema.safeParse({command:'echo demo'}).success,false);
+  const file=JSON.parse(JSON.stringify(zodToJsonSchema(mod.ReadFileArgsSchema)));
+  const process=JSON.parse(JSON.stringify(zodToJsonSchema(mod.StartProcessArgsSchema)));
+  assert.equal(file.type,'object');
+  assert.equal(file.properties.path.type,'string');
+  assert.ok(file.required.includes('path'));
+  assert.equal(process.properties.command.type,'string');
+  assert.ok(process.required.includes('command'));
+  assert.ok(process.required.includes('timeout_ms'));
+});
