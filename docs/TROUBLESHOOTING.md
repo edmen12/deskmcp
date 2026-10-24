@@ -33,7 +33,7 @@ If an old DPAPI key becomes unreadable, re-enter the Runtime API Key from OpenAI
 
 ChatGPT plugin names are account-side and are not removed by reinstalling DeskMCP. If **DeskMCP** already exists, do not create another plugin with the same name. Cancel **New plugin**, open the existing DeskMCP plugin, confirm it uses the current Tunnel, then run **Scan tools** again.
 
-## ChatGPT does not show 27 tools
+## ChatGPT does not show 29 tools
 
 Recheck the plugin configuration:
 
@@ -43,7 +43,7 @@ Recheck the plugin configuration:
 - Correct Tunnel selected
 - **I understand and want to continue** checked
 
-Then run **Scan tools** again. The expected production surface is exactly 27 tools.
+Then run **Scan tools** again. The expected production surface is exactly 29 tools.
 
 ## A file or search result is blocked
 

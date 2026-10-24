@@ -471,7 +471,7 @@
                 </Border>
                 <TextBlock Text="If ChatGPT says &apos;Connector name already exists&apos;, cancel creation and open the existing DeskMCP plugin instead." FontSize="9" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{DynamicResource UiTextMuted}"/>
                 <Border x:Name="FirstRunExpectedCard" Background="{DynamicResource UiAccentSoft}" CornerRadius="13" Padding="11,9" Margin="0,12,0,0">
-                  <TextBlock Text="Expected result: 27 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
+                  <TextBlock Text="Expected result: 29 DeskMCP tools" Foreground="{DynamicResource UiAccentText}" FontSize="10" FontWeight="Bold"/>
                 </Border>
                 <Button x:Name="FirstRunFinishButton" Style="{StaticResource ActionButton}" Content="Finish Setup" Margin="0,16,0,0"/>
               </StackPanel>

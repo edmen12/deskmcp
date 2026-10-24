@@ -295,7 +295,7 @@ try {
 '@
     $smokeSource.Replace('__CLIENT_ENTRY__', $clientEntry).Replace('__SMOKE_BASE_URL__', $SmokeBaseUrl) | Set-Content -LiteralPath $SmokeFile -Encoding UTF8
     try { $smoke = (& $NodeExe $SmokeFile 2>&1 | Out-String); $smokeExit = $LASTEXITCODE } finally { }
-    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=27' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'AGENT_RUNTIME_TOOLS=true' -or $smoke -notmatch 'BROWSER_TOOLS=true' -or $smoke -notmatch 'AGENT_DESKTOP_TOOL=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true' -or $smoke -notmatch 'BROWSER_POLICY_DENY=true' -or $smoke -notmatch 'AGENT_DESKTOP_POLICY_DENY=true' -or $smoke -notmatch 'TASK_DISCOVER_OK=true' -or $smoke -notmatch 'TASK_WRITE_POLICY_DENY=true' -or $smoke -notmatch 'SKILL_LIST_OK=true' -or $smoke -notmatch 'SKILL_WRITE_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
+    if ($smokeExit -ne 0 -or $smoke -notmatch 'TOOLS=29' -or $smoke -notmatch 'COMPUTER_TOOLS=true' -or $smoke -notmatch 'AGENT_RUNTIME_TOOLS=true' -or $smoke -notmatch 'BROWSER_TOOLS=true' -or $smoke -notmatch 'AGENT_DESKTOP_TOOL=true' -or $smoke -notmatch 'POLICY_OK=true' -or $smoke -notmatch 'COMPUTER_POLICY_DENY=true' -or $smoke -notmatch 'BROWSER_POLICY_DENY=true' -or $smoke -notmatch 'AGENT_DESKTOP_POLICY_DENY=true' -or $smoke -notmatch 'TASK_DISCOVER_OK=true' -or $smoke -notmatch 'TASK_WRITE_POLICY_DENY=true' -or $smoke -notmatch 'SKILL_LIST_OK=true' -or $smoke -notmatch 'SKILL_WRITE_POLICY_DENY=true') { throw "MCP smoke failed:`n$smoke" }
     $before = (Get-Process -Name DeskMCP -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $PanelExe }).Count
     $second = Start-Process -FilePath $PanelExe -WorkingDirectory $StageRoot -PassThru
     [void]$second.WaitForExit(5000)
@@ -307,7 +307,7 @@ try {
     Write-Output ('PROFILE=' + $health.policy.profile)
     Write-Output ('VERSION=' + $health.version)
     Write-Output ('STAGE_NODE_COUNT=' + $OwnedStageNodePids.Count)
-    Write-Output 'TOOLS=27'
+    Write-Output 'TOOLS=29'
     Write-Output 'BROWSER_TOOLS=OK'
     Write-Output 'BROWSER_POLICY_DENY=OK'
     Write-Output 'AGENT_DESKTOP_TOOL=OK'

@@ -1,5 +1,7 @@
-param([switch]$SkipStage,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
+param([switch]$SkipStage,[switch]$PackageOnly,[ValidateSet('win-x64','win-arm64')][string]$Target = 'win-x64')
 $ErrorActionPreference = 'Stop'
+if ($PackageOnly -and -not $SkipStage) { throw 'PackageOnly requires a previously verified Release Stage (-SkipStage).' }
+if ($PackageOnly -and $env:DESKMCP_PACKAGE_ONLY_ACK -ne 'UNQUALIFIED_NO_GUI_ARTIFACT') { throw 'PackageOnly requires explicit unqualified/no-GUI artifact opt-in.' }
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'release-targets.ps1')
 . (Join-Path $PSScriptRoot 'release-provenance.ps1')
@@ -258,6 +260,14 @@ Require (Test-Path -LiteralPath $SetupExe) 'Setup build output is missing.'
 $embeddedSourceCommit = Get-DeskMcpSetupSourceCommit $SetupExe
 Require ($embeddedSourceCommit -eq $sourceCommit) ('Setup embedded source commit mismatch: ' + $embeddedSourceCommit + ' expected=' + $sourceCommit)
 Write-Output ('SETUP_SOURCE_COMMIT=' + $embeddedSourceCommit)
+if ($PackageOnly) {
+    Write-Output 'SETUP_PACKAGE_ONLY_UNQUALIFIED=TRUE'
+    Write-Output 'PUBLIC_RELEASE_READY=FALSE'
+    Write-Output 'INSTALLER_GUI_SMOKE=NOT_RUN'
+    Write-Output ('SETUP=' + $SetupExe)
+    Write-Output ('SETUP_SHA256=' + (Get-FileHash -Algorithm SHA256 -LiteralPath $SetupExe).Hash.ToLowerInvariant())
+    return
+}
 Write-Output 'STEP=installer-smoke-single-instance'
 $mutexProbeRoot = Join-Path $RuntimeRoot ('installer-mutex-probe\' + $Target + '-' + [guid]::NewGuid().ToString('N'))
 $mutexReady = Join-Path $mutexProbeRoot 'ready.txt'

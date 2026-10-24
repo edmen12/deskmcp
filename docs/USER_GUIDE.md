@@ -45,7 +45,7 @@ In ChatGPT:
 6. Check **I understand and want to continue**.
 7. Run **Scan tools**.
 
-Expected result: **27 DeskMCP tools**.
+Expected result: **29 DeskMCP tools**.
 ## 3. Control Panel
 
 <p align="center"><img src="images/control-panel.png" alt="DeskMCP Control Panel" width="430" /></p>

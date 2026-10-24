@@ -272,3 +272,22 @@ test('patched Zod4 retains the vendored Desktop Commander V3 MCP argument schema
   assert.ok(process.required.includes('command'));
   assert.ok(process.required.includes('timeout_ms'));
 });
+
+test('unsigned candidate PackageOnly is explicitly opted in and cannot claim installer smoke success',()=>{
+  const script=readFileSync(path.join(PROJECT_ROOT,'scripts','build-installer.ps1'),'utf8');
+  const smoke=readFileSync(path.join(PROJECT_ROOT,'scripts','test-release-stage.ps1'),'utf8');
+  assert.match(script,/\[switch\]\$PackageOnly/);
+  assert.match(script,/\$PackageOnly -and -not \$SkipStage/);
+  assert.match(script,/DESKMCP_PACKAGE_ONLY_ACK/);
+  assert.match(script,/UNQUALIFIED_NO_GUI_ARTIFACT/);
+  assert.match(script,/SETUP_PACKAGE_ONLY_UNQUALIFIED=TRUE/);
+  assert.match(script,/PUBLIC_RELEASE_READY=FALSE/);
+  assert.match(script,/INSTALLER_GUI_SMOKE=NOT_RUN/);
+  const gate=script.indexOf("if ($PackageOnly) {");
+  const normalSmoke=script.indexOf("Write-Output 'STEP=installer-smoke-single-instance'");
+  assert.ok(gate>0 && normalSmoke>gate);
+  assert.match(script.slice(gate,normalSmoke),/return/);
+  assert.doesNotMatch(script.slice(gate,normalSmoke),/--startup|--install-current-user/);
+  assert.equal((smoke.match(/TOOLS=29/g)||[]).length,2);
+  assert.doesNotMatch(smoke,/TOOLS=27/);
+});
