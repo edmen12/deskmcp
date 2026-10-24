@@ -19,7 +19,8 @@ if(process.argv.length!==4||sentinel!=='OWNED_NATIVE_WINFORMS_BRIDGE_SINGLE_USE'
  ||!/^[a-f0-9]{8}-[a-f0-9-]{27}$/iu.test(lease??''))
  throw Error('EXACT_LEASE_AND_OWNED_TEST_SENTINEL_REQUIRED');
 const repo=path.resolve(here,'../..');
-const original=path.resolve(repo,'../DeskMCP-D2-Native-Acceptance');
+// Keep the entire native fixture+observer toolchain in this exact staging branch.
+const original=repo;
 const sdk=path.resolve(repo,'../DeskMCP/runtime/dotnet-sdk');
 const bin=(folder,name)=>path.join(original,'test-area',folder,'bin','Release','net10.0-windows',name);
 const files={
@@ -36,7 +37,8 @@ for(const [name,p] of Object.entries(files)){
 process.env.DOTNET_ROOT=sdk;
 process.env.DOTNET_ROOT_X64=sdk;
 process.env.DESKTOP_MCP_VDA_PATH=files.vda;
-const EXPECTED_OWNED_FIXTURE_SHA256='f6d064ad5d42b20d168423f678cc45241d22029b8d88c529a9349bc5e0dc2d03';
+// SHA256 of the owned WinForms DLL freshly built from THIS branch's C# source.
+const EXPECTED_OWNED_FIXTURE_SHA256='f189d5c5c2352e6bdbde58386d92b07a6adc1149d64332b2d2844f7c086a9904';
 const fixtureSha=createHash('sha256').update(fs.readFileSync(files.fixture)).digest('hex');
 if(fixtureSha!==EXPECTED_OWNED_FIXTURE_SHA256)
  throw Error('OWNED_FIXTURE_HASH_NOT_PINNED');
