@@ -8,6 +8,7 @@ import {
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { RealDesktop2OwnedControl } from './desktop2-real-owned-control.js';
 import { ArtifactExpiredError, type ArtifactStore } from './artifact-store.js';
 import type { BrowserRuntime } from './browser-runtime.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
@@ -192,7 +193,9 @@ export async function startHttpServer(
   dynamicMcpHub?: DynamicMcpHub,
   browser?: BrowserRuntime,
   skillStore?: SkillStore,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  // Staging-only injection. Production index.ts never supplies this object.
+  realD2Owned?: RealDesktop2OwnedControl
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -215,7 +218,8 @@ export async function startHttpServer(
       dynamicMcpHub,
       browser,
       skillStore,
-      agentDesktop
+      agentDesktop,
+      realD2Owned
     )
   );
   const nodeHandler = toNodeHandler(mcpHandler, {

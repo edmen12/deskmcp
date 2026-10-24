@@ -2,6 +2,10 @@ import { McpServer } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { registerAgentDesktopTools } from './agent-desktop-tools.js';
+import { AgentDesktopNativeBridge } from './agent-desktop-native.js';
+import { registerRealVirtualDesktop2InventoryTool } from './desktop2-real-inventory-tools.js';
+import { registerRealDesktop2OwnedControlTools } from './desktop2-real-owned-mcp-tools.js';
+import type { RealDesktop2OwnedControl } from './desktop2-real-owned-control.js';
 import type { ArtifactStore } from './artifact-store.js';
 import { registerArtifactTools } from './artifact-tools.js';
 import type { BrowserRuntime } from './browser-runtime.js';
@@ -37,7 +41,10 @@ export function createDesktopMcpServer(
   dynamicMcpHub?: DynamicMcpHub,
   browser?: BrowserRuntime,
   skillStore?: SkillStore,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  // An internally injected, independently attested owned-launch bridge ONLY.
+  // index.ts intentionally does not supply it in the standard Gateway.
+  realD2Owned?: RealDesktop2OwnedControl
 ): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
@@ -52,6 +59,19 @@ export function createDesktopMcpServer(
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
     if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
     if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore);
+    // Explicit staged opt-in only. Never grant private-object window IDs or
+    // register an unverified real D2 input/mutation endpoint.
+    if (agentDesktop && process.env.DESKTOP_MCP_REAL_D2_INVENTORY_EXPERIMENT === '1') {
+      registerRealVirtualDesktop2InventoryTool(server, policy, agentDesktop,
+        new AgentDesktopNativeBridge());
+    }
+    // Both controls are mandatory: explicit opt-in AND an internally injected
+    // bridge with trusted owned-launch provenance. Environment variables alone
+    // cannot enable third-party D2 mutation in the standard Gateway.
+    if (realD2Owned && agentDesktop &&
+        process.env.DESKTOP_MCP_REAL_D2_OWNED_ACTION_EXPERIMENT === '1') {
+      registerRealDesktop2OwnedControlTools(server, policy, audit, realD2Owned);
+    }
     if (browser) registerBrowserTools(server, policy, audit, browser);
     if (skillStore) registerSkillTools(server, policy, audit, skillStore);
   } else {
