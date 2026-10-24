@@ -14,6 +14,20 @@ interface Permit {
   readonly observationId:string;
   readonly automationId:string;
   readonly type:'edit'|'button'|'list';
+  readonly issuedAt:number;
+}
+// The HTTP adapter constructs a new McpServer for separate requests.
+// One public permit registry must follow the *trusted injected bridge* rather
+// than a transient tool-registration closure. Weak references prevent leaking
+// old bridge sessions after a Gateway-side teardown/restart.
+const ownedPermits = new WeakMap<object,Map<string,Permit>>();
+const PERMIT_TTL_MS = 30_000;
+function permitsFor(bridge:object):Map<string,Permit> {
+  let map=ownedPermits.get(bridge);
+  if(!map){map=new Map();ownedPermits.set(bridge,map);}
+  const cutoff=Date.now()-PERMIT_TTL_MS;
+  for(const [key,permit] of map)if(permit.issuedAt<cutoff)map.delete(key);
+  return map;
 }
 const id = z.string().uuid();
 const edit = z.object({
@@ -32,7 +46,8 @@ export function registerRealDesktop2OwnedControlTools(
   server:McpServer,policy:DesktopPolicy,audit:AuditLogger,
   bridge:Pick<RealDesktop2OwnedControl,'start'|'list'|'snapshot'|'perform'|'stop'>
 ):void {
-  const permits=new Map<string,Permit>();
+  // Stable across independent HTTP MCP RPC request-scoped server instances.
+  const permits=permitsFor(bridge);
   async function guarded(name:string,leaseId:string,fn:()=>Promise<unknown>) {
     let operation;
     try {
@@ -88,7 +103,7 @@ export function registerRealDesktop2OwnedControlTools(
         permits.set(controlId,{
           leaseId:agent_desktop_lease_id.toLowerCase(),windowId:window_id,
           observationId:observed.computer_observation_id,
-          automationId:control.automationId,type:kind
+          automationId:control.automationId,type:kind,issuedAt:Date.now()
         });
         return {control_id:controlId,control_type:control.controlType,
           class_name:control.className};
@@ -116,7 +131,8 @@ export function registerRealDesktop2OwnedControlTools(
         if(other.observationId===computer_observation_id)permits.delete(key);
       }
       permits.delete(control_id);
-      if(!permit || permit.leaseId!==agent_desktop_lease_id.toLowerCase()
+      if(!permit || Date.now()-permit.issuedAt>PERMIT_TTL_MS ||
+        permit.leaseId!==agent_desktop_lease_id.toLowerCase()
         ||permit.windowId!==window_id ||
         permit.observationId!==computer_observation_id ||
         (permit.type==='edit'&&action.type!=='set_native_edit') ||
