@@ -201,3 +201,46 @@ test('MCP-issued lease can be revoked by own WPF UIA Exit without global input o
   assert.match(node,/if\(await manager\.isLeaseActive\(lease\)\)await manager\.stopControl\(lease\)/);
   assert.doesNotMatch(wpf,/SendInput\(|SetForegroundWindow\(|GoToDesktopNumber\(/);
 });
+
+test('full candidate Gateway Full Control proof remains private and preserves the installed program',()=>{
+  const runner=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'full-control-runtime.ps1'),'utf8');
+  const client=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'full-control-client.mjs'),'utf8');
+  assert.match(runner,/DESKTOP_MCP_PROFILE='full-control'/);
+  assert.match(runner,/DESKTOP_MCP_ALLOWED_ROOTS/);
+  assert.match(runner,/DESKTOP_MCP_AUDIT_LOG/);
+  assert.match(runner,/FULL_CONTROL_GATEWAY_MCP_HUD_UIA_EXIT_PASS/);
+  assert.match(runner,/Get-FileHash/);
+  assert.match(runner,/productionControlUnchanged/);
+  assert.match(runner,/installedControlPanelUnchanged/);
+  assert.match(runner,/Get-NetTCPConnection/);
+  assert.match(runner,/dist\/src\/stop\.js/);
+  assert.match(runner,/wpfRealCoordinatorStarted/);
+  assert.match(runner,/wpfExitedCleanly/);
+  assert.match(client,/desktop_agent_desktop/);
+  assert.match(client,/control_panel_manual_exit/);
+  assert.match(client,/otherToolCallsMade:false/);
+  assert.match(client,/controlStoppedByNode:false/);
+  assert.doesNotMatch(runner,/Stop-Process -Name DeskMCP|GoToDesktopNumber\(|SwitchDesktop\(/);
+});
+test('exact installed rollback snapshot and isolated installer failure tests cannot overwrite production',()=>{
+  const recovery=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'prepare-exact-rollback.ps1'),'utf8');
+  const regression=readFileSync(path.join(PROJECT_ROOT,'test-area','ownerless-gateway-handoff',
+    'verify-isolated-installer-rollback.ps1'),'utf8');
+  assert.match(recovery,/RECOVERY_SNAPSHOT_ALREADY_EXISTS_REFUSE_OVERWRITE/);
+  assert.match(recovery,/Assert-Manifest/);
+  assert.match(recovery,/Get-FileHash/);
+  assert.match(recovery,/robocopy\.exe/);
+  assert.match(recovery,/fileNamesAndSizesEqual/);
+  assert.match(recovery,/snapshotManifestChecked/);
+  assert.match(regression,/--install-test-fail-after-backup/);
+  assert.match(regression,/--recover-test/);
+  assert.match(regression,/Simulated sudden power loss/);
+  assert.match(regression,/WindowStyle Hidden/);
+  assert.match(regression,/productionStateUnchanged/);
+  assert.match(regression,/productionProcessPreserved/);
+  assert.match(regression,/sourceReleaseIsNotCandidate/);
+  assert.doesNotMatch(regression,/--install-current-user|Stop-Process -Name DeskMCP/);
+});
