@@ -101,7 +101,7 @@ internal static class AgentDesktopCoordinatorIsolatedProbe
                 throw new InvalidOperationException("BOUNDED_COORDINATOR_PROBE_ARGS_REQUIRED");
             if(Environment.GetEnvironmentVariable("DESKTOP_MCP_INSTANCE_NAMESPACE")!="ownerless-isolated-smoke-20261024" ||
                 Environment.GetEnvironmentVariable("DESKTOP_MCP_DISABLE_TUNNEL")!="1" ||
-                Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT")!="1")
+                Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT")!=null)
                 throw new InvalidOperationException("ISOLATED_TEST_ENV_REQUIRED");
             string root=Path.GetFullPath(Environment.GetEnvironmentVariable("DESKTOP_MCP_DATA_ROOT")??"")
                 .TrimEnd(Path.DirectorySeparatorChar);

@@ -121,7 +121,7 @@ internal static class AgentDesktopOverlayIsolatedProbe
             if ((args.Length != 2 && !simulateExit && !uiaInvoke) || !Int32.TryParse(args[1],out requestedSeconds)
                 || requestedSeconds < 30 || requestedSeconds > 300)
                 throw new InvalidOperationException("EXACT_BOUNDED_OVERLAY_TEST_ARGS_REQUIRED");
-            if (Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT") != "1"
+            if (Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT") != null
                 || Environment.GetEnvironmentVariable("DESKTOP_MCP_DISABLE_TUNNEL") != "1"
                 || Environment.GetEnvironmentVariable("DESKTOP_MCP_INSTANCE_NAMESPACE") != "ownerless-isolated-smoke-20261024")
                 throw new InvalidOperationException("ISOLATED_ENVIRONMENT_REQUIRED");

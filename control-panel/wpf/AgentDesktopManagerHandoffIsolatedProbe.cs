@@ -69,7 +69,7 @@ internal static class AgentDesktopManagerHandoffIsolatedProbe
                 throw new InvalidOperationException("EXACT_BOUNDED_HANDOFF_ARGS_REQUIRED");
             if(Environment.GetEnvironmentVariable("DESKTOP_MCP_INSTANCE_NAMESPACE")!="ownerless-handoff-20261024" ||
                 Environment.GetEnvironmentVariable("DESKTOP_MCP_DISABLE_TUNNEL")!="1" ||
-                Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT")!="1")
+                Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT")!=null)
                 throw new InvalidOperationException("TEST_FLAGS_REQUIRED");
             string actual=Path.GetFullPath(Environment.GetEnvironmentVariable("DESKTOP_MCP_DATA_ROOT")??"")
                 .TrimEnd(Path.DirectorySeparatorChar);

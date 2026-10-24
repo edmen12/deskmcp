@@ -362,8 +362,8 @@ internal sealed class AgentDesktopOverlay : IDisposable
     private readonly Window edgeWindow;
     private readonly Window hudWindow;
     private readonly Action exitAction;
-    // Candidate-only opt-in: ownerless, taskbar-eligible top-level safety HWNDs.
-    // The default behavior is unchanged until explicitly enabled for staging.
+    // Shell-eligible, ownerless HUD and edge HWNDs are now the default.
+    // Retain strict per-HWND desktop identity checks and fail-closed revocation.
     private readonly bool ownerlessShellWindows;
     private bool shown;
     private bool disposed;
@@ -371,9 +371,7 @@ internal sealed class AgentDesktopOverlay : IDisposable
     public AgentDesktopOverlay(string taskLabel, Action onExit)
     {
         exitAction = onExit ?? throw new ArgumentNullException(nameof(onExit));
-        ownerlessShellWindows = String.Equals(
-            Environment.GetEnvironmentVariable("DESKTOP_MCP_AGENT_DESKTOP_OWNERLESS_SAFETY_WINDOWS_EXPERIMENT"),
-            "1", StringComparison.Ordinal);
+        ownerlessShellWindows = true;
         double left = SystemParameters.VirtualScreenLeft;
         double top = SystemParameters.VirtualScreenTop;
         double width = Math.Max(1, SystemParameters.VirtualScreenWidth);
