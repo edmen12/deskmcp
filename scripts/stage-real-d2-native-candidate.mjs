@@ -14,7 +14,8 @@ const pinnedBase='c2ad782290a7bad780764d34aa79add54863f944';
 const artifacts=[
  {name:'agent-desktop-host',rel:'agent-desktop-host',assembly:'DeskMCP.AgentDesktopHost'},
  {name:'desktop2-switch-observer',rel:'test-area/desktop2-switch-observer',assembly:'DeskMCP.Desktop2SwitchObserver'},
- {name:'desktop2-direct-uia',rel:'test-area/desktop2-direct-uia',assembly:'DeskMCP.Desktop2DirectUia'}
+ {name:'desktop2-direct-uia',rel:'test-area/desktop2-direct-uia',assembly:'DeskMCP.Desktop2DirectUia'},
+ {name:'job-owned-process-host',rel:'process-host',assembly:'DeskMCP.ProcessHost',runtimeSubdir:'win-x64'}
 ];
 function exec(file,args){
  const run=spawnSync(file,args,{cwd:repo,windowsHide:true,shell:false,
@@ -54,7 +55,8 @@ try {
   const project=path.join(repo,x.rel,x.assembly+'.csproj');
   assert.ok(fs.existsSync(project),'Source project missing '+project);
   exec(dotnet,['build',project,'--no-restore','-c','Release','--nologo','-v:q']);
-  const assemblyDir=path.join(path.dirname(project),'bin','Release','net10.0-windows');
+  const assemblyDir=path.join(path.dirname(project),'bin','Release','net10.0-windows',
+   ...(x.runtimeSubdir?[x.runtimeSubdir]:[]));
   const target=path.join(dest,x.name);
   fs.mkdirSync(target);
   const assets=[];
