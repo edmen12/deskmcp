@@ -28,7 +28,7 @@ Evidence:
 The complete machine-generated inventory is `licenses/production-node-packages.csv`. It records package name, version, resolved license expression, package-local license files, and its path inside the target release stage.
 
 Package/license counts for this stage:
-- MIT: 343
+- MIT: 342
 - ISC: 31
 - Apache-2.0: 10
 - BSD-3-Clause: 5
