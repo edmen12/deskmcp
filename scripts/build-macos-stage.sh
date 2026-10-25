@@ -94,10 +94,23 @@ file "$RESOURCES/tunnel-client/bin/tunnel-client" | grep -q 'arm64'
 "$RESOURCES/tunnel-client/bin/tunnel-client" --version
 cp -R dist "$RESOURCES/gateway/dist"
 cp package.json package-lock.json .npmrc "$RESOURCES/gateway/"
+# Stage the exact vendored production dependency before npm ci. The file:
+# dependency must exist inside the packaged gateway, not only in Git checkout.
+VENDOR_SOURCE="$PROJECT_ROOT/vendor/desktop-commander"
+STAGED_VENDOR="$RESOURCES/gateway/vendor/desktop-commander"
+mkdir -p "$STAGED_VENDOR"
+for file in package.json LICENSE DESKMCP_PATCH.md; do
+  [[ -f "$VENDOR_SOURCE/$file" ]] || { echo "Missing tracked vendor asset: $file" >&2; exit 2; }
+  cp "$VENDOR_SOURCE/$file" "$STAGED_VENDOR/$file"
+done
+[[ -f "$VENDOR_SOURCE/dist/index.js" ]] || { echo "Missing tracked Desktop Commander entrypoint" >&2; exit 2; }
+cp -R "$VENDOR_SOURCE/dist" "$STAGED_VENDOR/dist"
 pushd "$RESOURCES/gateway" >/dev/null
 npm_ci_with_audit_proof --omit=dev --ignore-scripts --os=darwin --cpu=arm64
 popd >/dev/null
 
+test -f "$RESOURCES/gateway/node_modules/@wonderwhy-er/desktop-commander/package.json"
+test -f "$RESOURCES/gateway/node_modules/@wonderwhy-er/desktop-commander/dist/index.js"
 test -f "$RESOURCES/gateway/node_modules/@img/sharp-darwin-arm64/package.json"
 test -f "$RESOURCES/gateway/node_modules/@vscode/ripgrep-darwin-arm64/package.json"
 test ! -e "$RESOURCES/gateway/node_modules/@img/sharp-darwin-x64"
