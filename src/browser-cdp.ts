@@ -154,6 +154,9 @@ export interface BrowserFindOptions {
 export interface BrowserCdpDriver {
   listPages(port: number, timeoutMs?: number): Promise<readonly BrowserPageSummary[]>;
   createPage(port: number, url?: string, timeoutMs?: number): Promise<string>;
+  /** Visible real D2 bootstrap: CDP Target.createTarget(background,focus:false).
+   * Optional because legacy/headless drivers MUST fail closed, not focus a new window. */
+  createPageWithoutFocus?(port: number, timeoutMs?: number): Promise<string>;
   selectPage(port: number, pageId: string, timeoutMs?: number): Promise<string>;
   closePage(port: number, pageId: string, timeoutMs?: number): Promise<void>;
   handleDialog(port: number, pageId: string | undefined, accept: boolean, promptText?: string, timeoutMs?: number): Promise<void>;

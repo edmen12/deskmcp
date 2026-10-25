@@ -29,9 +29,11 @@ test('real Chrome functional acceptance requires native foreground PID/HWND attr
  assert.match(runner,/requireSafeNativeGuiMemory\(\)/);
  assert.match(runner,/await agent\.stopControl\(lease\)/);
 });
-test('unsuccessful hidden launcher is reverted; generic Chrome native mover intentionally omits hidden HWND',()=>{
- assert.doesNotMatch(browser,/-WindowStyle Hidden' : ''/);
- assert.match(browser,/--start-minimized/);
- assert.match(browser,/REAL Win\+Tab Desktop2 visible Chrome remains source-only experimental/);
+test('real D2 browser source uses no-startup-window plus CDP nofocus and requires an independently started watcher',()=>{
+ assert.match(browser,/--no-startup-window/);
+ assert.match(browser,/const launchStyle = visibleDesktop2 \? ' -WindowStyle Hidden' : ''/);
+ assert.match(browser,/cdp\.createPageWithoutFocus/);
+ assert.match(browser,/Visible real Desktop2 requires a live independent Windows foreground\/desktop observer/);
+ assert.match(browser,/this\.visibleDesktop2Observer\.assertHealthy/);
  assert.match(mover,/if \(!IsWindowVisible\(hwnd\)\) return true/);
 });

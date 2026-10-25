@@ -585,6 +585,36 @@ export class PlaywrightBrowserDriver implements BrowserCdpDriver {
     return id;
   }
 
+  // Source-only REAL Win+Tab Desktop2 bootstrap. Unlike newPage(), this CDP
+  // command explicitly asks Chromium not to focus the FIRST browser window.
+  // Caller must verify the created HWND is owned and on real Desktop2 BEFORE
+  // any navigation, click or keyboard operation; protocol ack alone isn't safe.
+  async createPageWithoutFocus(port: number, timeoutMs = 5000): Promise<string> {
+    const timeout = boundedTimeout(timeoutMs, 5000);
+    const state = await this.state(port, timeout);
+    if ([...state.pages.values()].some(page => !page.isClosed())) {
+      throw new Error('No-focus initial target requires an empty dedicated Chrome profile.');
+    }
+    const session = await state.browser.newBrowserCDPSession();
+    try {
+      await session.send('Target.createTarget', {
+        url: 'about:blank', background: true, focus: false
+      });
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const ready = [...state.pages.entries()].find(([,page]) => !page.isClosed());
+      if (ready) {
+        state.activePageId = ready[0];
+        return ready[0];
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error('No-focus Chrome target did not publish a controllable page.');
+  }
+
   async selectPage(port: number, pageId: string, timeoutMs = 5000): Promise<string> {
     const state = await this.state(port, boundedTimeout(timeoutMs, 5000));
     return this.page(state, pageId).id;

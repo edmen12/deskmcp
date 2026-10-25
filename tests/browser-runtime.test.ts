@@ -122,6 +122,12 @@ class FakeCdpDriver implements BrowserCdpDriver {
   }];
 
   private nextPage = 2;
+  noFocusBootstrapCalls = 0;
+  async createPageWithoutFocus(port: number): Promise<string> {
+    assert.equal(port, 43210);
+    this.noFocusBootstrapCalls++;
+    return this.pages[0]!.page_id;
+  }
 
   async listPages(port: number): Promise<readonly BrowserPageSummary[]> {
     assert.equal(port, 43210);
@@ -1078,12 +1084,21 @@ test('opt-in visible Chrome is moved to owned Desktop2 before CDP input, and pop
   const lease='11111111-1111-4111-8111-111111111111';
   const agent={async assertLease(){return {binding:{desktopNumber:2,desktopId:'22222222-2222-4222-8222-222222222222'}};},
     async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
-  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,cdp,exe,agent,30000,true);
+  const noWatcher=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,cdp,exe,agent,30000,true);
+  await noWatcher.init();
+  await assert.rejects(noWatcher.start({agent_desktop_lease_id:lease,headless:false,profile_id:'missing-watcher'}),/live independent Windows foreground\/desktop observer/);
+  assert.equal(controller.starts.length,0,'missing watcher must reject BEFORE Chrome process launch');
+  await noWatcher.closeAll();
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,cdp,exe,agent,30000,true,{async assertHealthy(){return {} as never;}});
   await browser.init();
   const started=await browser.start({agent_desktop_lease_id:lease,headless:false,url:'https://example.com/',profile_id:'visible-agent'});
   assert.equal(started.headless,false);
   assert.equal(controller.launchModes[0],'visible-desktop2');
   assert.doesNotMatch(controller.starts[0]! ,/--headless=new/);
+  assert.match(controller.starts[0]!,/--no-startup-window/);
+  assert.doesNotMatch(controller.starts[0]!,/--start-minimized/);
+  assert.match(controller.starts[0]!,/-WindowStyle Hidden/);
+  assert.equal(cdp.noFocusBootstrapCalls,1,'must create first Chrome GUI using CDP focus:false');
   assert.equal(controller.placements.length,2,'placement must precede and follow first page navigation');
   assert.ok(controller.placements.every(p=>p.requirePrivateWindow));
   assert.equal(cdp.actions[0]?.[0]?.type,'goto');
@@ -1109,7 +1124,7 @@ test('visible Chrome placement failure tears down only the owned browser and doe
   const lease='11111111-1111-4111-8111-111111111111';
   const agent={async assertLease(){return {binding:{desktopNumber:2,desktopId:'22222222-2222-4222-8222-222222222222'}};},
     async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
-  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent,30000,true);
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent,30000,true,{async assertHealthy(){return {} as never;}});
   await browser.init();
   await assert.rejects(browser.start({agent_desktop_lease_id:lease,headless:false,profile_id:'fail-closed'}),/PINNED_SHARED_WINDOW_DESKTOP1/);
   assert.equal(controller.launchModes[0],'visible-desktop2');
@@ -1134,7 +1149,7 @@ test('slow visible Desktop2 reaper cannot starve an explicit browser close behin
   const lease='11111111-1111-4111-8111-111111111111';
   const agent={async assertLease(){return {binding:{desktopNumber:2}};},
     async isLeaseActive(){return true;}} as unknown as AgentDesktopManager;
-  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent,30000,true);
+  const browser=new BrowserRuntime(path.join(root,'browser'),controller,artifacts,new FakeCdpDriver(),exe,agent,30000,true,{async assertHealthy(){return {} as never;}});
   await browser.init();
   const started=await browser.start({headless:false,agent_desktop_lease_id:lease,profile_id:'reaper-fairness'});
   assert.equal(started.headless,false);

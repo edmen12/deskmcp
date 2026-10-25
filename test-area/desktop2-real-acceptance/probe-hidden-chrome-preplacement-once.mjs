@@ -21,7 +21,9 @@ const watcherExe=path.join(root,'test-area','desktop2-switch-observer','bin','Re
 const vda=path.join(main,'runtime','agent-desktop-runtime','win-x64','virtual-desktop-accessor','VirtualDesktopAccessor.dll');
 const chrome='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const hiddenTarget=process.argv[2]==='PROBE_OWNED_CHROME_CDP_HIDDEN_TARGET_ONCE';
-const noStartup=hiddenTarget||process.argv[2]==='PROBE_OWNED_CHROME_NO_STARTUP_WINDOW_ONCE';
+const noFocusTarget=process.argv[2]==='PROBE_OWNED_CHROME_CDP_NOFOCUS_TARGET_ONCE';
+const moveNoFocusTarget=process.argv[2]==='PROBE_OWNED_CHROME_CDP_NOFOCUS_MOVE_D2_ONCE';
+const noStartup=hiddenTarget||noFocusTarget||moveNoFocusTarget||process.argv[2]==='PROBE_OWNED_CHROME_NO_STARTUP_WINDOW_ONCE';
 if(process.platform!=='win32'||process.argv.length!==3||
  (!noStartup&&process.argv[2]!=='PROBE_OWNED_HIDDEN_CHROME_HWND_ONCE'))
  throw Error('EXPLICIT_HIDDEN_CHROME_CENSUS_SENTINEL_REQUIRED');
@@ -37,11 +39,11 @@ const observer=new Desktop2ObserverLifecycle(manager,native,watcherExe,vda);
 const base=await mkdtemp(path.join(os.tmpdir(),'deskmcp-hidden-chrome-window-census-'));
 const profile=path.join(base,'profile');
 const evidence=path.join(root,'test-area','desktop2-real-acceptance','runs',
- (hiddenTarget?'chrome-cdp-hidden-target-':noStartup?'chrome-no-startup-window-':'hidden-chrome-census-')+new Date().toISOString().replace(/[:.]/gu,'-'));
+ (moveNoFocusTarget?'chrome-cdp-nofocus-move-d2-':noFocusTarget?'chrome-cdp-nofocus-target-':hiddenTarget?'chrome-cdp-hidden-target-':noStartup?'chrome-no-startup-window-':'hidden-chrome-census-')+new Date().toISOString().replace(/[:.]/gu,'-'));
 await mkdir(profile,{recursive:true});await mkdir(evidence,{recursive:true});
 let lease,watch,bridge,controller,processSession,ownedPid;
-const state={stage:hiddenTarget?'Chrome no-startup CDP hidden-target creation probe':noStartup?'Chrome --no-startup-window (read-only process and HWND census)':'pre-placement read-only Chrome HWND census',pass:false,
- before:null,after:null,probed:false,probeWindows:[],cdpHiddenTargetCreated:false,afterCdpWindows:[],chromeForegroundEvents:[],
+const state={stage:moveNoFocusTarget?'Chrome no-focus real Desktop2 move + CDP app-effects E2E':noFocusTarget?'CDP create page without focus (source-only observed probe)':hiddenTarget?'Chrome no-startup CDP hidden-target creation probe':noStartup?'Chrome --no-startup-window (read-only process and HWND census)':'pre-placement read-only Chrome HWND census',pass:false,
+ before:null,after:null,probed:false,probeWindows:[],cdpHiddenTargetCreated:false,afterCdpWindows:[],movedRealDesktop2:false,appEffectsVerified:false,chromeForegroundEvents:[],
  observerExit:false,leaseHeldThroughTeardown:false,ownedJobStopped:false,tripwire:false,
  errors:[],watcherLog:null};
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -107,7 +109,7 @@ try{
   if((await native.info()).currentDesktopNumber!==1)throw Error('OWNER_D1_CHANGED');
   await delay(400);
  }
- if(hiddenTarget){
+ if(hiddenTarget||noFocusTarget||moveNoFocusTarget){
   await observer.assertHealthy(lease);
   const portFile=path.join(profile,'DevToolsActivePort');
   if(!fs.existsSync(portFile))throw Error('NO_STARTUP_CHROME_NO_DEVTOOLS_PORT');
@@ -117,13 +119,69 @@ try{
   const browser=await chromium.connectOverCDP('http://127.0.0.1:'+port,{timeout:9000});
   try{
    const cdp=await browser.newBrowserCDPSession();
-   await cdp.send('Target.createTarget',{url:'about:blank',background:true,hidden:true});
+   const targetOptions=(noFocusTarget||moveNoFocusTarget)?
+     {url:'about:blank',background:true,focus:false}:
+     {url:'about:blank',background:true,hidden:true};
+   await cdp.send('Target.createTarget',targetOptions);
    state.cdpHiddenTargetCreated=true;
    await delay(500);
    await observer.assertHealthy(lease);
    const after=census(ownedPid.pid,ownedPid.startedUtc);
    state.afterCdpWindows=after.windows.filter(x=>x.className.startsWith('Chrome_WidgetWin_'));
-   console.log('AFTER_CDP_HIDDEN_TARGET='+JSON.stringify(state.afterCdpWindows));
+   console.log('AFTER_CDP_TARGET='+JSON.stringify(state.afterCdpWindows));
+   if(moveNoFocusTarget){
+    // This is a dedicated OWNED Chrome process, not the user's normal Chrome.
+    const roots=state.afterCdpWindows.filter(x=>x.className==='Chrome_WidgetWin_1'
+      &&x.root&&x.visible&&!x.foreground&&x.desktopNumber===1&&x.desktopId);
+    if(roots.length!==1)throw Error('REAL_CHROME_D1_NOFOCUS_ROOT_NOT_UNIQUE');
+    const target=roots[0];
+    const priorEvents=(await readFile(watch.eventLog,'utf8')).split(/\r?\n/u).filter(Boolean)
+      .flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
+    if(priorEvents.some(e=>e.kind==='FOREGROUND_CHANGED'
+       &&(e.processId===ownedPid.pid||e.hwnd===target.hwnd)))
+      throw Error('CHROME_STOLE_FOREGROUND_BEFORE_D2_MOVE');
+    await observer.assertHealthy(lease);
+    const authority=await manager.assertLease(lease);
+    if(!authority.control.active||authority.control.desktopNumber!==2)
+      throw Error('EXACT_D2_LEASE_NOT_ACTIVE');
+    const beforeWindow=await native.windowInfo(target.hwnd);
+    if(beforeWindow.desktopNumber!==1||beforeWindow.onCurrentDesktop!==true)
+      throw Error('BEFORE_MOVE_NOT_REAL_D1_WINDOW');
+    const moved=await native.moveWindow(target.hwnd,authority.binding.desktopId);
+    await observer.assertHealthy(lease);
+    const afterWindow=await native.windowInfo(target.hwnd);
+    const movedCensus=census(ownedPid.pid,ownedPid.startedUtc);
+    const exact=movedCensus.windows.find(x=>x.hwnd===target.hwnd
+      &&x.processId===ownedPid.pid&&x.className==='Chrome_WidgetWin_1');
+    if(!exact||exact.desktopNumber!==2||exact.desktopId!==authority.binding.desktopId
+       ||exact.foreground||!exact.visible
+       ||afterWindow.desktopNumber!==2||afterWindow.onCurrentDesktop!==false)
+      throw Error('TRUE_VIRTUAL_D2_EXACT_CHROME_MOVE_NOT_VERIFIED');
+    state.movedRealDesktop2=true;
+    console.log('TRUE_CHROME_D2_WINDOW_VERIFIED='+JSON.stringify({
+      hwnd:target.hwnd,desktopNumber:afterWindow.desktopNumber,
+      onCurrentDesktop:afterWindow.onCurrentDesktop}));
+    // Browser DOM actions operate through CDP, not Windows global input.
+    const pages=browser.contexts()[0].pages();
+    if(pages.length!==1)throw Error('UNIQUE_CDP_PAGE_REQUIRED');
+    const page=pages[0];
+    await observer.assertHealthy(lease);
+    await page.setContent('<input id="entry" oninput="document.querySelector(\'#echo\').textContent=\'FIELD:\'+this.value"><div id="echo">EMPTY</div><button id="send" onclick="document.querySelector(\'#result\').textContent=\'CLICKED:\'+document.querySelector(\'#entry\').value">Submit</button><div id="result">PENDING</div>');
+    await page.locator('#entry').fill('TRUE_D2_FOCUS_SAFE_中文');
+    const echoed=await page.locator('#echo').textContent();
+    if(echoed!=='FIELD:TRUE_D2_FOCUS_SAFE_中文')
+      throw Error('CDP_REAL_INPUT_EVENT_READBACK_MISSING');
+    await page.locator('#send').click();
+    const clicked=await page.locator('#result').textContent();
+    if(clicked!=='CLICKED:TRUE_D2_FOCUS_SAFE_中文')
+      throw Error('CDP_REAL_CLICK_CALLBACK_MISSING');
+    await observer.assertHealthy(lease);
+    const afterAction=await native.windowInfo(target.hwnd);
+    if(afterAction.desktopNumber!==2||afterAction.onCurrentDesktop!==false)
+      throw Error('GUI_ESCAPED_TRUE_DESKTOP2_DURING_ACTION');
+    state.appEffectsVerified=true;
+    console.log('TRUE_D2_CDP_APP_EFFECTS='+JSON.stringify({echoed,clicked}));
+   }
   }finally{await browser.close().catch(()=>undefined);}
  }
  state.pass=true; // Census success ONLY, never zero-focus/movable.
@@ -161,7 +219,9 @@ try{
  await rm(base,{recursive:true,force:true,maxRetries:5,retryDelay:150}).catch(e=>
   state.errors.push('PROFILE_REMOVE:'+String(e)));
  state.pass=state.pass&&state.probed&&state.after===1&&state.observerExit&&
-  state.ownedJobStopped&&state.leaseHeldThroughTeardown&&!state.tripwire&&state.errors.length===0;
+   state.ownedJobStopped&&state.leaseHeldThroughTeardown&&!state.tripwire&&state.errors.length===0&&
+  (!(noFocusTarget||moveNoFocusTarget)||state.chromeForegroundEvents.length===0)&&
+  (!moveNoFocusTarget||(state.movedRealDesktop2&&state.appEffectsVerified));
  await writeFile(path.join(evidence,'result.json'),JSON.stringify(state,null,2));
  console.log('HIDDEN_CHROME_CENSUS_FINAL='+JSON.stringify({...state,evidence}));
 }

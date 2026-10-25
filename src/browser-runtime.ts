@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { Desktop2ObserverLifecycle } from './desktop2-observer-lifecycle.js';
 import type { ArtifactInfo, ArtifactStore } from './artifact-store.js';
 import {
   ChromeCdpDriver,
@@ -209,7 +210,8 @@ function browserLaunchCommand(
   profileDir: string,
   headless: boolean,
   viewport: { width: number; height: number },
-  agentDesktop: boolean
+  agentDesktop: boolean,
+  visibleDesktop2 = false
 ): string {
   const args = [
     '--remote-debugging-address=127.0.0.1',
@@ -222,18 +224,19 @@ function browserLaunchCommand(
     '--disable-sync',
     '--metrics-recording-only',
     `--window-size=${viewport.width},${viewport.height}`,
-    ...(agentDesktop ? ['--do-not-de-elevate', '--start-minimized'] : []),
+    ...(agentDesktop ? (visibleDesktop2
+      ? ['--do-not-de-elevate', '--no-startup-window']
+      : ['--do-not-de-elevate', '--start-minimized']) : []),
     ...(headless ? ['--headless=new'] : []),
-    'about:blank'
+    ...(!visibleDesktop2 ? ['about:blank'] : [])
   ];
   const processArgs = args.map(value => psSingleQuoted(`"${value}"`)).join(',');
-  // REAL Win+Tab Desktop2 visible Chrome remains source-only experimental:
-  // 2026-10-10 passive WinEvent attributed actual Desktop1 foreground theft
-  // to its Chrome window during startup, despite --start-minimized. An
-  // experimental Start-Process -WindowStyle Hidden prevented this native
-  // process-tree mover from finding a stable *visible* HWND (and was reverted).
-  // Do not promote this launcher as zero-interference before safer bootstrap.
-  return `$browserArgs = @(${processArgs}); $browserProcess = Start-Process -FilePath ${psSingleQuoted(executable)} -ArgumentList $browserArgs -PassThru; $browserProcess.WaitForExit(); exit $browserProcess.ExitCode`;
+  // Observed 2026-10-10: no-startup-window + CDP Target.createTarget with
+  // background:true,focus:false avoids the first Chrome foreground theft.
+  // Browser placement and a live foreground observer are still independent
+  // requirements for proving zero interference; staged path OFF by default.
+  const launchStyle = visibleDesktop2 ? ' -WindowStyle Hidden' : '';
+  return `$browserArgs = @(${processArgs}); $browserProcess = Start-Process -FilePath ${psSingleQuoted(executable)} -ArgumentList $browserArgs${launchStyle} -PassThru; $browserProcess.WaitForExit(); exit $browserProcess.ExitCode`;
 }
 
 function validateSessionId(value: string): string {
@@ -426,7 +429,8 @@ export class BrowserRuntime {
     private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
     private readonly agentDesktop?: AgentDesktopManager,
     private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
-    private readonly enableVisibleDesktop2 = process.env.DESKTOP_MCP_DESKTOP2_VISIBLE_BROWSER_EXPERIMENT === '1'
+    private readonly enableVisibleDesktop2 = process.env.DESKTOP_MCP_DESKTOP2_VISIBLE_BROWSER_EXPERIMENT === '1',
+    private readonly visibleDesktop2Observer?: Pick<Desktop2ObserverLifecycle, 'assertHealthy'>
   ) {
     if (cdp) {
       this.cdp = cdp;
@@ -665,6 +669,12 @@ export class BrowserRuntime {
       throw new Error('Agent Desktop browser lease revoked: browser must close instead of escaping isolation.');
     }
     await this.agentDesktop.assertLease(leaseId);
+    if (record.visibleDesktop2) {
+      if (!this.visibleDesktop2Observer) {
+        throw new Error('Real Desktop2 live foreground observer disappeared.');
+      }
+      await this.visibleDesktop2Observer.assertHealthy(leaseId);
+    }
     if (record.visibleDesktop2 && reconcileWindows) {
       const placed = await this.processController.place(
         record.processSessionId,
@@ -674,6 +684,7 @@ export class BrowserRuntime {
         true
       );
       if (placed.windows < 1) throw new Error('No private real Desktop2 Chrome window remains.');
+      await this.visibleDesktop2Observer!.assertHealthy(leaseId);
       await this.agentDesktop.assertLease(leaseId);
     }
   }
@@ -766,6 +777,12 @@ export class BrowserRuntime {
       if (visibleDesktop2 && !this.enableVisibleDesktop2) {
         throw new Error('Visible Agent Desktop browser is unavailable by default: real Desktop 2 Chrome is experimental. Set DESKTOP_MCP_DESKTOP2_VISIBLE_BROWSER_EXPERIMENT=1 only on a staged candidate.');
       }
+      if (visibleDesktop2) {
+        if (!this.visibleDesktop2Observer) {
+          throw new Error('Visible real Desktop2 requires a live independent Windows foreground/desktop observer BEFORE Chrome launch.');
+        }
+        await this.visibleDesktop2Observer.assertHealthy(agentDesktopLeaseId!);
+      }
       const headless = !visibleDesktop2 && (agentDesktop || options.headless !== false);
       const sessionId = randomUUID();
       const profileDir = path.join(this.root, 'profiles', profile.id);
@@ -777,7 +794,7 @@ export class BrowserRuntime {
       let processSessionId: string | undefined;
       try {
         processSessionId = await this.processController.start(
-          browserLaunchCommand(executable, profileDir, headless, viewport, agentDesktop),
+          browserLaunchCommand(executable, profileDir, headless, viewport, agentDesktop, visibleDesktop2),
           agentDesktopLeaseId,
           visibleDesktop2 ? 'visible-desktop2' : 'isolated-object'
         );
@@ -795,6 +812,16 @@ export class BrowserRuntime {
         if (agentDesktopLeaseId) await this.agentDesktop!.assertLease(agentDesktopLeaseId);
         const readinessTimeout = Math.max(1, readinessDeadline - Date.now());
         const cdp = await this.driver();
+        if (visibleDesktop2) {
+          if (!cdp.createPageWithoutFocus) {
+            throw new Error('Real Desktop2 visible Chrome requires a verified no-focus CDP bootstrap driver.');
+          }
+          // Chrome starts with --no-startup-window and NO foreground GUI.
+          // First createTarget uses focus:false; native VDA placement below
+          // must succeed before the first URL navigation or other input.
+          await cdp.createPageWithoutFocus(port, Math.max(1000,Math.min(readinessTimeout,12000)));
+          await this.agentDesktop!.assertLease(agentDesktopLeaseId!);
+        }
         const pages = await waitForCdpPages(cdp, port, readinessTimeout);
         const first = pages[0]!;
         if (visibleDesktop2) {

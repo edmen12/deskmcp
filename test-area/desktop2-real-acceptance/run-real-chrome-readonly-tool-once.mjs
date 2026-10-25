@@ -74,7 +74,7 @@ try{
  bridge=new DesktopBackendBridge();
  runtime=new BrowserRuntime(path.join(temp,'browser'),
    new OwnedBrowserProcessController(bridge,new ProcessSessionRegistry(),agent),
-   artifacts,undefined,chrome,agent,30000,true);
+   artifacts,undefined,chrome,agent,30000,true,observer);
  await runtime.init();
  const b=await runtime.start({agent_desktop_lease_id:lease,headless:false,
    url:'http://127.0.0.1:'+http.address().port+'/',timeout_ms:25000});

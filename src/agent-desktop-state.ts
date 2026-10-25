@@ -563,7 +563,11 @@ export class AgentDesktopManager {
     const { binding } = await this.assertLease(leaseId);
     const moved = await this.native.moveProcessTreeWindows(processId, binding.desktopId, {
       timeoutMs: options.timeoutMs ?? 15000,
-      showNoActivate: true
+      // The new real Win+Tab D2 CDP focus:false bootstrap creates an already
+      // VISIBLE Chrome_WidgetWin_1. Calling ShowWindow again is unnecessary
+      // and may reactivate it; only move and verify exact real D2 membership.
+      // Leave the original no-activate show for other legacy placements.
+      showNoActivate: !options.requirePrivateWindow
     });
     if (moved.windows.length < 1) {
       throw new Error('Agent Desktop process-tree placement found no stable top-level window in the owned process tree.');
