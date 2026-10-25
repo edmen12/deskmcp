@@ -272,6 +272,15 @@ internal static partial class Program
                 "move-process" => MoveProcess(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "move-process-tree" => MoveProcessTree(ParsePositiveInt(Required(options, "pid"), "pid"), ParseDesktopId(Required(options, "desktop-id")), ParseTimeout(options), options.ContainsKey("restore"), options.ContainsKey("show-no-activate"), vda),
                 "object-windows" => ObjectWindows(ParseDesktopObjectName(Required(options, "desktop-object"))),
+                "object-controls" => ObjectUi.Inspect(
+                    ParseDesktopObjectName(Required(options, "desktop-object")),
+                    ParseHwnd(Required(options, "hwnd"))),
+                "object-act" => ObjectUi.Act(
+                    ParseDesktopObjectName(Required(options, "desktop-object")),
+                    ParseHwnd(Required(options, "hwnd")),
+                    Required(options, "action"),
+                    Required(options, "selector"),
+                    options.GetValueOrDefault("value64")),
                 "self-test" => SelfTest(vda),
                 _ => throw new ArgumentException("Unsupported Agent Desktop host command.")
             };
@@ -563,7 +572,11 @@ internal static partial class Program
             List<object> windows = new();
             bool enumerated = EnumDesktopWindows(desktop, (hwnd, _) =>
             {
-                if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) return true;
+                // Windows on a non-input Win32 desktop often report IsWindowVisible=false,
+                // even while the app is ShowDialog-visible on that isolated desktop.
+                // EnumDesktopWindows already restricts HWNDs to this owned object.
+                // UI capabilities are filtered separately by size/title and revalidated.
+                if (!IsWindow(hwnd)) return true;
                 GetWindowThreadProcessId(hwnd, out uint processId);
                 if (processId == 0 || processId > Int32.MaxValue) return true;
 

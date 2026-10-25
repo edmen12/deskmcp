@@ -9,6 +9,7 @@ import type { RealDesktop2OwnedControl } from './desktop2-real-owned-control.js'
 import type { ArtifactStore } from './artifact-store.js';
 import { registerArtifactTools } from './artifact-tools.js';
 import type { BrowserRuntime } from './browser-runtime.js';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import { registerBrowserTools } from './browser-tools.js';
 import { registerDesktopBackendBridgeTools } from './bridge-tools.js';
 import { registerComputerUseTools } from './computer-use-tools.js';
@@ -44,7 +45,8 @@ export function createDesktopMcpServer(
   agentDesktop?: AgentDesktopManager,
   // An internally injected, independently attested owned-launch bridge ONLY.
   // index.ts intentionally does not supply it in the standard Gateway.
-  realD2Owned?: RealDesktop2OwnedControl
+  realD2Owned?: RealDesktop2OwnedControl,
+  crossToolGuard?: BrowserCrossToolGuard
 ): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
@@ -52,13 +54,13 @@ export function createDesktopMcpServer(
     if (!policy || !audit || !observations || !processSessions || !computerUse) {
       throw new Error('Desktop policy, audit logger, observation store, process registry, and computer-use runtime are required.');
     }
-    registerDesktopBackendBridgeTools(server, bridge, policy, audit, observations);
-    registerProcessTools(server, bridge, policy, audit, processSessions, agentDesktop);
-    registerComputerUseTools(server, policy, audit, computerUse, agentDesktop);
-    if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop);
-    if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
-    if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
-    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore);
+    registerDesktopBackendBridgeTools(server, bridge, policy, audit, observations, crossToolGuard);
+    registerProcessTools(server, bridge, policy, audit, processSessions, agentDesktop, crossToolGuard);
+    registerComputerUseTools(server, policy, audit, computerUse, agentDesktop, crossToolGuard);
+    if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop, crossToolGuard);
+    if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore, crossToolGuard);
+    if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub, crossToolGuard);
+    if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore, crossToolGuard);
     // Explicit staged opt-in only. Never grant private-object window IDs or
     // register an unverified real D2 input/mutation endpoint.
     if (agentDesktop && process.env.DESKTOP_MCP_REAL_D2_INVENTORY_EXPERIMENT === '1') {
@@ -73,7 +75,7 @@ export function createDesktopMcpServer(
       registerRealDesktop2OwnedControlTools(server, policy, audit, realD2Owned);
     }
     if (browser) registerBrowserTools(server, policy, audit, browser);
-    if (skillStore) registerSkillTools(server, policy, audit, skillStore);
+    if (skillStore) registerSkillTools(server, policy, audit, skillStore, crossToolGuard);
   } else {
     registerTestTools(server);
   }

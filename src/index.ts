@@ -3,6 +3,7 @@ import { AuditLogger } from './audit.js';
 import { AgentDesktopManager } from './agent-desktop-state.js';
 import { ArtifactStore } from './artifact-store.js';
 import { BrowserRuntime, OwnedBrowserProcessController } from './browser-runtime.js';
+import { createBrowserHandoffProcessPreflight } from './browser-process-handoff-preflight.js';
 import {
   startControlServer,
   type RunningControlServer
@@ -55,7 +56,10 @@ const browser = new BrowserRuntime(
   artifactStore,
   undefined,
   undefined,
-  agentDesktop
+  agentDesktop,
+  undefined,
+  undefined,
+  createBrowserHandoffProcessPreflight(bridge, processSessions)
 );
 await browser.init();
 

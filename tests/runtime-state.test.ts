@@ -216,3 +216,21 @@ test('independent ObservationStore instances cannot concurrently create and over
     await rm(lockRoot, { recursive: true, force: true });
   }
 });
+
+test('process capacity counts actual active and reserved without age-based auto-expiry', () => {
+  const sessions = new ProcessSessionRegistry(2);
+  const first = sessions.register(101);
+  const second = sessions.register(102);
+  assert.equal(sessions.capacityStatus().available, 0);
+  assert.equal(sessions.capacityStatus().active, 2);
+  assert.equal(sessions.capacityStatus(Date.now() + 48 * 3600000).activeOverDay, 2);
+  assert.equal(sessions.capacityStatus(Date.now() + 48 * 3600000).available, 0);
+  assert.throws(() => sessions.reserveStart(), /limit reached/i);
+  sessions.markInactive(first);
+  assert.equal(sessions.capacityStatus().available, 1);
+  assert.equal(sessions.capacityStatus().completedRetained, 1);
+  sessions.reconcileActivePids([101, 102]); // stale listing must not revive finished capability
+  assert.equal(sessions.isActive(first), false);
+  assert.equal(sessions.isActive(second), true);
+  assert.equal(sessions.capacityStatus().active, 1);
+});

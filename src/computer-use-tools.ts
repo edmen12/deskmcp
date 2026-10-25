@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
 import type { ComputerWindow, UiAction, UiElementSummary } from './computer-use-backend.js';
 import type { ComputerUseRuntime } from './computer-use-runtime.js';
@@ -47,12 +48,13 @@ function publicWindow(window: ComputerWindow, windowId: string) {
   };
 }
 
-async function auditedComputerCall<T>(
+async function auditedComputerCallWithGuard<T>(
   audit: AuditLogger,
   policy: DesktopPolicy,
   tool: string,
   target: string | undefined,
-  action: () => Promise<T>
+  action: () => Promise<T>,
+  crossToolGuard?: BrowserCrossToolGuard
 ): Promise<T | ReturnType<typeof failure>> {
   let operation;
   try {
@@ -62,7 +64,10 @@ async function auditedComputerCall<T>(
   }
   try {
     policy.assertCanUseComputer();
-    const result = await action();
+    const result = crossToolGuard
+      ? await crossToolGuard.runNonBrowserOperation(tool, action)
+      : await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     try { await audit.finish(operation, 'allow'); }
     catch (error) {
       // The action already returned before audit persistence failed. Failure
@@ -548,8 +553,12 @@ export function registerComputerUseTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   runtime: ComputerUseRuntime,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
+  const auditedComputerCall = <T>(audit:AuditLogger,policy:DesktopPolicy,tool:string,
+    target:string|undefined,action:()=>Promise<T>) =>
+    auditedComputerCallWithGuard(audit,policy,tool,target,action,crossToolGuard);
   // Separate opaque capability namespace: object-window IDs cannot resolve
   // through runtime.windows in desktop_ui_action. These are READ-ONLY tokens.
   const win32ObjectWindowsByLease = new Map<string, ComputerWindowRegistry>();

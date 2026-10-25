@@ -7,23 +7,28 @@ interface WindowRecord {
   readonly processId: number;
   readonly processName: string;
   readonly className?: string;
+  /** Win32 Desktop Object scope; ordinary desktop windows omit it. */
+  readonly desktopObjectName?: string;
   lastSeenAt: number;
 }
 
 const WINDOW_TTL_MS = 5 * 60 * 1000;
 const MAX_WINDOW_RECORDS = 256;
 
-function identity(window: Pick<ComputerWindow, 'hwnd' | 'processId' | 'processName' | 'className'>): string {
-  return `${window.hwnd}:${window.processId}:${window.processName}:${window.className ?? ''}`;
+function identity(
+  window: Pick<ComputerWindow, 'hwnd' | 'processId' | 'processName' | 'className'>,
+  desktopObjectName?: string
+): string {
+  return [desktopObjectName ?? 'user',window.hwnd,window.processId,window.processName,window.className ?? ''].join(':');
 }
 
 export class ComputerWindowRegistry {
   private readonly byId = new Map<string, WindowRecord>();
   private readonly byIdentity = new Map<string, string>();
 
-  issue(window: ComputerWindow): string {
+  issue(window: ComputerWindow, desktopObjectName?: string): string {
     this.prune();
-    const key = identity(window);
+    const key = identity(window, desktopObjectName);
     const existingId = this.byIdentity.get(key);
     if (existingId) {
       const existing = this.byId.get(existingId);
@@ -39,6 +44,7 @@ export class ComputerWindowRegistry {
       processId: window.processId,
       processName: window.processName,
       ...(window.className ? { className: window.className } : {}),
+      ...(desktopObjectName ? { desktopObjectName } : {}),
       lastSeenAt: Date.now()
     };
     this.byId.set(record.id, record);
@@ -47,10 +53,20 @@ export class ComputerWindowRegistry {
     return record.id;
   }
 
-  resolve(windowId: string, liveWindows: readonly ComputerWindow[]): ComputerWindow {
+  scope(windowId: string): string | undefined {
+    this.prune();
+    const row = this.byId.get(windowId);
+    if (!row) throw new Error('Computer window capability is stale or unknown. Refresh desktop_ui_windows.');
+    return row.desktopObjectName;
+  }
+
+  resolve(windowId: string, liveWindows: readonly ComputerWindow[], desktopObjectName?: string): ComputerWindow {
     this.prune();
     const record = this.byId.get(windowId);
     if (!record) throw new Error('Computer window capability is stale or unknown. Refresh desktop_ui_windows or desktop_ui_snapshot.');
+    if (record.desktopObjectName !== desktopObjectName) {
+      throw new Error('Computer window capability belongs to another Win32 Desktop Object.');
+    }
     const live = liveWindows.find(window => (
       window.hwnd === record.hwnd &&
       window.processId === record.processId &&
@@ -67,7 +83,7 @@ export class ComputerWindowRegistry {
 
   private revoke(record: WindowRecord): void {
     this.byId.delete(record.id);
-    this.byIdentity.delete(identity(record));
+    this.byIdentity.delete(identity(record, record.desktopObjectName));
   }
 
   private prune(): void {

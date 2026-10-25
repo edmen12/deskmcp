@@ -11,6 +11,8 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { BrowserHandoffAgentPort, BrowserHandoffRuntimePort } from './browser-handoff-boundary.js';
+import { createBrowserCrossToolGuard, type BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import type { ArtifactInfo, ArtifactStore } from './artifact-store.js';
 import {
   ChromeCdpDriver,
@@ -49,6 +51,7 @@ const MAX_START_TIMEOUT_MS = 60000;
 const SCREENSHOT_RETENTION_SECONDS = 60 * 60;
 const BROWSER_OBSERVATION_TTL_MS = 30_000;
 const MAX_BROWSER_OBSERVATIONS = 1024;
+const MAX_PENDING_BROWSER_SESSION_OPERATIONS = 32;
 const PROFILE_LOCK_INITIALIZATION_GRACE_MS = 5_000;
 const PROFILE_LOCK_TIMEOUT_MS = 250;
 const MAX_PERSISTENT_PROFILES = 32;
@@ -135,6 +138,72 @@ export interface BrowserSnapshotResult extends Omit<BrowserSnapshotData, 'png' |
 export interface BrowserFindResult extends Omit<BrowserFindData, 'state_token'> {
   readonly session_id: string;
   readonly browser_observation_id: string;
+}
+
+/** Experimental, not exposed as an MCP tool until safety/audit review. */
+export type BrowserGuardedWorkflowAction = Extract<BrowserAction, { readonly type: 'click' | 'fill' | 'select' | 'set_checked' }>;
+
+export interface BrowserGuardedWorkflowStep {
+  readonly action: BrowserGuardedWorkflowAction;
+  /** Exact URL observed immediately before this step. No wildcard origins or paths. */
+  readonly expected_url: string;
+  /** Optional additional visible page text, verified against each fresh snapshot. */
+  readonly expected_text?: string;
+  /** Optional positive page text verification after this step is dispatched. */
+  readonly after_text?: string;
+}
+
+export interface BrowserGuardedWorkflowResult {
+  readonly completed_steps: number;
+  readonly final_snapshot: BrowserSnapshotResult;
+}
+
+export class BrowserWorkflowInterrupted extends Error {
+  constructor(
+    readonly step_index: number,
+    readonly completed_steps: number,
+    readonly dispatch_uncertain: boolean,
+    reason: string
+  ) {
+    super('Browser guarded workflow stopped at step ' + (step_index + 1) + ': ' + reason + '. Never automatically replay this workflow.');
+    this.name = 'BrowserWorkflowInterrupted';
+  }
+}
+
+function validateGuardedWorkflow(steps: readonly BrowserGuardedWorkflowStep[]): void {
+  if (!Array.isArray(steps) || steps.length < 1 || steps.length > 5) {
+    throw new Error('Guarded browser workflows require 1 to 5 explicit steps.');
+  }
+  for (const [index, step] of steps.entries()) {
+    if (!step || !step.action || !['click','fill','select','set_checked'].includes(step.action.type)) {
+      throw new Error('Guarded browser step ' + (index + 1) + ' has an unsupported action.');
+    }
+    if (typeof step.expected_url !== 'string' || step.expected_url.length > 8192 ||
+      !/^https?:\/\//u.test(step.expected_url)) {
+      throw new Error('Guarded browser step ' + (index + 1) + ' requires a bounded exact HTTP(S) expected_url.');
+    }
+    const action = step.action;
+    // A precompiled multi-step plan must not carry element refs across DOM
+    // mutations. Refs belong to one observation and can change identity.
+    if (action.ref !== undefined || typeof action.selector !== 'string' ||
+      action.selector.trim().length === 0 || action.selector.length > 4096) {
+      throw new Error('Guarded browser step ' + (index + 1) + ' requires a stable selector, never a snapshot ref.');
+    }
+    for (const key of ['expected_text','after_text'] as const) {
+      const value = step[key];
+      if (value !== undefined && (typeof value !== 'string' || value.length < 1 || value.length > 512)) {
+        throw new Error('Guarded browser step ' + (index + 1) + ' has an invalid ' + key + '.');
+      }
+    }
+    if (action.type === 'fill' || action.type === 'select') {
+      if (typeof action.value !== 'string' || action.value.length > (action.type === 'fill' ? 65536 : 4096)) {
+        throw new Error('Guarded browser step ' + (index + 1) + ' has an invalid value.');
+      }
+    }
+    if (action.type === 'set_checked' && typeof action.checked !== 'boolean') {
+      throw new Error('Guarded browser step ' + (index + 1) + ' must provide checked.');
+    }
+  }
 }
 
 interface BrowserSessionRecord {
@@ -391,7 +460,12 @@ export class BrowserRuntime {
   private cdpPromise: Promise<BrowserCdpDriver> | undefined;
   private readonly browserEngine: BrowserRuntimeInfo['engine'];
   private mutationChain: Promise<void> = Promise.resolve();
+  // Ego-style Space boundary: a session cannot observe a half-completed action.
+  // Independent browser sessions retain parallel observation/action execution.
+  private readonly sessionOperationChains = new Map<string, Promise<void>>();
+  private readonly pendingSessionOperations = new Map<string, number>();
   private sessionReaper: NodeJS.Timeout | undefined;
+  private readonly sharedCrossToolGuard: BrowserCrossToolGuard | undefined;
 
   constructor(
     readonly root: string,
@@ -400,8 +474,12 @@ export class BrowserRuntime {
     cdp: BrowserCdpDriver | undefined = undefined,
     private readonly executablePath = process.env.DESKTOP_MCP_BROWSER_EXECUTABLE?.trim(),
     private readonly agentDesktop?: AgentDesktopManager,
-    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS
+    private readonly directSessionIdleTimeoutMs = DEFAULT_DIRECT_SESSION_IDLE_TIMEOUT_MS,
+    private readonly handoffAgent?: BrowserHandoffAgentPort,
+    private readonly ownedProcessHandoffPreflight?: (browserProcessSessionIds: readonly string[]) => Promise<void>,
+    private readonly handoffRuntime?: BrowserHandoffRuntimePort
   ) {
+    this.sharedCrossToolGuard = handoffAgent ? createBrowserCrossToolGuard(handoffAgent) : undefined;
     if (cdp) {
       this.cdp = cdp;
       this.browserEngine = 'injected';
@@ -456,6 +534,10 @@ export class BrowserRuntime {
     }
   }
 
+  crossToolGuard(): BrowserCrossToolGuard | undefined {
+    return this.sharedCrossToolGuard;
+  }
+
   info(): BrowserRuntimeInfo {
     return {
       configured: Boolean(this.executablePath),
@@ -474,6 +556,42 @@ export class BrowserRuntime {
     await previous;
     try { return await operation(); }
     finally { release(); }
+  }
+
+  private async serializeSessionOperation<T>(
+    sessionId: string,
+    operation: () => Promise<T>,
+    mode: 'agent' | 'system-cleanup' = 'agent'
+  ): Promise<T> {
+    const normalized = validateSessionId(sessionId);
+    const expectedEpoch = mode === 'agent' ? this.handoffAgent?.epoch(normalized) : undefined;
+    const pending = this.pendingSessionOperations.get(normalized) ?? 0;
+    if (pending >= MAX_PENDING_BROWSER_SESSION_OPERATIONS) {
+      throw new Error('Browser session operation queue is full; retry only after taking a fresh observation.');
+    }
+    this.pendingSessionOperations.set(normalized, pending + 1);
+    const previous = this.sessionOperationChains.get(normalized) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    this.sessionOperationChains.set(normalized, current);
+    try {
+      await previous;
+      if (mode === 'agent' && this.handoffAgent) {
+        if (expectedEpoch !== this.handoffAgent.epoch(normalized)) {
+          throw new Error('Browser control epoch changed during a queued action. Take a fresh snapshot after local confirmation.');
+        }
+        this.handoffAgent.assertAgentAccess(normalized);
+      }
+      return await operation();
+    } finally {
+      if (this.sessionOperationChains.get(normalized) === current) {
+        this.sessionOperationChains.delete(normalized);
+      }
+      const remaining = (this.pendingSessionOperations.get(normalized) ?? 1) - 1;
+      if (remaining <= 0) this.pendingSessionOperations.delete(normalized);
+      else this.pendingSessionOperations.set(normalized, remaining);
+      release();
+    }
   }
 
   private cleanupExpiredObservations(now = Date.now()): void {
@@ -604,7 +722,13 @@ export class BrowserRuntime {
     await record.profileLock.release();
     this.sessions.delete(record.sessionId);
     this.profilesInUse.delete(record.profileId);
+    this.handoffAgent?.revokeIfReserved(record.sessionId);
     this.invalidateSessionObservations(record.sessionId);
+    // Owned browser process ended, profile was removed if ephemeral, and lock
+    // was released. Release the global quarantine, not the retired Session ID.
+    if (this.handoffAgent?.status(record.sessionId).state === 'revoked') {
+      this.handoffAgent.retireVerifiedClosed(record.sessionId);
+    }
   }
 
   private detachAgentDesktopPlacement(record: BrowserSessionRecord): void {
@@ -616,6 +740,20 @@ export class BrowserRuntime {
   private async refreshAgentDesktopPlacement(record: BrowserSessionRecord, timeoutMs = 250): Promise<void> {
     const leaseId = record.agentDesktopLeaseId;
     if (!leaseId) return;
+    const ownership = this.handoffAgent?.status(record.sessionId).state;
+    if (ownership && ownership !== 'agent') {
+      // Do not relocate or activate windows while a person may be interacting.
+      // A revoked session must never silently return to Agent ownership.
+      if (ownership !== 'revoked') {
+        try {
+          if (!this.agentDesktop) throw new Error('Agent Desktop native authority disappeared.');
+          await this.agentDesktop.assertLease(leaseId); // checks HUD heartbeat, not just lease presence
+        } catch {
+          this.handoffAgent!.revokeIfReserved(record.sessionId);
+        }
+      }
+      return;
+    }
     if (!this.agentDesktop || !await this.agentDesktop.isLeaseActive(leaseId)) {
       this.detachAgentDesktopPlacement(record);
       return;
@@ -646,17 +784,19 @@ export class BrowserRuntime {
           if (!processActive || record.agentDesktopPlacementFailures >= AGENT_DESKTOP_REAPER_MAX_CONSECUTIVE_FAILURES) {
             const detail = error instanceof Error ? error.message : String(error);
             process.stderr.write(`[DeskMCP] Agent Desktop browser placement failed ${record.agentDesktopPlacementFailures} consecutive time(s); disposing session ${record.sessionId}: ${detail}\n`);
-            await this.disposeRecord(record);
+            await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record));
           }
         }
       }
 
       const now = Date.now();
-      const idleDirectSessions = [...this.sessions.values()].filter(record =>
-        !record.agentDesktopLeaseId && now - record.lastActivityAt >= this.directSessionIdleTimeoutMs
-      );
+      const idleDirectSessions = [...this.sessions.values()].filter(record => {
+        if (record.agentDesktopLeaseId || now - record.lastActivityAt < this.directSessionIdleTimeoutMs) return false;
+        try { this.handoffAgent?.assertAgentAccess(record.sessionId); return true; }
+        catch { return false; } // Human-owned sessions have no ordinary agent idle timeout.
+      });
       for (const record of idleDirectSessions) {
-        try { await this.disposeRecord(record); }
+        try { await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record)); }
         catch { /* Keep ownership if termination fails; retry on the next reaper pass. */ }
       }
     });
@@ -700,15 +840,27 @@ export class BrowserRuntime {
     for (const [sessionId, record] of [...this.sessions]) {
       let active = false;
       try { active = await this.processController.active(record.processSessionId); }
-      catch { active = false; }
+      catch { continue; /* Unknown native liveness does NOT prove browser process exit. */ }
       if (active) continue;
       this.sessions.delete(sessionId);
       this.profilesInUse.delete(record.profileId);
+      this.handoffAgent?.revokeIfReserved(sessionId);
       this.invalidateSessionObservations(sessionId);
+      let completed = false;
       try {
         await record.profileLock.release();
+        if (!record.persistentProfile) {
+          if (this.handoffAgent?.status(sessionId).state === 'revoked') {
+            await removeBrowserProfileDirectory(record.profileDir);
+          } else {
+            await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
+          }
+        }
+        completed = true;
       } finally {
-        if (!record.persistentProfile) await removeBrowserProfileDirectory(record.profileDir).catch(() => undefined);
+        if (completed && this.handoffAgent?.status(sessionId).state === 'revoked') {
+          this.handoffAgent.retireVerifiedClosed(sessionId);
+        }
       }
     }
   }
@@ -820,8 +972,15 @@ export class BrowserRuntime {
     await this.reconcile();
     const out: BrowserSessionSummary[] = [];
     for (const record of this.sessions.values()) {
+      const epoch = this.handoffAgent?.epoch(record.sessionId);
+      try { this.handoffAgent?.assertAgentAccess(record.sessionId); }
+      catch { continue; }
       let pages: readonly BrowserPageSummary[] | undefined;
       try { pages = await (await this.driver()).listPages(record.port, 3000); } catch { }
+      // A human takeover can begin while listPages awaits CDP: recheck before disclosure.
+      if (this.handoffAgent?.epoch(record.sessionId) !== epoch) continue;
+      try { this.handoffAgent?.assertAgentAccess(record.sessionId); }
+      catch { continue; }
       out.push({
         session_id: record.sessionId,
         profile_id: record.profileId,
@@ -840,12 +999,25 @@ export class BrowserRuntime {
     await this.reconcile();
     const profiles: BrowserProfileSummary[] = [];
     for (const profileId of await this.persistentProfileNames()) {
+      const ownerSessionId = this.profilesInUse.get(profileId);
+      const epoch = ownerSessionId ? this.handoffAgent?.epoch(ownerSessionId) : undefined;
+      if (ownerSessionId) {
+        try { this.handoffAgent?.assertAgentAccess(ownerSessionId); }
+        catch { continue; } // Human-owned profile metadata is not exposed via MCP.
+      }
       const profileDir = path.join(this.root, 'profiles', profileId);
       const info = await lstat(profileDir);
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Browser profile path is not a trusted directory: ${profileId}.`);
+      const inUse = await this.profileAppearsInUse(profileId);
+      // profileAppearsInUse is async; even a mid-read handoff must suppress disclosure.
+      if (ownerSessionId) {
+        if (this.handoffAgent?.epoch(ownerSessionId) !== epoch) continue;
+        try { this.handoffAgent?.assertAgentAccess(ownerSessionId); }
+        catch { continue; }
+      }
       profiles.push({
         profile_id: profileId,
-        in_use: await this.profileAppearsInUse(profileId),
+        in_use: inUse,
         modified_at: info.mtime.toISOString()
       });
     }
@@ -876,7 +1048,7 @@ export class BrowserRuntime {
     readonly page_id: string;
     readonly pages: readonly BrowserPageSummary[];
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       const pageId = await (await this.driver()).createPage(record.port, url, timeoutMs);
@@ -888,7 +1060,7 @@ export class BrowserRuntime {
         page_id: pageId,
         pages: await (await this.driver()).listPages(record.port, timeoutMs)
       };
-    });
+    }));
   }
 
   async selectPage(sessionId: string, pageId: string, timeoutMs = 5000): Promise<{
@@ -898,7 +1070,7 @@ export class BrowserRuntime {
     readonly pages: readonly BrowserPageSummary[];
     readonly observation_required_before_next_action: true;
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
@@ -912,7 +1084,7 @@ export class BrowserRuntime {
         pages: await (await this.driver()).listPages(record.port, timeoutMs),
         observation_required_before_next_action: true
       };
-    });
+    }));
   }
 
   async closePage(sessionId: string, pageId: string, timeoutMs = 5000): Promise<{
@@ -921,7 +1093,7 @@ export class BrowserRuntime {
     readonly closed: true;
     readonly pages: readonly BrowserPageSummary[];
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
@@ -934,7 +1106,7 @@ export class BrowserRuntime {
         closed: true,
         pages: await (await this.driver()).listPages(record.port, timeoutMs)
       };
-    });
+    }));
   }
 
   async handleDialog(
@@ -949,7 +1121,7 @@ export class BrowserRuntime {
     readonly handled: true;
     readonly observation_required_before_next_action: true;
   }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const record = this.session(sessionId);
       await this.refreshAgentDesktopPlacement(record);
@@ -962,10 +1134,15 @@ export class BrowserRuntime {
         handled: true,
         observation_required_before_next_action: true
       };
-    });
+    }));
   }
 
   async find(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
+    return this.serializeSessionOperation(sessionId, () => this.findUnlocked(sessionId, pageId, options));
+  }
+
+  private async findUnlocked(sessionId: string, pageId: string | undefined, options: BrowserFindOptions): Promise<BrowserFindResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
@@ -981,6 +1158,11 @@ export class BrowserRuntime {
   }
 
   async snapshot(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
+    return this.serializeSessionOperation(sessionId, () => this.snapshotUnlocked(sessionId, pageId, options));
+  }
+
+  private async snapshotUnlocked(sessionId: string, pageId: string | undefined, options: BrowserSnapshotOptions = {}): Promise<BrowserSnapshotResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     await this.refreshAgentDesktopPlacement(record);
@@ -1013,6 +1195,18 @@ export class BrowserRuntime {
     ref: string | undefined,
     options: BrowserSnapshotOptions = {}
   ): Promise<BrowserSnapshotResult> {
+    return this.serializeSessionOperation(sessionId, () => this.downloadUnlocked(sessionId, pageId, browserObservationId, selector, ref, options));
+  }
+
+  private async downloadUnlocked(
+    sessionId: string,
+    pageId: string | undefined,
+    browserObservationId: string,
+    selector: string | undefined,
+    ref: string | undefined,
+    options: BrowserSnapshotOptions = {}
+  ): Promise<BrowserSnapshotResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     const selectedSelector = selector?.trim();
@@ -1062,7 +1256,7 @@ export class BrowserRuntime {
       await rm(tempPath, { force: true }).catch(() => undefined);
     }
 
-    const fresh = await this.snapshot(record.sessionId, effectivePageId, options);
+    const fresh = await this.snapshotUnlocked(record.sessionId, effectivePageId, options);
     return { ...fresh, download: artifact };
   }
 
@@ -1073,6 +1267,17 @@ export class BrowserRuntime {
     actions: readonly BrowserAction[],
     options: BrowserSnapshotOptions = {}
   ): Promise<BrowserSnapshotResult> {
+    return this.serializeSessionOperation(sessionId, () => this.actUnlocked(sessionId, pageId, browserObservationId, actions, options));
+  }
+
+  private async actUnlocked(
+    sessionId: string,
+    pageId: string | undefined,
+    browserObservationId: string,
+    actions: readonly BrowserAction[],
+    options: BrowserSnapshotOptions = {}
+  ): Promise<BrowserSnapshotResult> {
+    this.handoffAgent?.assertAgentAccess(sessionId);
     await this.reconcile();
     const record = this.session(sessionId);
     const mutatingActions = actions.filter(browserActionMutatesObservedState).length;
@@ -1088,18 +1293,192 @@ export class BrowserRuntime {
     const effectivePageId = await (await this.driver()).act(record.port, observation.pageId, actions, options.timeout_ms ?? 15000);
     await this.refreshAgentDesktopPlacement(record);
 
-    return this.snapshot(record.sessionId, effectivePageId, options);
+    return this.snapshotUnlocked(record.sessionId, effectivePageId, options);
+  }
+
+  /**
+   * Candidate-only bounded workflow. This never authorizes multiple mutations with
+   * an old observation: each step consumes exactly one fresh observation and runs
+   * inside the existing session operation gate. Failures are terminal and must
+   * never be retried automatically (a partially dispatched click is ambiguous).
+   */
+  async runGuardedWorkflow(
+    sessionId: string,
+    pageId: string | undefined,
+    initialObservationId: string,
+    steps: readonly BrowserGuardedWorkflowStep[]
+  ): Promise<BrowserGuardedWorkflowResult> {
+    validateGuardedWorkflow(steps);
+    return this.serializeSessionOperation(sessionId, async () => {
+      await this.reconcile();
+      const record = this.session(sessionId);
+      const initial = this.consumeObservation(record.sessionId, pageId, initialObservationId);
+      await this.refreshAgentDesktopPlacement(record);
+      const token = await (await this.driver()).stateToken(record.port, initial.pageId, 5000);
+      if (token !== initial.stateToken) {
+        throw new BrowserWorkflowInterrupted(0, 0, false, 'initial observation is stale');
+      }
+      let completed = 0;
+      let snapshot = await this.snapshotUnlocked(record.sessionId, initial.pageId, {
+        screenshot: false, max_text_chars: 30000, timeout_ms: 10000
+      });
+      try {
+        for (const [index, step] of steps.entries()) {
+          this.handoffAgent?.assertAgentAccess(record.sessionId);
+          if (snapshot.page_id !== initial.pageId) {
+            throw new BrowserWorkflowInterrupted(index, completed, false, 'page target changed');
+          }
+          if (snapshot.url !== step.expected_url || (step.expected_text && !snapshot.text.includes(step.expected_text))) {
+            throw new BrowserWorkflowInterrupted(index, completed, false, 'required page state does not match');
+          }
+          try {
+            snapshot = await this.actUnlocked(record.sessionId, initial.pageId, snapshot.browser_observation_id, [step.action], {
+              screenshot: false, max_text_chars: 30000, timeout_ms: 10000
+            });
+          } catch {
+            throw new BrowserWorkflowInterrupted(index, completed, true, 'action failed or its result could not be observed');
+          }
+          completed++;
+          if (step.after_text && !snapshot.text.includes(step.after_text)) {
+            throw new BrowserWorkflowInterrupted(index, completed, false, 'post-action text check failed');
+          }
+        }
+        return { completed_steps: completed, final_snapshot: snapshot };
+      } catch (error) {
+        // Never leave a fresh, unused observation from a failed internal workflow.
+        this.invalidatePageObservations(record.sessionId, initial.pageId);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Candidate-only handoff request. Not an MCP tool. The future native UI must
+   * accept and resume via its private local port; remote callers never can.
+   */
+  async requestLocalBrowserHandoff(sessionId: string): Promise<{ readonly state: 'handoff-requested'; readonly epoch: number }> {
+    if (!this.handoffAgent) throw new Error('Local handoff authority is not configured.');
+    const request = () => this.serializeSessionOperation(sessionId, async () => {
+      const record = this.session(sessionId);
+      if (record.headless || !record.agentDesktopLeaseId || !this.agentDesktop) {
+        throw new Error('Local handoff requires a visible browser with a valid dedicated Agent Desktop lease.');
+      }
+      await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+      if (this.ownedProcessHandoffPreflight) {
+        // Only exclude currently owned browser processes, never unrelated jobs.
+        const browserProcessIds = [...this.sessions.values()].map(session => session.processSessionId);
+        await this.ownedProcessHandoffPreflight(browserProcessIds);
+        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+      }
+      const transition = this.handoffAgent!.request(record.sessionId);
+      this.invalidateSessionObservations(record.sessionId);
+      return { state: 'handoff-requested' as const, epoch: transition.epoch };
+    });
+    return this.sharedCrossToolGuard
+      ? this.sharedCrossToolGuard.withHandoffBarrier(request)
+      : request();
+  }
+
+  /**
+   * Candidate-only trusted local UI scope lookup. Caller receives no content,
+   * and cannot learn the target Desktop ID from arbitrary Agent-owned sessions.
+   * HUD visibility + lease heartbeat are BOTH required; merely leasing D2
+   * from Desktop 1 is not sufficient proof of a visible confirmation surface.
+   */
+  async assertLocalHandoffLease(sessionId: string, leaseId: string): Promise<{ readonly desktopId: string }> {
+    const record = this.session(validateSessionId(sessionId));
+    const ownership = this.handoffAgent?.status(record.sessionId);
+    if (!ownership || (ownership.state !== 'handoff-requested' && ownership.state !== 'human')) {
+      throw new Error('No pending or active human handoff for this browser session.');
+    }
+    if (!this.agentDesktop || record.agentDesktopLeaseId !== leaseId || record.headless) {
+      throw new Error('Browser handoff is not bound to the requested visible Agent Desktop lease.');
+    }
+    await this.agentDesktop.assertLease(leaseId);
+    const status = await this.agentDesktop.status(leaseId);
+    const control = status.control;
+    if (!control.active || control.leaseId?.toLowerCase() !== leaseId.toLowerCase() ||
+      !control.desktopId || !Number.isInteger(control.desktopNumber) ||
+      control.desktopNumber! < 2 || !status.hud_ready || !status.hud_visible) {
+      throw new Error('Human confirmation requires a visible live HUD on Desktop 2 or later.');
+    }
+    if (!await this.processController.active(record.processSessionId)) {
+      throw new Error('Owned browser exited before local user confirmation.');
+    }
+    await this.agentDesktop.assertLease(leaseId);
+    if (this.handoffAgent?.epoch(record.sessionId) !== ownership.epoch ||
+      this.handoffAgent.status(record.sessionId).state !== ownership.state) {
+      throw new Error('Browser ownership changed during native desktop confirmation.');
+    }
+    return { desktopId: control.desktopId };
+  }
+
+  /**
+   * Internal-only privacy gate. Local handback moves human -> privacy-reset;
+   * normal MCP reads and actions remain denied until all previously human
+   * controlled pages are closed, leaving only a verified blank page.
+   * This is NOT user presence attestation and is NOT an MCP tool.
+   */
+  async completeLocalBrowserHandback(sessionId: string): Promise<{ readonly state: 'agent'; readonly page_id: string }> {
+    if (!this.handoffAgent || !this.handoffRuntime) {
+      throw new Error('Trusted local browser handback runtime is not configured.');
+    }
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
+      const record = this.session(sessionId);
+      if (this.handoffAgent!.status(record.sessionId).state !== 'privacy-reset') {
+        throw new Error('Human browser handback has not been confirmed.');
+      }
+      try {
+        if (!record.agentDesktopLeaseId || !this.agentDesktop) throw new Error('Agent Desktop lease missing.');
+        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+        if (!await this.processController.active(record.processSessionId)) throw new Error('Owned browser process exited.');
+        const driver = await this.driver();
+        // A newly created page is about:blank by browser default.
+        // Do not relax the navigation HTTP(S)-only policy to allow blank URLs.
+        const fresh = await driver.createPage(record.port, undefined, 10000);
+        const pages = await driver.listPages(record.port, 10000);
+        if (!pages.some(page => page.page_id === fresh && page.url === 'about:blank')) {
+          throw new Error('Fresh browser page is not verified blank.');
+        }
+        for (const page of pages) {
+          if (page.page_id !== fresh) await driver.closePage(record.port, page.page_id, 10000);
+        }
+        // A stale tab enumeration or popup that raced cleanup must not pass.
+        const finalPages = await driver.listPages(record.port, 10000);
+        if (finalPages.length !== 1 || finalPages[0]?.page_id !== fresh || finalPages[0].url !== 'about:blank') {
+          throw new Error('Browser page cleanup was incomplete.');
+        }
+        await this.agentDesktop.assertLease(record.agentDesktopLeaseId);
+        this.invalidateSessionObservations(record.sessionId);
+        const resumed = this.handoffRuntime!.completePrivacyReset(record.sessionId);
+        if (resumed.state !== 'agent') throw new Error('Browser handback authority was not restored.');
+        return { state: 'agent' as const, page_id: fresh };
+      } catch {
+        // Ambiguous tab operation or lost lease can leave private content
+        // behind. Deny access, not an optimistic retry or partial handback.
+        this.handoffAgent!.revokeIfReserved(record.sessionId);
+        throw new Error('Browser privacy reset failed. Agent access remains revoked; close the owned browser session locally.');
+      }
+    }, 'system-cleanup'));
+  }
+
+  /**
+   * Candidate-only local revocation hook. A trusted local UI adapter must hold
+   * the local control port and invoke this synchronously as part of transition.
+   */
+  invalidateForLocalHandoff(sessionId: string): void {
+    this.invalidateSessionObservations(validateSessionId(sessionId));
   }
 
   async close(sessionId: string): Promise<{ session_id: string; closed: boolean }> {
-    return this.serializeMutation(async () => {
+    return this.serializeMutation(() => this.serializeSessionOperation(sessionId, async () => {
       await this.reconcile();
       const normalized = validateSessionId(sessionId);
       const record = this.sessions.get(normalized);
       if (!record) return { session_id: normalized, closed: false };
       await this.disposeRecord(record);
       return { session_id: normalized, closed: true };
-    });
+    }));
   }
 
   async closeAll(): Promise<void> {
@@ -1109,7 +1488,7 @@ export class BrowserRuntime {
     }
     await this.serializeMutation(async () => {
       const records = [...this.sessions.values()];
-      for (const record of records) await this.disposeRecord(record);
+      for (const record of records) await this.serializeSessionOperation(record.sessionId, () => this.disposeRecord(record), 'system-cleanup');
     });
   }
 }

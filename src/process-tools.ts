@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { AuditLogger } from './audit.js';
@@ -32,6 +33,7 @@ function resultText(result: DesktopBackendToolResult) {
 async function auditedProcessCall(
   audit: AuditLogger,
   policy: DesktopPolicy,
+  crossToolGuard: BrowserCrossToolGuard | undefined,
   tool: string,
   target: string | undefined,
   prefix: string,
@@ -45,7 +47,11 @@ async function auditedProcessCall(
   }
 
   try {
-    const result = await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
+    const result = await (crossToolGuard
+      ? crossToolGuard.runNonBrowserOperation(tool, action)
+      : action());
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     await audit.finish(operation, result.isError ? 'fail' : 'allow',
       result.isError ? new Error('DownstreamToolError') : undefined);
     return resultText(result);
@@ -218,8 +224,47 @@ export function registerProcessTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   sessions: ProcessSessionRegistry,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
+  // This tool reads only the in-memory Gateway session registry. It must
+  // remain usable even when all 32 process slots are occupied: no shell,
+  // ProcessHost, or native process discovery is invoked to produce it.
+  server.registerTool(
+    'desktop_process_capacity',
+    {
+      title: 'Inspect Owned Process Capacity',
+      description: 'Read current Gateway process-session occupancy without starting a process. Duration buckets are observational, not termination criteria. This does not inspect OS process trees or infer that old sessions are stuck.',
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => auditedProcessCall(
+      audit,
+      policy,
+      crossToolGuard,
+      'desktop_process_capacity',
+      undefined,
+      'Process capacity inspection denied or failed',
+      async () => {
+        requireFullControl(policy);
+        const status = sessions.capacityStatus();
+        return {
+          text: JSON.stringify({
+            ...status,
+            interpretation: 'Active means the owned ProcessHost has not completed; age is not a failure signal.',
+            diagnostics: 'Read only. No process spawned. No sessions terminated.'
+          }),
+          isError: false
+        };
+      }
+    )
+  );
+
   server.registerTool(
     'desktop_start_process',
     {
@@ -258,6 +303,7 @@ export function registerProcessTools(
     async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, process_lifetime, agent_desktop_lease_id }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_start_process',
       agent_desktop_lease_id ? `agent-desktop:${agent_desktop_lease_id}` : undefined,
       'Desktop process start denied or failed',
@@ -343,6 +389,7 @@ export function registerProcessTools(
     async ({ session_id, timeout_ms, offset, length }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_read_process',
       session_id,
       'Desktop process read denied or failed',
@@ -379,6 +426,7 @@ export function registerProcessTools(
     async ({ session_id, input, timeout_ms, wait_for_prompt }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_interact_process',
       session_id,
       'Desktop process interaction denied or failed',
@@ -411,6 +459,7 @@ export function registerProcessTools(
     async ({ session_id }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_terminate_process',
       session_id,
       'Desktop process termination denied or failed',

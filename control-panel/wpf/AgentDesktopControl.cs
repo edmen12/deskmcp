@@ -399,7 +399,11 @@ internal sealed class AgentDesktopOverlay : IDisposable
             throw new InvalidOperationException("Agent Desktop safety edge visual is missing.");
         edgeVisual.Opacity = 0;
         IntPtr hudHwnd = new WindowInteropHelper(hudWindow).EnsureHandle();
-        hudWindow.Opacity = 0;
+        hudWindow.BeginAnimation(UIElement.OpacityProperty, null);
+        hudWindow.Opacity = 1;
+        if (hudWindow.Content is not UIElement hudVisual)
+            throw new InvalidOperationException("Agent Desktop safety HUD visual is missing.");
+        hudVisual.Opacity = 0;
         hudWindow.IsHitTestVisible = false;
 
         edgeWindow.Show();
@@ -418,8 +422,8 @@ internal sealed class AgentDesktopOverlay : IDisposable
         if (!stillAuthorized()) throw new InvalidOperationException("Agent Desktop control changed before the safety HUD became visible.");
 
         StartEdgePulse(edgeWindow);
+        hudVisual.Opacity = 1;
         hudWindow.IsHitTestVisible = true;
-        hudWindow.Opacity = 1;
         shown = true;
     }
 

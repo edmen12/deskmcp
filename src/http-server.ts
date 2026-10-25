@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import http, { type Server as HttpServer } from 'node:http';
 import {
   localhostHostValidation,
@@ -12,6 +13,7 @@ import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { RealDesktop2OwnedControl } from './desktop2-real-owned-control.js';
 import { ArtifactExpiredError, type ArtifactStore } from './artifact-store.js';
 import type { BrowserRuntime } from './browser-runtime.js';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
 import { createComputerUseRuntime, type ComputerUseRuntime } from './computer-use-runtime.js';
 import { createDesktopMcpServer, SERVER_NAME, SERVER_VERSION } from './mcp-server.js';
@@ -160,9 +162,11 @@ async function serveSignedArtifact(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   store: ArtifactStore,
-  route: { artifactId: string; filename: string }
+  route: { artifactId: string; filename: string },
+  crossToolGuard?: BrowserCrossToolGuard
 ): Promise<void> {
   try {
+    const serve = async () => {
     const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
     const resolved = await store.resolveSignedDownload(
       route.artifactId,
@@ -177,14 +181,16 @@ async function serveSignedArtifact(
       'cache-control': 'private, no-store, max-age=0',
       'x-content-type-options': 'nosniff'
     });
-    const stream = createReadStream(resolved.payload);
-    stream.once('error', error => {
-      console.error('[deskmcp] artifact stream failed:', error);
-      res.destroy(error);
-    });
-    stream.pipe(res);
+    await pipeline(createReadStream(resolved.payload), res);
+    };
+    if (crossToolGuard) await crossToolGuard.runNonBrowserOperation('artifact_http_download', serve);
+    else await serve();
   } catch (error) {
-    writeJson(res, error instanceof ArtifactExpiredError ? 410 : 403, { error: 'artifact_access_denied' });
+    if (!res.headersSent) {
+      writeJson(res, error instanceof ArtifactExpiredError ? 410 : 403, { error: 'artifact_access_denied' });
+    } else {
+      res.destroy(error instanceof Error ? error : new Error('Artifact download interrupted.'));
+    }
   }
 }
 
@@ -205,7 +211,8 @@ export async function startHttpServer(
   agentDesktop?: AgentDesktopManager,
   // Staging-only injection. Production index.ts never supplies this object.
   realD2Owned?: RealDesktop2OwnedControl,
-  realD2OwnerGrant?: RealD2OwnerGrant
+  realD2OwnerGrant?: RealD2OwnerGrant,
+  injectedCrossToolGuard?: BrowserCrossToolGuard
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -228,6 +235,7 @@ export async function startHttpServer(
       realD2OwnerGrant.expiresAtMs > Date.now() + 15*60_000)) {
     throw new Error('REAL_D2_OWNER_ACCESS_GRANT_REQUIRED');
   }
+  const crossToolGuard = injectedCrossToolGuard ?? browser?.crossToolGuard?.();
   const ownerKey = wantsRealD2
     ? Buffer.from(realD2OwnerGrant!.bearerToken, 'hex') : undefined;
 
@@ -245,7 +253,8 @@ export async function startHttpServer(
       browser,
       skillStore,
       agentDesktop,
-      undefined // Ordinary /mcp must NEVER expose real Desktop2 mutation.
+      undefined, // Ordinary /mcp must NEVER expose real Desktop2 mutation.
+      crossToolGuard
     )
   );
   // Separate staging-only route. No caller-selected header or lease ID
@@ -254,7 +263,7 @@ export async function startHttpServer(
     createDesktopMcpServer(
       bridge, policy, audit, observations, processSessions, effectiveComputerUse,
       taskStore, artifactStore, dynamicMcpHub, browser, skillStore, agentDesktop,
-      realD2Owned
+      realD2Owned, crossToolGuard
     )
   ) : undefined;
   const ownerNodeHandler = ownerMcpHandler ? toNodeHandler(ownerMcpHandler, {
@@ -313,7 +322,10 @@ export async function startHttpServer(
         writeJson(res, artifactStore ? 405 : 404, { error: artifactStore ? 'method_not_allowed' : 'not_found' });
         return;
       }
-      void serveSignedArtifact(req, res, artifactStore, artifactRoute);
+      // A signed URL is not permission to bypass an active human handoff.
+      try { crossToolGuard?.assertNonBrowserToolAllowed('artifact_http_download'); }
+      catch { writeJson(res, 403, { error: 'artifact_access_denied' }); return; }
+      void serveSignedArtifact(req, res, artifactStore, artifactRoute, crossToolGuard);
       return;
     }
 
