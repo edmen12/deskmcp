@@ -4,6 +4,8 @@
 *.json text eol=lf
 *.ts text eol=lf
 *.mjs text eol=lf
+# Vendored npm CLI entrypoints keep LF under Windows checkout and npm bin linking.
+vendor/desktop-commander/dist/*.js text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 .editorconfig text eol=lf
@@ -23,3 +25,8 @@
 *.jpg binary
 *.jpeg binary
 *.spdx.json text eol=lf
+
+# npm bin-links can normalize shebangs on Windows CI; pin stable LF bytes.
+vendor/desktop-commander/dist/index.js text eol=lf
+vendor/desktop-commander/dist/setup-claude-server.js text eol=lf
+vendor/desktop-commander/dist/uninstall-claude-server.js text eol=lf

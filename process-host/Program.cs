@@ -25,6 +25,7 @@ internal static class Program
     private const int STD_INPUT_HANDLE = -10;
     private const int STD_OUTPUT_HANDLE = -11;
     private const int STD_ERROR_HANDLE = -12;
+    private const uint GENERIC_ALL = 0x10000000;
 
     public static int Main(string[] args)
     {
@@ -36,12 +37,13 @@ internal static class Program
         IntPtr childProcessHandle = IntPtr.Zero;
         IntPtr childThreadHandle = IntPtr.Zero;
         IntPtr jobInfoBuffer = IntPtr.Zero;
+        IntPtr desktopHandle = IntPtr.Zero;
         bool elevatedChild = false;
         string? errorFile = null;
 
         try
         {
-            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? workingDirectory, out string? tempDirectory, out elevatedChild, out int ownerPid, out errorFile);
+            ParseArguments(args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? workingDirectory, out string? tempDirectory, out string? desktopObject, out elevatedChild, out int ownerPid, out errorFile);
             if (workingDirectory != null && !Directory.Exists(workingDirectory))
                 throw new InvalidOperationException("DeskMCP working directory does not exist: " + workingDirectory);
             if (tempDirectory != null)
@@ -50,6 +52,8 @@ internal static class Program
                 Environment.SetEnvironmentVariable("TEMP", tempDirectory);
                 Environment.SetEnvironmentVariable("TMP", tempDirectory);
             }
+            if (desktopObject != null && elevation == "admin")
+                throw new InvalidOperationException("Administrator process launch is not supported inside a DeskMCP isolated desktop object.");
             if (elevation == "admin" && !elevatedChild)
             {
                 ElevationDisclosure.ShowIfEnabled(shell, command);
@@ -78,6 +82,13 @@ internal static class Program
             string applicationPath = ResolveShellPath(shell);
             string commandLine = BuildShellCommandLine(applicationPath, shell, command);
             STARTUPINFO startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+            if (desktopObject != null)
+            {
+                desktopHandle = CreateDesktopW(desktopObject, IntPtr.Zero, IntPtr.Zero, 0, GENERIC_ALL, IntPtr.Zero);
+                if (desktopHandle == IntPtr.Zero)
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create or open the DeskMCP isolated desktop object.");
+                startup.lpDesktop = "winsta0\\" + desktopObject;
+            }
             uint creationFlags = CREATE_SUSPENDED;
             if (windowMode == "visible")
             {
@@ -174,6 +185,7 @@ internal static class Program
             if (childProcessHandle != IntPtr.Zero) CloseHandle(childProcessHandle);
             if (parentHandle != IntPtr.Zero) CloseHandle(parentHandle);
             if (jobHandle != IntPtr.Zero) CloseHandle(jobHandle);
+            if (desktopHandle != IntPtr.Zero) CloseDesktop(desktopHandle);
         }
     }
 
@@ -210,7 +222,7 @@ internal static class Program
         }
     }
 
-    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? workingDirectory, out string? tempDirectory, out bool elevatedChild, out int ownerPid, out string? errorFile)
+    private static void ParseArguments(string[] args, out string shell, out string command, out string windowMode, out string elevation, out string lifetime, out string? workingDirectory, out string? tempDirectory, out string? desktopObject, out bool elevatedChild, out int ownerPid, out string? errorFile)
     {
         string? shellValue = null;
         string? command64 = null;
@@ -219,6 +231,7 @@ internal static class Program
         string? lifetimeValue = null;
         string? workingDirectory64 = null;
         string? tempDirectory64 = null;
+        string? desktopObject64 = null;
         string? ownerPidValue = null;
         string? errorFile64 = null;
         elevatedChild = false;
@@ -231,6 +244,7 @@ internal static class Program
             else if (args[index] == "--lifetime" && index + 1 < args.Length) lifetimeValue = args[++index];
             else if (args[index] == "--working-directory64" && index + 1 < args.Length) workingDirectory64 = args[++index];
             else if (args[index] == "--temp-directory64" && index + 1 < args.Length) tempDirectory64 = args[++index];
+            else if (args[index] == "--desktop-object64" && index + 1 < args.Length) desktopObject64 = args[++index];
             else if (args[index] == "--owner-pid" && index + 1 < args.Length) ownerPidValue = args[++index];
             else if (args[index] == "--elevated-child") elevatedChild = true;
             else if (args[index] == "--error-file64" && index + 1 < args.Length) errorFile64 = args[++index];
@@ -266,6 +280,19 @@ internal static class Program
             catch (FormatException) { throw new ArgumentException("Invalid temp directory encoding."); }
             if (!Path.IsPathFullyQualified(tempDirectory))
                 throw new ArgumentException("Temp directory must be an absolute path.");
+        }
+        desktopObject = null;
+        if (!String.IsNullOrWhiteSpace(desktopObject64))
+        {
+            try { desktopObject = Encoding.UTF8.GetString(Convert.FromBase64String(desktopObject64)); }
+            catch (FormatException) { throw new ArgumentException("Invalid desktop object encoding."); }
+            if (desktopObject.Length > 128 || !desktopObject.StartsWith("DeskMCP-Agent-", StringComparison.Ordinal))
+                throw new ArgumentException("Invalid DeskMCP isolated desktop object name.");
+            foreach (char ch in desktopObject)
+            {
+                if (!(Char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.'))
+                    throw new ArgumentException("Invalid DeskMCP isolated desktop object name.");
+            }
         }
         errorFile = null;
         if (!String.IsNullOrWhiteSpace(errorFile64))
@@ -504,6 +531,8 @@ internal static class Program
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateJobObject(IntPtr hJob, uint uExitCode);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr hObject);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern IntPtr CreateDesktopW(string lpszDesktop, IntPtr lpszDevice, IntPtr pDevmode, uint dwFlags, uint dwDesiredAccess, IntPtr lpsa);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseDesktop(IntPtr hDesktop);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForMultipleObjects(uint nCount, IntPtr[] lpHandles, bool bWaitAll, uint dwMilliseconds);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);

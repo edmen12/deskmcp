@@ -13,7 +13,14 @@ import {
 } from '../src/computer-use-backend.js';
 import { ComputerObservationRegistry } from '../src/computer-use-observation.js';
 import { ComputerUseCoordinator, ComputerWindowRegistry } from '../src/computer-use-registry.js';
-import { agentDesktopSemanticTreeWarning, prepareAgentDesktopAction } from '../src/computer-use-tools.js';
+import {
+  agentDesktopSemanticTreeWarning,
+  winFormsProviderVisibilityWarning,
+  assertUnscopedUserDesktopActionAllowed,
+  prepareAgentDesktopAction,
+  resolveAgentDesktopWindowLease
+} from '../src/computer-use-tools.js';
+import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { TEST_AREA } from '../src/paths.js';
 
@@ -299,7 +306,7 @@ test('Agent Desktop warns when Windows Forms semantic UIA collapses to window ch
 });
 
 
-test('Agent Desktop background mode permits only non-injecting UI actions', () => {
+test('Agent Desktop isolated desktop permits semantic UIA actions and wait', () => {
   assert.deepEqual(
     prepareAgentDesktopAction({ type: 'invoke', selector: 'ApplyButton' }),
     { type: 'invoke', selector: 'ApplyButton' }
@@ -313,22 +320,113 @@ test('Agent Desktop background mode permits only non-injecting UI actions', () =
     { type: 'scroll', selector: 'List', direction: 'down' }
   );
   assert.deepEqual(
-    prepareAgentDesktopAction({ type: 'send_keys', keys: 'enter', transport: 'post-message' }),
-    { type: 'send_keys', keys: 'enter', transport: 'post-message', allowSystemKeys: false }
+    prepareAgentDesktopAction({ type: 'scroll', selector: 'List', to: 'bottom' }),
+    { type: 'scroll', selector: 'List', to: 'bottom' }
+  );
+  assert.deepEqual(
+    prepareAgentDesktopAction({ type: 'wait', milliseconds: 50 }),
+    { type: 'wait', milliseconds: 50 }
   );
 });
 
-test('Agent Desktop background mode rejects physical input instead of stealing the user desktop', () => {
+test('Agent Desktop isolated desktop still rejects unverified global input paths', () => {
   const blocked = [
+    { type: 'send_keys', keys: 'hello', transport: 'post-message' },
+    { type: 'send_keys', keys: 'hello', transport: 'send-input' },
+    { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true },
     { type: 'click', selector: 'ApplyButton' },
     { type: 'hover', selector: 'ApplyButton' },
     { type: 'drag', from: 'A', to: 'B' },
-    { type: 'scroll', wheel: 3 },
-    { type: 'send_keys', keys: 'hello', transport: 'send-input' },
-    { type: 'send_keys', keys: 'win+r', transport: 'post-message', allowSystemKeys: true }
+    { type: 'scroll', wheel: 3 }
   ] as const;
 
   for (const action of blocked) {
     assert.throws(() => prepareAgentDesktopAction(action), /requires_foreground_input/i);
   }
+});
+
+test('Agent Desktop target windows inherit lease scope even when the caller omits it', async () => {
+  const leaseId = '11111111-1111-4111-8111-111111111111';
+  let lookupCount = 0;
+  const agentDesktop = {
+    async activeLeaseForWindow(hwnd: number) {
+      lookupCount += 1;
+      assert.equal(hwnd, 100);
+      return leaseId;
+    },
+    async hasActiveControls() {
+      return true;
+    }
+  } as unknown as AgentDesktopManager;
+
+  assert.equal(await resolveAgentDesktopWindowLease(agentDesktop, 100), leaseId);
+  assert.equal(lookupCount, 1);
+  assert.throws(
+    () => prepareAgentDesktopAction({ type: 'click', selector: 'ApplyButton' }),
+    /requires_foreground_input/i
+  );
+
+  assert.equal(
+    await resolveAgentDesktopWindowLease(agentDesktop, 100, leaseId),
+    leaseId
+  );
+  assert.equal(lookupCount, 1);
+});
+
+test('Desktop 1 actions require an explicit escape while Agent Desktop control is active', async () => {
+  const activeAgentDesktop = {
+    async hasActiveControls() {
+      return true;
+    }
+  } as unknown as AgentDesktopManager;
+
+  await assert.rejects(
+    assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, false),
+    /allow_user_desktop=true/i
+  );
+  await assert.doesNotReject(
+    assertUnscopedUserDesktopActionAllowed(activeAgentDesktop, undefined, true)
+  );
+  await assert.doesNotReject(
+    assertUnscopedUserDesktopActionAllowed(
+      activeAgentDesktop,
+      '11111111-1111-4111-8111-111111111111',
+      false
+    )
+  );
+
+  const idleAgentDesktop = {
+    async hasActiveControls() {
+      return false;
+    }
+  } as unknown as AgentDesktopManager;
+  await assert.doesNotReject(
+    assertUnscopedUserDesktopActionAllowed(idleAgentDesktop, undefined, false)
+  );
+});
+
+test('normal WinForms warns on shell-only UIA tree without blaming Agent Desktop', () => {
+  const win = windowFixture({ className: 'WindowsForms10.Window.8.app.0.1234' });
+  const chromeOnly = [
+    { type: 'Window', className: 'WindowsForms10.Window.8.app.0.1234' },
+    { type: 'TitleBar', automationId: 'TitleBar' },
+    { type: 'MenuBar' },
+    { type: 'Button', automationId: 'Close', name: 'Close' }
+  ];
+  const warning = winFormsProviderVisibilityWarning(win, chromeOnly);
+  assert.match(warning ?? '', /semantic_tree_limited/i);
+  assert.match(warning ?? '', /DWM-cloaked/i);
+  assert.doesNotMatch(warning ?? '', /non-current Agent Desktop/i);
+
+  // WinApp interactive filtering can omit the root node, but the verified
+  // window class still reveals the provider family.
+  assert.match(winFormsProviderVisibilityWarning(win, chromeOnly.slice(1)) ?? '', /semantic_tree_limited/i);
+  assert.equal(winFormsProviderVisibilityWarning(win, [
+    ...chromeOnly,
+    { type: 'Edit', className: 'WindowsForms10.EDIT.app.0.1234' }
+  ]), undefined);
+  assert.equal(winFormsProviderVisibilityWarning(
+    windowFixture({ className: 'HwndWrapper[DefaultDomain;;1234]' }),
+    [{ type: 'Button' }]
+  ), undefined);
 });

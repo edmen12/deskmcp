@@ -1,0 +1,262 @@
+#pragma once
+// Candidate UI-controlled Windows Hello reviewer, NOT yet wired to WPF.
+// The CLI accepts no automatic --sign request; a reviewed on-screen dialog
+// must be approved before requesting the OS-brokered Windows Hello signature.
+#include <windows.h>
+#include <shobjidl.h>
+#include <cstdint>
+#include <tlhelp32.h>
+#include <cwchar>
+#include <wintrust.h>
+#include <softpub.h>
+#include <wincrypt.h>
+#include <regex>
+#include <chrono>
+#include <filesystem>
+#include <limits>
+#include <vector>
+#include <string>
+#include <iostream>
+#include <stdexcept>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Security.Credentials.h>
+#include <winrt/Windows.Security.Cryptography.h>
+
+namespace review {
+namespace credentials=winrt::Windows::Security::Credentials;
+namespace crypto=winrt::Windows::Security::Cryptography;
+struct Challenge {
+    std::string raw, session, lease, desktop, action, epoch, nonce, expires;
+};
+static constexpr unsigned long long kMaxSafeEpoch=9007199254740991ULL;
+inline std::string readBoundedChallenge() {
+    std::string input;
+    input.reserve(256);
+    char ch{};
+    while (std::cin.get(ch)) {
+        if (input.size()>=4096) throw std::runtime_error("Overlong browser authorization challenge");
+        input.push_back(ch);
+    }
+    return input;
+}
+inline bool number(const std::string& s,unsigned long long& n) {
+    if(s.empty() || s.size()>16 || (s.size()>1 && s[0]=='0'))return false;
+    n=0;
+    for(unsigned char c:s){
+        if(c<'0'||c>'9')return false;
+        const auto digit=c-'0';
+        if(n>((std::numeric_limits<unsigned long long>::max)()-digit)/10)return false;
+        n=n*10+digit;
+    }
+    return true;
+}
+inline Challenge parseChallenge(const std::string& raw) {
+    if(raw.empty() || raw.size()>4096 || raw.find('\r')!=std::string::npos ||
+       raw.find('\0')!=std::string::npos) throw std::runtime_error("Invalid challenge bytes");
+    std::vector<std::string> fields;
+    std::size_t start=0;
+    while(true){
+        const auto end=raw.find('\n',start);
+        if(end==std::string::npos){fields.push_back(raw.substr(start));break;}
+        fields.push_back(raw.substr(start,end-start));
+        start=end+1;
+    }
+    if(fields.size()!=8 || fields[0]!="deskmcp-browser-human-v2")
+        throw std::runtime_error("Unsupported authorization challenge version");
+    const std::regex uuid(R"(^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$)",
+       std::regex_constants::icase);
+    const std::regex nonce(R"(^[0-9a-f]{32}$)",std::regex_constants::icase);
+    if(!std::regex_match(fields[1],uuid)||!std::regex_match(fields[2],uuid)||
+       !std::regex_match(fields[3],uuid)||!std::regex_match(fields[6],nonce)||
+       (fields[4]!="accept" && fields[4]!="resume"))
+        throw std::runtime_error("Invalid session, lease, desktop, action or nonce");
+    unsigned long long epoch=0,expiry=0;
+    if(!number(fields[5],epoch)||epoch>kMaxSafeEpoch||!number(fields[7],expiry))
+        throw std::runtime_error("Invalid epoch or expiration");
+    const auto now=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    if(now<0 || expiry<=static_cast<unsigned long long>(now) ||
+       expiry>static_cast<unsigned long long>(now)+60000ULL)
+        throw std::runtime_error("Expired or future-dated challenge");
+    return {raw,fields[1],fields[2],fields[3],fields[4],fields[5],fields[6],fields[7]};
+}
+// This candidate relies on DeskMCP's preinstalled native virtual desktop
+// resolver next to the native broker. Never load a caller-provided library.
+inline bool userIsOnSignedDesktop(const Challenge& challenge){
+    wchar_t exe[32768]{};
+    if(!GetModuleFileNameW(nullptr,exe,32768))return false;
+    const auto base=std::filesystem::path(exe).parent_path();
+    const auto dll=base/L"virtual-desktop-accessor"/L"VirtualDesktopAccessor.dll";
+    if(!std::filesystem::exists(dll))return false;
+    HMODULE module=LoadLibraryExW(dll.c_str(),nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if(!module)return false;
+    using Current=int(__cdecl*)();
+    using ById=int(__cdecl*)(GUID);
+    const auto current=reinterpret_cast<Current>(GetProcAddress(module,"GetCurrentDesktopNumber"));
+    const auto byId=reinterpret_cast<ById>(GetProcAddress(module,"GetDesktopNumberById"));
+    GUID expected{};
+    const std::wstring id(winrt::to_hstring(challenge.desktop).c_str());
+    const bool parsed=SUCCEEDED(CLSIDFromString(id.c_str(),&expected));
+    const bool valid=parsed && current && byId && current()>=1 && byId(expected)==current();
+    FreeLibrary(module);
+    return valid;
+}
+// Publisher thumbprint must be embedded by an authorized SIGNED release
+// build. The developer/test build deliberately has no pin and must NEVER sign.
+#ifndef DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT
+#define DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT L""
+#endif
+inline bool trustedPublisherConfigured() {
+    constexpr auto pin=DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT;
+    if(wcslen(pin)!=40)return false;
+    for(const wchar_t* digit=pin; *digit; ++digit) {
+        if(!((*digit>=L'0'&&*digit<=L'9')||(*digit>=L'A'&&*digit<=L'F')||
+             (*digit>=L'a'&&*digit<=L'f')))return false;
+    }
+    return true;
+}
+inline bool verifiedPinnedAuthenticode(const std::filesystem::path& path) {
+    constexpr auto pin=DESKMCP_TRUSTED_PUBLISHER_THUMBPRINT;
+    if(!trustedPublisherConfigured())return false;
+    WINTRUST_FILE_INFO file{};
+    file.cbStruct=sizeof(file);
+    file.pcwszFilePath=path.c_str();
+    WINTRUST_DATA data{};
+    data.cbStruct=sizeof(data);
+    data.dwUIChoice=WTD_UI_NONE;
+    data.fdwRevocationChecks=WTD_REVOKE_WHOLECHAIN;
+    data.dwUnionChoice=WTD_CHOICE_FILE;
+    data.pFile=&file;
+    data.dwStateAction=WTD_STATEACTION_VERIFY;
+    data.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+    GUID action=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    const LONG code=WinVerifyTrust(nullptr,&action,&data);
+    bool valid=false;
+    if(code==ERROR_SUCCESS && data.hWVTStateData) {
+        const auto provider=WTHelperProvDataFromStateData(data.hWVTStateData);
+        const auto signer=provider?WTHelperGetProvSignerFromChain(provider,0,FALSE,0):nullptr;
+        const auto leaf=signer && signer->csCertChain?signer->pasCertChain[0].pCert:nullptr;
+        BYTE hash[20]{};
+        DWORD length=sizeof(hash);
+        if(leaf && CertGetCertificateContextProperty(leaf,CERT_SHA1_HASH_PROP_ID,hash,&length) &&
+           length==sizeof(hash)) {
+            constexpr wchar_t digits[]=L"0123456789ABCDEF";
+            wchar_t actual[41]{};
+            for(unsigned i=0;i<sizeof(hash);i++) {
+                actual[2*i]=digits[hash[i]>>4];
+                actual[2*i+1]=digits[hash[i]&15];
+            }
+            valid=CompareStringOrdinal(actual,-1,pin,-1,TRUE)==CSTR_EQUAL;
+        }
+    }
+    data.dwStateAction=WTD_STATEACTION_CLOSE;
+    if(data.hWVTStateData)WinVerifyTrust(nullptr,&action,&data);
+    return valid;
+}
+// Additional fail-closed process ownership check. It narrows the caller to
+// a direct-child native broker of the same-installation DeskMCP.exe WPF
+// process, with that process owning the review window. It is NOT a strong
+// Windows same-user trust boundary: debugger access, parent PID spoofing,
+// unsigned binary replacement and arbitrary same-user code remain threats.
+inline bool parentPanelOwnsReviewWindow(HWND owner) {
+    if (!owner || GetAncestor(owner,GA_ROOT)!=owner) return false;
+    DWORD windowPid=0;
+    if (!GetWindowThreadProcessId(owner,&windowPid) || !windowPid ||
+        windowPid==GetCurrentProcessId()) return false;
+    const DWORD pid=GetCurrentProcessId();
+    HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+    if(snapshot==INVALID_HANDLE_VALUE)return false;
+    PROCESSENTRY32W entry{};
+    entry.dwSize=sizeof(entry);
+    DWORD parentPid=0;
+    if(Process32FirstW(snapshot,&entry)) {
+        do {
+            if(entry.th32ProcessID==pid) { parentPid=entry.th32ParentProcessID; break; }
+        } while(Process32NextW(snapshot,&entry));
+    }
+    CloseHandle(snapshot);
+    if(!parentPid || parentPid!=windowPid)return false;
+    HANDLE parent=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,parentPid);
+    if(!parent)return false;
+    wchar_t actual[32768]{};
+    DWORD length=32768;
+    const BOOL resolved=QueryFullProcessImageNameW(parent,0,actual,&length);
+    DWORD parentSession=0, brokerSession=0;
+    const bool sameSession=ProcessIdToSessionId(parentPid,&parentSession) &&
+        ProcessIdToSessionId(pid,&brokerSession) && parentSession==brokerSession;
+    FILETIME parentCreate{},parentExit{},parentKernel{},parentUser{};
+    FILETIME childCreate{},childExit{},childKernel{},childUser{};
+    const bool times=GetProcessTimes(parent,&parentCreate,&parentExit,&parentKernel,&parentUser) &&
+        GetProcessTimes(GetCurrentProcess(),&childCreate,&childExit,&childKernel,&childUser);
+    CloseHandle(parent);
+    if(!resolved || !sameSession || !times ||
+        CompareFileTime(&parentCreate,&childCreate)>0)return false;
+    wchar_t own[32768]{};
+    if(!GetModuleFileNameW(nullptr,own,32768))return false;
+    const auto binary=std::filesystem::path(own);
+    const auto expected=binary.parent_path()/L"DeskMCP.exe";
+    // Caller must be the WPF panel installed alongside this native broker.
+    // Only the panel's installer may legitimately set this path.
+    return CompareStringOrdinal(actual,-1,expected.c_str(),-1,TRUE)==CSTR_EQUAL &&
+        verifiedPinnedAuthenticode(expected) && verifiedPinnedAuthenticode(binary);
+}
+inline bool verifiedOwnerOnDesktop(HWND owner, const Challenge& challenge) {
+    if (!owner || !IsWindow(owner) || !IsWindowVisible(owner) ||
+        !parentPanelOwnsReviewWindow(owner)) return false;
+    IVirtualDesktopManager* manager=nullptr;
+    if (FAILED(CoCreateInstance(CLSID_VirtualDesktopManager,nullptr,CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&manager))) || !manager) return false;
+    GUID actual{}, expected{};
+    const std::wstring claimed(winrt::to_hstring(challenge.desktop).c_str());
+    const bool ok=SUCCEEDED(CLSIDFromString(claimed.c_str(),&expected)) &&
+        SUCCEEDED(manager->GetWindowDesktopId(owner,&actual)) &&
+        InlineIsEqualGUID(actual,expected);
+    manager->Release();
+    return ok;
+}
+inline int reviewAndSign(const Challenge& challenge, HWND owner) {
+    if (!verifiedOwnerOnDesktop(owner,challenge)) {
+        std::cerr<<"No trusted visible owner window on the signed desktop\n";
+        return 7;
+    }
+    if(!verifiedOwnerOnDesktop(owner,challenge) || !userIsOnSignedDesktop(challenge)){
+        std::cerr<<"Matching visible Agent Desktop 2+ not verified; refusing user prompt\n";
+        return 7;
+    }
+    const std::wstring action=challenge.action=="accept"
+       ?L"Let me control this browser":L"Return browser control to Agent";
+    const std::wstring session(winrt::to_hstring(challenge.session).c_str());
+    const std::wstring lease(winrt::to_hstring(challenge.lease).c_str());
+    const std::wstring desktop(winrt::to_hstring(challenge.desktop).c_str());
+    std::wstring body=L"DeskMCP Browser Human Takeover\n\nAction: "+action+
+       L"\nSession: "+session+L"\nLease: "+lease+L"\nDesktop: "+desktop+
+       L"\n\nWhile you are in control, Agent cannot inspect the browser."
+       L"\nHandback will close every earlier tab before Agent resumes."
+       L"\n\nProceed to a Windows Hello verification?";
+    // Cancel is the default. No auto-click, auto-focus, or virtual desktop switch.
+    const int approval=MessageBoxW(owner,body.c_str(),L"DeskMCP — Verify local browser authorization",
+       MB_OKCANCEL|MB_ICONWARNING|MB_DEFBUTTON2);
+    if(approval!=IDOK)return 8;
+    if(!verifiedOwnerOnDesktop(owner,challenge) || !userIsOnSignedDesktop(challenge)){
+        std::cerr<<"Desktop changed while reviewing request\n";
+        return 7;
+    }
+    const auto opened=credentials::KeyCredentialManager::OpenAsync(L"DeskMCP.BrowserHuman.v1").get();
+    if(opened.Status()!=credentials::KeyCredentialStatus::Success)
+        throw std::runtime_error("Dedicated Windows Hello credential has not been enrolled");
+    const auto binary=crypto::CryptographicBuffer::ConvertStringToBinary(
+       winrt::to_hstring(challenge.raw),crypto::BinaryStringEncoding::Utf8);
+    const auto signature=opened.Credential().RequestSignAsync(binary).get();
+    if(signature.Status()!=credentials::KeyCredentialStatus::Success){
+        std::cerr<<"Windows Hello signature was not approved\n";
+        return 5;
+    }
+    if(!verifiedOwnerOnDesktop(owner,challenge) || !userIsOnSignedDesktop(challenge)){
+        std::cerr<<"Desktop changed during Windows Hello; signature discarded\n";
+        return 7;
+    }
+    std::cout<<winrt::to_string(crypto::CryptographicBuffer::EncodeToBase64String(signature.Result()))<<"\n";
+    return 0;
+}
+}

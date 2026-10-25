@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AuditLogger } from './audit.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
@@ -40,7 +41,8 @@ export function registerAgentDesktopTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   manager: AgentDesktopManager,
-  taskStore?: TaskContextStore
+  taskStore?: TaskContextStore,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   server.registerTool(
     'desktop_agent_desktop',
@@ -65,6 +67,8 @@ export function registerAgentDesktopTools(
         return failure('Audit start failed', error);
       }
       try {
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_agent_desktop');
+        const execute = async () => {
         policy.assertCanUseComputer();
         let result;
         if (action === 'status') {
@@ -96,6 +100,12 @@ export function registerAgentDesktopTools(
           const status = await manager.stopControl(lease_id);
           result = { ...poolView(status), stopped: true };
         }
+          return result;
+        };
+        const result = await (crossToolGuard
+          ? crossToolGuard.runNonBrowserOperation('desktop_agent_desktop', execute)
+          : execute());
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_agent_desktop');
         await audit.finish(operation, 'allow');
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (error) {

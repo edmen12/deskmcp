@@ -1,0 +1,109 @@
+import { formatJsonIfPossible, inferLanguageFromPath, renderCodeViewer } from './components/code-viewer.js';
+import { escapeHtml } from './components/highlighting.js';
+import { renderHtmlPreview } from './components/html-renderer.js';
+import { renderDirectoryBody } from './directory-controller.js';
+import { stripReadStatusLine } from './document-workspace.js';
+import { isAllowedImageMimeType, normalizeImageMimeType } from './image-preview.js';
+import { isLikelyUrl } from './payload-utils.js';
+function renderRawFallback(source) {
+    return `<pre class="code-viewer"><code class="hljs language-text">${escapeHtml(source)}</code></pre>`;
+}
+function renderImageBody(payload) {
+    const mimeType = normalizeImageMimeType(payload.mimeType);
+    if (!isAllowedImageMimeType(mimeType)) {
+        return {
+            notice: 'Preview is unavailable for this image format.',
+            html: '<div class="panel-content source-content"></div>',
+        };
+    }
+    if (!payload.content || payload.content.trim().length === 0) {
+        return {
+            notice: 'Preview is unavailable because image data is missing.',
+            html: '<div class="panel-content source-content"></div>',
+        };
+    }
+    const src = `data:${mimeType};base64,${payload.content}`;
+    return {
+        html: `<div class="panel-content image-content"><div class="image-preview"><img src="${escapeHtml(src)}" alt="${escapeHtml(payload.fileName)}" loading="eager" decoding="async"></div></div>`,
+    };
+}
+function buildPreviewCapabilities(payload, canCopy) {
+    return {
+        supportsPreview: true,
+        canCopy,
+        canOpenInFolder: !isLikelyUrl(payload.filePath),
+    };
+}
+const handlerRegistry = {
+    directory: {
+        getCapabilities: (payload) => buildPreviewCapabilities(payload, false),
+        renderBody: ({ payload }) => renderDirectoryBody(stripReadStatusLine(payload.content), payload.filePath),
+    },
+    html: {
+        getCapabilities: (payload) => buildPreviewCapabilities(payload, true),
+        renderBody: ({ payload, htmlMode }) => renderHtmlPreview(stripReadStatusLine(payload.content), htmlMode),
+    },
+    image: {
+        getCapabilities: (payload) => buildPreviewCapabilities(payload, false),
+        renderBody: ({ payload }) => renderImageBody(payload),
+    },
+    markdown: {
+        getCapabilities: (payload) => buildPreviewCapabilities(payload, false),
+        renderBody: ({ payload, markdownController }) => {
+            try {
+                return markdownController.buildBody(payload);
+            }
+            catch {
+                return {
+                    notice: 'Markdown renderer failed. Showing raw source instead.',
+                    html: `<div class="panel-content source-content">${renderRawFallback(stripReadStatusLine(payload.content))}</div>`,
+                };
+            }
+        },
+    },
+    text: {
+        getCapabilities: (payload) => buildPreviewCapabilities(payload, true),
+        renderBody: ({ payload, startLine }) => {
+            const cleanedContent = stripReadStatusLine(payload.content);
+            const detectedLanguage = inferLanguageFromPath(payload.filePath);
+            const formatted = formatJsonIfPossible(cleanedContent, payload.filePath);
+            return {
+                notice: formatted.notice,
+                html: `<div class="panel-content source-content">${renderCodeViewer(formatted.content, detectedLanguage, startLine)}</div>`,
+            };
+        },
+    },
+    unsupported: {
+        getCapabilities: (payload) => {
+            const hasRawContent = stripReadStatusLine(payload.content).trim().length > 0;
+            return {
+                supportsPreview: hasRawContent,
+                canCopy: hasRawContent,
+                canOpenInFolder: !isLikelyUrl(payload.filePath),
+            };
+        },
+        renderBody: ({ payload }) => {
+            const rawContent = stripReadStatusLine(payload.content);
+            if (rawContent.trim().length === 0) {
+                return {
+                    notice: 'Preview is not available for this file type.',
+                    html: '<div class="panel-content source-content"></div>',
+                };
+            }
+            return {
+                html: `<div class="panel-content source-content">${renderRawFallback(rawContent)}</div>`,
+            };
+        },
+    },
+};
+export function getFileTypeCapabilities(payload) {
+    return handlerRegistry[payload.fileType]?.getCapabilities(payload) ?? {
+        supportsPreview: false,
+        canCopy: false,
+        canOpenInFolder: !isLikelyUrl(payload.filePath),
+    };
+}
+export function renderPayloadBody(options) {
+    const handler = handlerRegistry[options.payload.fileType] ?? handlerRegistry.text;
+    return handler.renderBody(options);
+}

@@ -1,4 +1,6 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import http, { type Server as HttpServer } from 'node:http';
 import {
   localhostHostValidation,
@@ -8,8 +10,10 @@ import {
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AuditLogger } from './audit.js';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
+import type { RealDesktop2OwnedControl } from './desktop2-real-owned-control.js';
 import { ArtifactExpiredError, type ArtifactStore } from './artifact-store.js';
 import type { BrowserRuntime } from './browser-runtime.js';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import { resolveWinAppPath, WINAPP_VERSION } from './computer-use-backend.js';
 import { createComputerUseRuntime, type ComputerUseRuntime } from './computer-use-runtime.js';
 import { createDesktopMcpServer, SERVER_NAME, SERVER_VERSION } from './mcp-server.js';
@@ -20,6 +24,14 @@ import type { ObservationStore } from './observation-store.js';
 import type { ProcessSessionRegistry } from './process-session-registry.js';
 import type { SkillStore } from './skill-store.js';
 import type { TaskContextStore } from './task-context.js';
+
+// Issued out-of-band by a trusted, owned-launch authority, never derived
+// from the caller's PID, window title, lease ID or HTTP headers.
+export interface RealD2OwnerGrant {
+  readonly bearerToken: string; // 32 cryptographically random bytes, lowercase hex
+  readonly clientId: string;
+  readonly expiresAtMs: number; // server-side expiry, never client-provided
+}
 
 export interface RunningHttpServer {
   readonly host: string;
@@ -150,9 +162,11 @@ async function serveSignedArtifact(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   store: ArtifactStore,
-  route: { artifactId: string; filename: string }
+  route: { artifactId: string; filename: string },
+  crossToolGuard?: BrowserCrossToolGuard
 ): Promise<void> {
   try {
+    const serve = async () => {
     const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
     const resolved = await store.resolveSignedDownload(
       route.artifactId,
@@ -167,14 +181,16 @@ async function serveSignedArtifact(
       'cache-control': 'private, no-store, max-age=0',
       'x-content-type-options': 'nosniff'
     });
-    const stream = createReadStream(resolved.payload);
-    stream.once('error', error => {
-      console.error('[deskmcp] artifact stream failed:', error);
-      res.destroy(error);
-    });
-    stream.pipe(res);
+    await pipeline(createReadStream(resolved.payload), res);
+    };
+    if (crossToolGuard) await crossToolGuard.runNonBrowserOperation('artifact_http_download', serve);
+    else await serve();
   } catch (error) {
-    writeJson(res, error instanceof ArtifactExpiredError ? 410 : 403, { error: 'artifact_access_denied' });
+    if (!res.headersSent) {
+      writeJson(res, error instanceof ArtifactExpiredError ? 410 : 403, { error: 'artifact_access_denied' });
+    } else {
+      res.destroy(error instanceof Error ? error : new Error('Artifact download interrupted.'));
+    }
   }
 }
 
@@ -192,7 +208,11 @@ export async function startHttpServer(
   dynamicMcpHub?: DynamicMcpHub,
   browser?: BrowserRuntime,
   skillStore?: SkillStore,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  // Staging-only injection. Production index.ts never supplies this object.
+  realD2Owned?: RealDesktop2OwnedControl,
+  realD2OwnerGrant?: RealD2OwnerGrant,
+  injectedCrossToolGuard?: BrowserCrossToolGuard
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -201,6 +221,23 @@ export async function startHttpServer(
     throw new Error('Desktop policy, audit logger, observation store, and process registry are required when DeskMCP backend is enabled.');
   }
   const effectiveComputerUse = computerUse ?? (bridge ? createComputerUseRuntime() : undefined);
+  const wantsRealD2 = realD2Owned !== undefined &&
+    process.env.DESKTOP_MCP_REAL_D2_OWNED_ACTION_EXPERIMENT === '1';
+  if (realD2OwnerGrant && !wantsRealD2) {
+    throw new Error('REAL_D2_GRANT_WITHOUT_OWNED_ACTION_RUNTIME');
+  }
+  if (wantsRealD2 && (!bridge || !policy || !audit || !agentDesktop ||
+      !realD2OwnerGrant ||
+      !/^[0-9a-f]{64}$/u.test(realD2OwnerGrant.bearerToken) ||
+      !/^[A-Za-z0-9._-]{8,128}$/u.test(realD2OwnerGrant.clientId) ||
+      !Number.isSafeInteger(realD2OwnerGrant.expiresAtMs) ||
+      realD2OwnerGrant.expiresAtMs <= Date.now() ||
+      realD2OwnerGrant.expiresAtMs > Date.now() + 15*60_000)) {
+    throw new Error('REAL_D2_OWNER_ACCESS_GRANT_REQUIRED');
+  }
+  const crossToolGuard = injectedCrossToolGuard ?? browser?.crossToolGuard?.();
+  const ownerKey = wantsRealD2
+    ? Buffer.from(realD2OwnerGrant!.bearerToken, 'hex') : undefined;
 
   const mcpHandler = createMcpHandler(() =>
     createDesktopMcpServer(
@@ -215,9 +252,23 @@ export async function startHttpServer(
       dynamicMcpHub,
       browser,
       skillStore,
-      agentDesktop
+      agentDesktop,
+      undefined, // Ordinary /mcp must NEVER expose real Desktop2 mutation.
+      crossToolGuard
     )
   );
+  // Separate staging-only route. No caller-selected header or lease ID
+  // authorizes mutation without the out-of-band 256-bit owner grant.
+  const ownerMcpHandler = wantsRealD2 ? createMcpHandler(() =>
+    createDesktopMcpServer(
+      bridge, policy, audit, observations, processSessions, effectiveComputerUse,
+      taskStore, artifactStore, dynamicMcpHub, browser, skillStore, agentDesktop,
+      realD2Owned, crossToolGuard
+    )
+  ) : undefined;
+  const ownerNodeHandler = ownerMcpHandler ? toNodeHandler(ownerMcpHandler, {
+    onerror(error) { console.error('[deskmcp] isolated Desktop2 MCP adapter error:', error); }
+  }) : undefined;
   const nodeHandler = toNodeHandler(mcpHandler, {
     onerror(error) {
       console.error('[deskmcp] MCP adapter error:', error);
@@ -271,7 +322,34 @@ export async function startHttpServer(
         writeJson(res, artifactStore ? 405 : 404, { error: artifactStore ? 'method_not_allowed' : 'not_found' });
         return;
       }
-      void serveSignedArtifact(req, res, artifactStore, artifactRoute);
+      // A signed URL is not permission to bypass an active human handoff.
+      try { crossToolGuard?.assertNonBrowserToolAllowed('artifact_http_download'); }
+      catch { writeJson(res, 403, { error: 'artifact_access_denied' }); return; }
+      void serveSignedArtifact(req, res, artifactStore, artifactRoute, crossToolGuard);
+      return;
+    }
+
+    if (pathname === '/mcp/real-d2') {
+      if (!ownerNodeHandler || !ownerKey) {
+        writeJson(res, 404, { error: 'not_found' });
+        return;
+      }
+      if (!validateHost(req, res) || !validateOrigin(req, res)) return;
+      const bearer = req.headers.authorization;
+      const provided = typeof bearer === 'string'
+        ? /^Bearer ([0-9a-f]{64})$/u.exec(bearer)?.[1] : undefined;
+      if (!provided || Date.now() >= realD2OwnerGrant!.expiresAtMs ||
+          !timingSafeEqual(Buffer.from(provided, 'hex'), ownerKey)) {
+        writeJson(res, 403, { error: 'desktop2_owner_access_denied' });
+        return;
+      }
+      (req as typeof req & { auth: {
+        token: string; clientId: string; scopes: string[];
+      }}).auth = {
+        token: provided, clientId: realD2OwnerGrant!.clientId,
+        scopes: ['desktop2:owned']
+      };
+      void ownerNodeHandler(req as unknown as Parameters<typeof ownerNodeHandler>[0], res);
       return;
     }
 
@@ -307,7 +385,7 @@ export async function startHttpServer(
     port: actualPort,
     url: serverUrl,
     async close() {
-      await mcpHandler.close();
+      await Promise.all([mcpHandler.close(), ownerMcpHandler?.close()]);
       await new Promise<void>((resolve, reject) => {
         server.close(error => error ? reject(error) : resolve());
       });

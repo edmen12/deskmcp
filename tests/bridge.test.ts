@@ -5,7 +5,7 @@ import test from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { AgentDesktopManager } from '../src/agent-desktop-state.js';
 import { AuditLogger, type AuditRecord } from '../src/audit.js';
-import { DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
+import { DEFAULT_DESKMCP_BACKEND_ENTRY, DesktopBackendBridge } from '../src/desktop-backend-bridge.js';
 import { DesktopPolicy } from '../src/desktop-policy.js';
 import { startHttpServer } from '../src/http-server.js';
 import { ObservationStore } from '../src/observation-store.js';
@@ -25,6 +25,13 @@ const moveSourcePath = path.join(TEST_AREA, 'move-source-e2e.txt');
 const moveDestPath = path.join(createdDirPath, 'moved.txt');
 const searchPublicPath = path.join(TEST_AREA, 'search-public-visible.txt');
 const searchSensitivePath = path.join(TEST_AREA, '.env.search-e2e');
+const sourceProcessHost = path.join(
+  PROJECT_ROOT,
+  'runtime',
+  'process-host',
+  process.arch === 'arm64' ? 'win-arm64' : 'win-x64',
+  'DeskMCP.ProcessHost.exe'
+);
 
 function makeClient(version: string): Client {
   return new Client(
@@ -62,7 +69,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
   await audit.init();
   const observations = new ObservationStore();
   const processSessions = new ProcessSessionRegistry();
-  const bridge = new DesktopBackendBridge();
+  const bridge = new DesktopBackendBridge(DEFAULT_DESKMCP_BACKEND_ENTRY, sourceProcessHost);
   await bridge.start();
   const running = await startHttpServer('127.0.0.1', 0, bridge, policy, audit, observations, processSessions);
   const client = makeClient('0.9.0');
@@ -83,12 +90,15 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
         'desktop_list_directory',
         'desktop_move_file',
         'desktop_policy_status',
+        'desktop_process_capacity',
         'desktop_read_file',
         'desktop_read_process',
         'desktop_search',
         'desktop_start_process',
         'desktop_terminate_process',
         'desktop_ui_action',
+        'desktop_ui_object_snapshot',
+        'desktop_ui_object_windows',
         'desktop_ui_snapshot',
         'desktop_ui_windows',
         'desktop_write_file'
@@ -413,12 +423,15 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
           'desktop_list_directory',
           'desktop_move_file',
           'desktop_policy_status',
+          'desktop_process_capacity',
           'desktop_read_file',
           'desktop_read_process',
           'desktop_search',
           'desktop_start_process',
           'desktop_terminate_process',
           'desktop_ui_action',
+          'desktop_ui_object_snapshot',
+          'desktop_ui_object_windows',
           'desktop_ui_snapshot',
           'desktop_ui_windows',
           'desktop_write_file'
@@ -493,16 +506,17 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
     });
     const agentLeaseId = '11111111-1111-4111-8111-111111111111';
     let assertedAgentLeaseId: string | undefined;
-    let placedAgentProcess: { pid: number; leaseId: string } | undefined;
-    let failAgentPlacement = false;
+    let requestedAgentDesktopObjectLeaseId: string | undefined;
+    let failAgentIsolation = false;
     const fakeAgentDesktop = {
       async assertLease(leaseId: string) {
         assertedAgentLeaseId = leaseId;
         return {};
       },
-      async placeProcessTreeWindows(pid: number, leaseId: string) {
-        placedAgentProcess = { pid, leaseId };
-        if (failAgentPlacement) throw new Error('simulated Agent Desktop placement failure');
+      async desktopObjectNameForLease(leaseId: string) {
+        requestedAgentDesktopObjectLeaseId = leaseId;
+        if (failAgentIsolation) throw new Error('simulated Agent Desktop isolated desktop failure');
+        return 'DeskMCP-Agent-11111111111141118111111111111111';
       }
     } as unknown as AgentDesktopManager;
     const fullControlServer = await startHttpServer(
@@ -528,6 +542,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       const startProperties = (startTool.inputSchema as { properties?: Record<string, { enum?: string[]; type?: string }> }).properties;
       assert.deepEqual(startProperties?.window_mode?.enum, ['hidden', 'visible']);
       assert.deepEqual(startProperties?.elevation?.enum, ['standard', 'admin']);
+      assert.deepEqual(startProperties?.process_lifetime?.enum, ['root', 'job']);
       assert.equal(startProperties?.cwd?.type, 'string');
       assert.deepEqual(startProperties?.temp_mode?.enum, ['inherit', 'short']);
       assert.equal(startProperties?.agent_desktop_lease_id?.type, 'string');
@@ -566,7 +581,7 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
 
           const contextRead = await fullControlClient.callTool({
             name: 'desktop_read_process',
-            arguments: { session_id: contextSessionMatch[0], timeout_ms: 1000, offset: 0, length: 500 }
+            arguments: { session_id: contextSessionMatch[0], timeout_ms: 5000, offset: 0, length: 500 }
           });
           assert.equal(contextRead.isError, undefined);
           const contextText = contextRead.content
@@ -589,20 +604,33 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
         }
       }
 
-      const agentStarted = await fullControlClient.callTool({
+      const jobLifetimeDenied = await fullControlClient.callTool({
         name: 'desktop_start_process',
         arguments: {
           command: 'node -i',
           timeout_ms: 1000,
+          process_lifetime: 'job',
+          ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {})
+        }
+      });
+      assert.equal(jobLifetimeDenied.isError, true);
+      assert.match(JSON.stringify(jobLifetimeDenied.content), /process_lifetime=job is only supported with agent_desktop_lease_id/);
+      assert.equal(processSessions.size(), 0);
+
+      const agentStarted = await fullControlClient.callTool({
+        name: 'desktop_start_process',
+        arguments: {
+          command: 'node -e "setInterval(()=>{},1000)"',
+          timeout_ms: 1000,
+          process_lifetime: 'job',
           ...(process.platform === 'win32' ? { shell: 'cmd.exe' } : {}),
           agent_desktop_lease_id: agentLeaseId
         }
       });
       assert.equal(agentStarted.isError, undefined);
       assert.equal(assertedAgentLeaseId, agentLeaseId);
-      assert.equal(placedAgentProcess?.leaseId, agentLeaseId);
-      assert.ok((placedAgentProcess?.pid ?? 0) > 0);
-      assert.match(JSON.stringify(agentStarted.content), /Owned process tree constrained to the active Agent Desktop lease/);
+      assert.equal(requestedAgentDesktopObjectLeaseId, agentLeaseId);
+      assert.match(JSON.stringify(agentStarted.content), /isolated desktop object/);
       const agentSessionMatch = JSON.stringify(agentStarted.content).match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
       assert.ok(agentSessionMatch);
       const agentTerminated = await fullControlClient.callTool({
@@ -612,8 +640,8 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
       assert.equal(agentTerminated.isError, undefined);
       assert.equal(processSessions.size(), 0);
 
-      failAgentPlacement = true;
-      const placementFailed = await fullControlClient.callTool({
+      failAgentIsolation = true;
+      const isolationFailed = await fullControlClient.callTool({
         name: 'desktop_start_process',
         arguments: {
           command: 'node -i',
@@ -622,10 +650,10 @@ test('workspace-write policy exposes guarded DeskMCP backend filesystem tools', 
           agent_desktop_lease_id: agentLeaseId
         }
       });
-      assert.equal(placementFailed.isError, true);
-      assert.match(JSON.stringify(placementFailed.content), /simulated Agent Desktop placement failure/);
+      assert.equal(isolationFailed.isError, true);
+      assert.match(JSON.stringify(isolationFailed.content), /simulated Agent Desktop isolated desktop failure/);
       assert.equal(processSessions.size(), 0);
-      failAgentPlacement = false;
+      failAgentIsolation = false;
 
       const agentAdminDenied = await fullControlClient.callTool({
         name: 'desktop_start_process',
@@ -733,7 +761,7 @@ test('Windows native ProcessHost launch keeps legacy backend disconnected and pr
 
   const tempDirectory = path.join(TEST_AREA, 'native-process-context-temp');
   await rm(tempDirectory, { recursive: true, force: true });
-  const bridge = new DesktopBackendBridge();
+  const bridge = new DesktopBackendBridge(DEFAULT_DESKMCP_BACKEND_ENTRY, sourceProcessHost);
 
   try {
     assert.equal(bridge.info().backendConnected, false);

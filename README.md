@@ -7,7 +7,7 @@
   <a href="https://github.com/edmen12/deskmcp/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/edmen12/deskmcp?display_name=tag" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-22B8FF" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20x64%20%2B%20ARM64-2563EB" />
-  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-27-2DE0D8" />
+  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-29-2DE0D8" />
 </p>
 
 # DeskMCP
@@ -47,9 +47,9 @@ The tray Control Panel shows Gateway/Tunnel health, the active permission profil
 5. For a new plugin use **Name: DeskMCP**, **Connection: Tunnel**, **Auth: No auth**. If ChatGPT reports **Connector name already exists**, cancel creation and reuse the existing DeskMCP plugin instead.
 6. Select the Tunnel, check **I understand and want to continue**, then **Scan tools**.
 
-Expected result: **27 DeskMCP tools**.
+Expected result: **29 DeskMCP tools**.
 
-The Runtime API Key is protected with Windows DPAPI and is not written to `settings.json`. Secret writes are verified by immediate DPAPI readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
+The Runtime API Key is encrypted by Windows and is not written to `settings.json`. DeskMCP normally uses current-user DPAPI; when that Windows facility is unavailable, recovery storage uses authenticated encryption and a non-exportable Windows CNG key restricted to the current user, SYSTEM, and administrators. Recovery initialization requires administrator access once. Secret writes are verified by immediate protected-key readback; settings use atomic replacement with a recoverable backup. You can skip Tunnel setup during First Run and configure it later.
 ## Architecture
 
 <p align="center">
@@ -87,7 +87,7 @@ The Tunnel provides the remote transport. The local Gateway checks policy before
 `Full` and `Unlock` are never persisted. Restarting DeskMCP returns to the last safe persisted profile: **Read** or **Write**. Neither profile bypasses Windows ACL/UAC or any remote-client safety policy.
 ## Tool surface
 
-DeskMCP currently exposes a stable **27-tool** MCP surface:
+DeskMCP currently exposes a stable **29-tool** MCP surface:
 
 ```text
 desktop_policy_status
@@ -106,6 +106,8 @@ desktop_terminate_process
 desktop_ui_windows
 desktop_ui_snapshot
 desktop_ui_action
+desktop_ui_object_windows
+desktop_ui_object_snapshot
 desktop_agent_desktop
 desktop_task_manage
 desktop_artifact_manage
@@ -196,7 +198,7 @@ Build the complete Windows release with:
 scripts\build-installer.cmd
 ```
 
-The release pipeline performs Gateway build, clean `dist` generation, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, pinned WinApp CLI provenance/architecture checks, stage smoke, 27-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
+The release pipeline performs Gateway build, clean `dist` generation, self-contained WPF publish, production-only dependency install, third-party license inventory/notices generation, pinned WinApp CLI provenance/architecture checks, stage smoke, 29-tool validation, Single Instance validation, orphan/lock checks, branded Setup compilation, critical-file SHA-256 integrity generation, injected-failure rollback, corrupt/interrupted-install recovery, install → upgrade → runtime → uninstall smoke, and final release metadata generation.
 
 Generated artifacts live under ignored `runtime\release\` and should be attached to GitHub Releases instead of committed.
 

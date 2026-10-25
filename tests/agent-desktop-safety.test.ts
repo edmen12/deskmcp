@@ -482,3 +482,77 @@ test('Agent Desktop process-tree placement fails closed when no stable owned GUI
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('Agent Desktop resolves a window to its active lease by actual virtual desktop identity', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deskmcp-agent-window-scope-'));
+  try {
+    const leaseId = randomUUID();
+    const agentDesktopId = randomUUID();
+    const userDesktopId = randomUUID();
+    const now = new Date().toISOString();
+    const native = {
+      async windowInfo(hwnd: number) {
+        return {
+          hwnd: String(hwnd),
+          desktopId: hwnd === 100 ? agentDesktopId : userDesktopId,
+          desktopNumber: hwnd === 100 ? 2 : 1,
+          onCurrentDesktop: hwnd !== 100
+        };
+      }
+    } as unknown as AgentDesktopNativeBridge;
+    const manager = new AgentDesktopManager(root, native);
+    await manager.init();
+
+    await writeJson(path.join(root, 'config.json'), {
+      schemaVersion: 2,
+      bindings: [{ schemaVersion: 1, desktopId: agentDesktopId, desktopNumber: 2, boundAtUtc: now }]
+    });
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 2,
+      generation: 12,
+      controls: [{
+        schemaVersion: 1,
+        generation: 12,
+        active: true,
+        leaseId,
+        desktopId: agentDesktopId,
+        desktopNumber: 2,
+        taskLabel: 'window scope',
+        startedAtUtc: now
+      }]
+    });
+
+    assert.equal(await manager.hasActiveControls(), true);
+    assert.equal(await manager.activeLeaseForWindow(100), leaseId);
+    assert.equal(await manager.activeLeaseForWindow(200), undefined);
+
+    await writeJson(path.join(root, 'control.json'), {
+      schemaVersion: 2,
+      generation: 13,
+      controls: []
+    });
+    assert.equal(await manager.hasActiveControls(), false);
+    assert.equal(await manager.activeLeaseForWindow(100), undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Agent Desktop safety edge pulses only its visual content, keeping the VDA-owned HWND stable', async () => {
+  const source = await readFile(path.resolve('control-panel/wpf/AgentDesktopControl.cs'), 'utf8');
+  const edgePulse = source.split('private static void StartEdgePulse(')[1]?.split('private Window CreateHud(')[0];
+  assert.ok(edgePulse, 'Missing dedicated edge pulse function');
+  // The real Windows observer caught Edge returning Guid.Empty while HUD remained on Desktop 2.
+  // Never animate WPF Window.Opacity on the virtual-desktop-owned top-level HWND.
+  assert.doesNotMatch(edgePulse, /edge\.BeginAnimation\(UIElement\.OpacityProperty/u);
+  assert.match(edgePulse, /content\.BeginAnimation\(UIElement\.OpacityProperty/u);
+  assert.match(edgePulse, /edge\.Opacity\s*=\s*1/u);
+  const show = source.split('public async Task ShowOnDesktopAsync(')[1]?.split('private Window CreateEdge(')[0];
+  assert.ok(show);
+  assert.match(show, /edgeWindow\.Opacity\s*=\s*1/u);
+  assert.match(show, /edgeVisual\.Opacity\s*=\s*0/u);
+  assert.match(show, /AgentDesktopWindowMover\.MoveOwnWindow\(edgeWindow, desktopId\)/u);
+  assert.match(show, /StartEdgePulse\(edgeWindow\)/u);
+  assert.ok(show.indexOf('MoveOwnWindow(edgeWindow, desktopId)') < show.indexOf('StartEdgePulse(edgeWindow)'),
+    'The test edge must not pulse before it is on Desktop 2');
+});

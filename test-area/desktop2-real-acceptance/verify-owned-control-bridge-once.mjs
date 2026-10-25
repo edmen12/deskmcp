@@ -1,0 +1,172 @@
+// Strictly owned disposable WinForms fixture only; this is NOT a general GUI MCP endpoint.
+// The installed Gateway/HUD supplies the lease. Does not init or revoke that lease.
+import fs from 'node:fs';
+import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
+import {AgentDesktopManager} from '../../dist/src/agent-desktop-state.js';
+import {resolveDeskMcpStateRoot} from '../../dist/src/data-root.js';
+import {composeRealDesktop2OwnedControl} from '../../dist/src/desktop2-real-owned-compose.js';
+import {requireSafeNativeGuiMemory} from './resource-preflight.mjs';
+import {terminateOwnedChild} from './owned-process-cleanup.mjs';
+
+const here=path.dirname(fileURLToPath(import.meta.url));
+const lease=process.argv[2],sentinel=process.argv[3];
+if(process.argv.length!==4||sentinel!=='OWNED_NATIVE_WINFORMS_BRIDGE_SINGLE_USE'
+ ||!/^[a-f0-9]{8}-[a-f0-9-]{27}$/iu.test(lease??''))
+ throw Error('EXACT_LEASE_AND_OWNED_TEST_SENTINEL_REQUIRED');
+const repo=path.resolve(here,'../..');
+// Keep the entire native fixture+observer toolchain in this exact staging branch.
+const original=repo;
+const sdk=path.resolve(repo,'../DeskMCP/runtime/dotnet-sdk');
+const bin=(folder,name)=>path.join(original,'test-area',folder,'bin','Release','net10.0-windows',name);
+const files={
+ dotnet:path.join(sdk,'dotnet.exe'),
+ vda:path.resolve(repo,'../DeskMCP/runtime/agent-desktop-runtime/win-x64/virtual-desktop-accessor/VirtualDesktopAccessor.dll'),
+ native:path.join(original,'agent-desktop-host','bin','Release','net10.0-windows','DeskMCP.AgentDesktopHost.exe'),
+ observer:bin('desktop2-switch-observer','DeskMCP.Desktop2SwitchObserver.exe'),
+ uia:bin('desktop2-direct-uia','DeskMCP.Desktop2DirectUia.exe'),
+ fixture:bin('desktop2-native-edit-probe','DeskMCP.Desktop2NativeEditProbe.dll')
+};
+for(const [name,p] of Object.entries(files)){
+ if(!fs.existsSync(p))throw Error('OWNED_BRIDGE_TEST_BINARY_MISSING:'+name);
+}
+process.env.DOTNET_ROOT=sdk;
+process.env.DOTNET_ROOT_X64=sdk;
+process.env.DESKTOP_MCP_VDA_PATH=files.vda;
+// SHA256 of the owned WinForms DLL freshly built from THIS branch's C# source.
+const EXPECTED_OWNED_FIXTURE_SHA256='7c3a867d9a028a1a66e5d8c998e8157636f05e92fbd64edd07484e6002af2880';
+const fixtureSha=createHash('sha256').update(fs.readFileSync(files.fixture)).digest('hex');
+if(fixtureSha!==EXPECTED_OWNED_FIXTURE_SHA256)
+ throw Error('OWNED_FIXTURE_HASH_NOT_PINNED');
+const out=path.join(here,'runs','native-owned-bridge-'+new Date().toISOString().replace(/[:.]/gu,'-'));
+await mkdir(out,{recursive:true});
+const ready=path.join(out,'fixture.ready.json'),
+ uncloak=path.join(out,'fixture.uncloak.flag'),
+ events=path.join(out,'fixture.events.log'),
+ resultPath=path.join(out,'result.json');
+let child,identity=null,opened=false;
+const native=new AgentDesktopNativeBridge(()=>files.native);
+const leases=new AgentDesktopManager(resolveDeskMcpStateRoot('agent-desktop'),native);
+const result={pass:false,stage:'real-virtual-d2-owned-bridge',
+ leaseValidated:false,observerStarted:false,discoveredOwned:false,
+ editCallback:0,buttonCallback:0,listTop20:false,desktopBefore:null,
+ desktopAfter:null,appFocusEvents:[],observerReleased:false,
+ ownedGuiExitConfirmed:false,leaseHeldThroughTeardown:false,
+ appEventVerified:false,error:null,fixtureSha256:fixtureSha};
+function log(e,props={}){process.stdout.write(JSON.stringify({event:e,...props})+'\n');}
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function guard(stage){
+ const desktop=await native.info();
+ if(desktop.currentDesktopNumber!==1)throw Error('OWNER_DESKTOP1_SWITCH_ABORT_'+stage);
+ const attested=await leases.assertLease(lease);
+ if(attested.control.desktopNumber!==2||!attested.control.active)throw Error('HUD_LEASE_INACTIVE_'+stage);
+ return attested;
+}
+async function waitForReady(){
+ for(let i=0;i<180;i++){
+  await guard('WAIT_FIXTURE');
+  if(fs.existsSync(ready))return JSON.parse(await readFile(ready,'utf8'));
+  if(!child||child.exitCode!==null||child.signalCode!==null)throw Error('OWNED_GUI_EXIT_BEFORE_READY');
+  await sleep(50);
+ }
+ throw Error('OWNED_GUI_READY_TIMEOUT');
+}
+const bridge=composeRealDesktop2OwnedControl(leases,
+ {observerExe:files.observer,uiaExe:files.uia,vdaDll:files.vda},
+ async w => Boolean(child && identity && child.exitCode===null && child.signalCode===null && child.pid===w.processId &&
+  identity.hwnd===w.hwnd && w.className?.startsWith('WindowsForms10.Window.') &&
+  w.isForeground===false && identity.sha===fixtureSha &&
+  createHash('sha256').update(fs.readFileSync(files.fixture)).digest('hex')===fixtureSha),native);
+try{
+ await requireSafeNativeGuiMemory();
+ const initial=await guard('PREFLIGHT');
+ if(initial.binding.desktopId.toLowerCase()!==initial.control.desktopId?.toLowerCase())
+  throw Error('BOUND_DESKTOP_MISMATCH');
+ result.desktopBefore=1;result.leaseValidated=true;
+ await bridge.start(lease);opened=true;result.observerStarted=true;log('REAL_VDA_OBSERVER_ARMED');
+ await requireSafeNativeGuiMemory();
+ child=spawn(files.dotnet,[files.fixture,ready,uncloak,events,'60000'],{
+  cwd:original,shell:false,windowsHide:true,env:process.env,stdio:'ignore'
+ });
+ child.on('error',e=>log('OWNED_FIXTURE_PROCESS_ERROR',{kind:e.name}));
+ const first=await waitForReady();
+ if(first.pid!==child.pid||typeof first.hwnd!=='number'||first.hwnd<1
+   ||first.dwmCloaked!==1||first.rootNoActivate!==true
+   ||first.initialForeground!==first.afterForeground)
+  throw Error('UNTRUSTED_OWNED_HIDDEN_FIXTURE');
+ identity={hwnd:first.hwnd,sha:fixtureSha};
+ const moved=await native.moveWindow(first.hwnd,initial.binding.desktopId);
+ if(moved.desktopId?.toLowerCase()!==initial.binding.desktopId.toLowerCase())
+  throw Error('REAL_VDA_PLACEMENT_NOT_VERIFIED');
+ await guard('MOVED');
+ await writeFile(uncloak,'UN-CLOAK-AFTER-VERIFIED-DESKTOP2');
+ await sleep(380);await guard('UNCLOAK');
+ const list=await bridge.list(lease);
+ if(list.length!==1)throw Error('OWNED_BRIDGE_DID_NOT_DISCOVER_EXACTLY_ONE_WINDOW');
+ result.discoveredOwned=true;log('REAL_D2_OWNED_DISCOVERED',{count:list.length});
+ const windowId=list[0].window_id;
+ const e=await bridge.snapshot(lease,windowId,'edit');
+ if(e.controls.length!==1||!e.controls[0].canSetNativeValue)throw Error('EDIT_PERMIT_NOT_VERIFIED');
+ const written=await bridge.perform(lease,windowId,e.computer_observation_id,{
+  type:'set_native_edit',automationId:e.controls[0].automationId,
+  value:'D2_NATIVE_WINFORMS_ONE_SHOT',expectedPreviousValue:''
+ });
+ if(!written.dispatched||written.app_event_verified||written.business_outcome_verified)
+  throw Error('EDIT_UNVERIFIED_DELIVERY');
+ await guard('EDIT');
+ const b=await bridge.snapshot(lease,windowId,'button');
+ if(b.controls.length!==1||!b.controls[0].canClickNative)throw Error('BUTTON_PERMIT_NOT_VERIFIED');
+ await bridge.perform(lease,windowId,b.computer_observation_id,{
+  type:'click_native_button',automationId:b.controls[0].automationId
+ });
+ await guard('BUTTON');
+ const l=await bridge.snapshot(lease,windowId,'list');
+ if(l.controls.length!==1||!l.controls[0].canScrollNativeList)throw Error('LIST_PERMIT_NOT_VERIFIED');
+ await bridge.perform(lease,windowId,l.computer_observation_id,{
+  type:'scroll_native_list',automationId:l.controls[0].automationId,
+  topIndex:20,expectedPreviousTopIndex:0
+ });
+ await sleep(480);await guard('LIST');
+ const app=await readFile(events,'utf8');
+ result.editCallback=app.split(/\r?\n/).filter(x=>x.includes('APP_EDIT=1:D2_NATIVE_WINFORMS_ONE_SHOT')).length;
+ result.buttonCallback=app.split(/\r?\n/).filter(x=>x.includes('APP_BUTTON_CLICK=1')).length;
+ result.listTop20=app.includes('APP_LIST_TOP=20');
+ result.appFocusEvents=app.split(/\r?\n/).filter(x=>
+  /\b(ROOT_WM_(6|7|8|1C)|EDIT_WM_(6|7|8|100|101|102)|BUTTON_WM_(6|7|8|100|101|102))\b/iu.test(x));
+ if(result.editCallback!==1||result.buttonCallback!==1||
+  !result.listTop20||result.appFocusEvents.length)
+  throw Error('REAL_APP_CALLBACK_OR_FOREGROUND_GATE_FAILED');
+ result.appEventVerified=true;
+ log('REAL_APP_CALLBACKS_VERIFIED',{edit:result.editCallback,button:result.buttonCallback,listTop20:true});
+} catch(err){
+ result.error=err instanceof Error?err.message:String(err);
+ log('FIRST_FAILURE_HALT',{reason:result.error});
+} finally {
+ if(child){
+  try{result.ownedGuiExitConfirmed=await terminateOwnedChild(child,{deadlineMs:3000});}
+  catch{result.error??='OWNED_GUI_EXIT_UNCONFIRMED';}
+ }
+ if(opened){
+  try{await bridge.stop(lease);result.observerReleased=true;}
+  catch(err){result.error??='OBSERVER_STOP_FAILED';}
+ }
+ try{
+  const after=await guard('FINALLY');
+  result.desktopAfter=1;
+  result.leaseHeldThroughTeardown=after.control.active===true;
+ }catch{result.error??='LEASE_OR_DESKTOP1_CHANGED_DURING_TEARDOWN';}
+ result.pass=Boolean(result.leaseValidated&&result.observerStarted&&
+  result.discoveredOwned&&result.appEventVerified&&result.observerReleased&&
+  result.ownedGuiExitConfirmed&&result.leaseHeldThroughTeardown&&
+  result.desktopBefore===1&&result.desktopAfter===1&&result.appFocusEvents.length===0&&!result.error);
+ await writeFile(resultPath,JSON.stringify(result,null,2));
+ log('FINAL_RESULT',{pass:result.pass,errors:result.error,
+  appEventVerified:result.appEventVerified,desktopBefore:result.desktopBefore,
+  desktopAfter:result.desktopAfter,ownedGuiExit:result.ownedGuiExitConfirmed,
+  watcherExit:result.observerReleased,leaseHeld:result.leaseHeldThroughTeardown});
+ if(!result.pass)process.exitCode=3;
+}

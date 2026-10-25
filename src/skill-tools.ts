@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AuditLogger, AuditRisk } from './audit.js';
 import { PolicyDeniedError, type DesktopPolicy } from './desktop-policy.js';
@@ -77,7 +78,8 @@ export function registerSkillTools(
   server: McpServer,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  store: SkillStore
+  store: SkillStore,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   server.registerTool(
     'desktop_skill_manage',
@@ -118,6 +120,8 @@ export function registerSkillTools(
       }
 
       try {
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_skill_manage');
+        const execute = async () => {
         let result: unknown;
         switch (action) {
           case 'list': {
@@ -162,6 +166,12 @@ export function registerSkillTools(
             break;
           }
         }
+          return result;
+        };
+        const result = await (crossToolGuard
+          ? crossToolGuard.runNonBrowserOperation('desktop_skill_manage', execute)
+          : execute());
+        crossToolGuard?.assertNonBrowserToolAllowed('desktop_skill_manage');
         await audit.finish(operation, 'allow');
         return jsonResult(result);
       } catch (error) {

@@ -26,12 +26,14 @@ If `startupTiming.connectMs` dominates while the other phases stay small, diagno
 
 Check that both the Tunnel ID and Runtime API Key are configured. If the credentials changed, open **Settings → Tunnel → Configure**, save them again, then reconnect.
 
-The Runtime API Key is stored using Windows DPAPI. DeskMCP does not write it to `settings.json`.
+The Runtime API Key is encrypted by Windows and is not written to `settings.json`. DeskMCP normally uses current-user DPAPI. If Windows user encryption is unavailable, it can use an authenticated encrypted envelope backed by a non-exportable Windows CNG key whose permissions are restricted to the current user, SYSTEM, and administrators. Initializing that recovery key requires running DeskMCP as administrator once; subsequent reads work under the same user's normal permissions.
+
+If an old DPAPI key becomes unreadable, re-enter the Runtime API Key from OpenAI Platform. Recovery storage cannot decrypt a damaged or inaccessible legacy DPAPI blob. Do not delete Windows master keys or reset the entire Windows encryption directory. Keep both the encrypted Runtime Key file and its Windows CNG key for recovery; copying only the encrypted file to another machine is insufficient.
 ## Connector name already exists
 
 ChatGPT plugin names are account-side and are not removed by reinstalling DeskMCP. If **DeskMCP** already exists, do not create another plugin with the same name. Cancel **New plugin**, open the existing DeskMCP plugin, confirm it uses the current Tunnel, then run **Scan tools** again.
 
-## ChatGPT does not show 27 tools
+## ChatGPT does not show 29 tools
 
 Recheck the plugin configuration:
 
@@ -41,7 +43,7 @@ Recheck the plugin configuration:
 - Correct Tunnel selected
 - **I understand and want to continue** checked
 
-Then run **Scan tools** again. The expected production surface is exactly 27 tools.
+Then run **Scan tools** again. The expected production surface is exactly 29 tools.
 
 ## A file or search result is blocked
 

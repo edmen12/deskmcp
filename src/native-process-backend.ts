@@ -72,7 +72,8 @@ function processHostArgs(
   elevation: ProcessElevation,
   lifetime: ProcessLifetime,
   workingDirectory?: string,
-  tempDirectory?: string
+  tempDirectory?: string,
+  desktopObjectName?: string
 ): string[] {
   return [
     '--owner-pid', String(process.pid),
@@ -82,7 +83,8 @@ function processHostArgs(
     '--elevation', elevation,
     '--lifetime', lifetime,
     ...(workingDirectory ? ['--working-directory64', encodeUtf8(workingDirectory)] : []),
-    ...(tempDirectory ? ['--temp-directory64', encodeUtf8(tempDirectory)] : [])
+    ...(tempDirectory ? ['--temp-directory64', encodeUtf8(tempDirectory)] : []),
+    ...(desktopObjectName ? ['--desktop-object64', encodeUtf8(desktopObjectName)] : [])
   ];
 }
 
@@ -141,7 +143,8 @@ export class NativeWindowsProcessBackend {
     elevation: ProcessElevation = 'standard',
     lifetime: ProcessLifetime = 'root',
     workingDirectory?: string,
-    tempDirectory?: string
+    tempDirectory?: string,
+    desktopObjectName?: string
   ): Promise<NativeProcessResult> {
     this.pruneCompleted();
 
@@ -156,7 +159,8 @@ export class NativeWindowsProcessBackend {
           elevation,
           lifetime,
           workingDirectory,
-          tempDirectory
+          tempDirectory,
+          desktopObjectName
         ),
         {
           cwd: os.homedir(),

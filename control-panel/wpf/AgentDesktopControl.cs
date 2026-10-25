@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -60,6 +61,22 @@ internal sealed class AgentDesktopControlDocument
     public string RevokedAtUtc { get; set; }
 }
 
+internal sealed class AgentDesktopControlMutationDocument
+{
+    [JsonPropertyName("reason")]
+    public string Reason { get; set; }
+    [JsonPropertyName("generation")]
+    public int Generation { get; set; }
+    [JsonPropertyName("atUtc")]
+    public string AtUtc { get; set; }
+    [JsonPropertyName("beforeCount")]
+    public int BeforeCount { get; set; }
+    [JsonPropertyName("afterCount")]
+    public int AfterCount { get; set; }
+    [JsonPropertyName("writerPid")]
+    public int WriterPid { get; set; }
+}
+
 internal sealed class AgentDesktopControlPoolDocument
 {
     [JsonPropertyName("schemaVersion")]
@@ -68,6 +85,12 @@ internal sealed class AgentDesktopControlPoolDocument
     public int Generation { get; set; }
     [JsonPropertyName("controls")]
     public List<AgentDesktopControlDocument> Controls { get; set; }
+    [JsonPropertyName("lastMutation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentDesktopControlMutationDocument LastMutation { get; set; }
+    [JsonPropertyName("recentMutations")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AgentDesktopControlMutationDocument> RecentMutations { get; set; }
 }
 
 internal sealed class AgentDesktopCurrentDesktopDocument
@@ -78,6 +101,46 @@ internal sealed class AgentDesktopCurrentDesktopDocument
     public int DesktopNumber { get; set; }
     [JsonPropertyName("desktopCount")]
     public int DesktopCount { get; set; }
+}
+
+internal static class AgentDesktopForegroundProbe
+{
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int maxCount);
+
+    public static string Describe()
+    {
+        try
+        {
+            IntPtr hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return "hwnd=0 pid=0 process=? title=";
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            StringBuilder title = new StringBuilder(1024);
+            GetWindowText(hwnd, title, title.Capacity);
+            string processName = "?";
+            try
+            {
+                using Process process = Process.GetProcessById(unchecked((int)pid));
+                processName = process.ProcessName;
+            }
+            catch { }
+            return "hwnd=0x" + hwnd.ToInt64().ToString("X") +
+                " pid=" + pid.ToString() +
+                " process=" + processName +
+                " title=" + title.ToString().Replace("\r", " ").Replace("\n", " ");
+        }
+        catch (Exception error)
+        {
+            return "foreground_probe_error=" + error.GetType().Name + ":" + error.Message.Replace("\r", " ").Replace("\n", " ");
+        }
+    }
 }
 
 internal static class AgentDesktopWindowMover
@@ -136,6 +199,34 @@ internal static class AgentDesktopWindowMover
         finally
         {
             if (Marshal.IsComObject(manager)) Marshal.FinalReleaseComObject(manager);
+        }
+    }
+
+    public static string DescribeOwnWindowDesktop(Window window, Guid expectedDesktop)
+    {
+        if (window == null) return "window_missing";
+        IntPtr hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero) return "window_handle_missing";
+        IVirtualDesktopManager manager = null;
+        try
+        {
+            manager = CreateManager();
+            Guid actual = manager.GetWindowDesktopId(hwnd);
+            if (actual == Guid.Empty) return "desktop_id_unresolved";
+            return actual == expectedDesktop ? "correct_desktop" : "wrong_desktop";
+        }
+        catch (COMException error)
+        {
+            return "com_hresult_0x" + unchecked((uint)error.ErrorCode).ToString("X8");
+        }
+        catch
+        {
+            return "desktop_query_failed";
+        }
+        finally
+        {
+            if (manager != null && Marshal.IsComObject(manager))
+                Marshal.FinalReleaseComObject(manager);
         }
     }
 
@@ -271,12 +362,16 @@ internal sealed class AgentDesktopOverlay : IDisposable
     private readonly Window edgeWindow;
     private readonly Window hudWindow;
     private readonly Action exitAction;
+    // Shell-eligible, ownerless HUD and edge HWNDs are now the default.
+    // Retain strict per-HWND desktop identity checks and fail-closed revocation.
+    private readonly bool ownerlessShellWindows;
     private bool shown;
     private bool disposed;
 
     public AgentDesktopOverlay(string taskLabel, Action onExit)
     {
         exitAction = onExit ?? throw new ArgumentNullException(nameof(onExit));
+        ownerlessShellWindows = true;
         double left = SystemParameters.VirtualScreenLeft;
         double top = SystemParameters.VirtualScreenTop;
         double width = Math.Max(1, SystemParameters.VirtualScreenWidth);
@@ -296,9 +391,19 @@ internal sealed class AgentDesktopOverlay : IDisposable
 
         IntPtr edgeHwnd = new WindowInteropHelper(edgeWindow).EnsureHandle();
         edgeWindow.BeginAnimation(UIElement.OpacityProperty, null);
-        edgeWindow.Opacity = 0;
+        // Keep the top-level HWND at stable opacity. Changing Window.Opacity
+        // while the border pulses can make Windows lose its Virtual Desktop ID.
+        // Hide only the child visual until both safety windows are moved.
+        edgeWindow.Opacity = 1;
+        if (edgeWindow.Content is not UIElement edgeVisual)
+            throw new InvalidOperationException("Agent Desktop safety edge visual is missing.");
+        edgeVisual.Opacity = 0;
         IntPtr hudHwnd = new WindowInteropHelper(hudWindow).EnsureHandle();
-        hudWindow.Opacity = 0;
+        hudWindow.BeginAnimation(UIElement.OpacityProperty, null);
+        hudWindow.Opacity = 1;
+        if (hudWindow.Content is not UIElement hudVisual)
+            throw new InvalidOperationException("Agent Desktop safety HUD visual is missing.");
+        hudVisual.Opacity = 0;
         hudWindow.IsHitTestVisible = false;
 
         edgeWindow.Show();
@@ -317,8 +422,8 @@ internal sealed class AgentDesktopOverlay : IDisposable
         if (!stillAuthorized()) throw new InvalidOperationException("Agent Desktop control changed before the safety HUD became visible.");
 
         StartEdgePulse(edgeWindow);
+        hudVisual.Opacity = 1;
         hudWindow.IsHitTestVisible = true;
-        hudWindow.Opacity = 1;
         shown = true;
     }
 
@@ -350,27 +455,30 @@ internal sealed class AgentDesktopOverlay : IDisposable
             ResizeMode = ResizeMode.NoResize,
             AllowsTransparency = true,
             Background = Brushes.Transparent,
-            ShowInTaskbar = false,
+            ShowInTaskbar = ownerlessShellWindows,
             ShowActivated = false,
             Topmost = true,
             Focusable = false,
             IsHitTestVisible = false,
             Content = line,
-            Opacity = 0.72
+            Opacity = 1
         };
         return edge;
     }
 
     private static void StartEdgePulse(Window edge)
     {
-        edge.Opacity = 0.72;
+        if (edge.Content is not UIElement content)
+            throw new InvalidOperationException("Agent Desktop safety edge visual is missing.");
+        edge.Opacity = 1;
+        content.Opacity = 0.72;
         DoubleAnimation pulse = new DoubleAnimation(0.48, 0.92, TimeSpan.FromMilliseconds(1250))
         {
             AutoReverse = true,
             RepeatBehavior = RepeatBehavior.Forever,
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
         };
-        edge.BeginAnimation(UIElement.OpacityProperty, pulse);
+        content.BeginAnimation(UIElement.OpacityProperty, pulse);
     }
 
     private Window CreateHud(string taskLabel)
@@ -456,7 +564,7 @@ internal sealed class AgentDesktopOverlay : IDisposable
             ResizeMode = ResizeMode.NoResize,
             AllowsTransparency = true,
             Background = Brushes.Transparent,
-            ShowInTaskbar = false,
+            ShowInTaskbar = ownerlessShellWindows,
             ShowActivated = false,
             Topmost = true,
             Content = shell
@@ -477,6 +585,16 @@ internal sealed class AgentDesktopOverlay : IDisposable
         // desktop switch, making it appear on Desktop 1 as well.
         long style = GetWindowLongPtr(hwnd, GwlExStyle).ToInt64();
         SetWindowLongPtr(hwnd, GwlExStyle, new IntPtr(style));
+    }
+
+    public string DescribeEdgeDesktop(Guid desktopId)
+    {
+        return AgentDesktopWindowMover.DescribeOwnWindowDesktop(edgeWindow, desktopId);
+    }
+
+    public string DescribeHudDesktop(Guid desktopId)
+    {
+        return AgentDesktopWindowMover.DescribeOwnWindowDesktop(hudWindow, desktopId);
     }
 
     public bool IsOnDesktop(Guid desktopId)
@@ -515,10 +633,10 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
     private HwndSource desktopEventSource;
     private IntPtr desktopEventHwnd;
     private bool desktopHookRegistered;
-    private AgentDesktopOverlay overlay;
-    private string overlayLeaseId;
-    private int overlayGeneration = -1;
-    private DateTime lastHeartbeatUtc = DateTime.MinValue;
+    // HUD stays on each controlled desktop, never on the user's Desktop 1.
+    private readonly Dictionary<string, AgentDesktopOverlay> overlays = new Dictionary<string, AgentDesktopOverlay>(StringComparer.OrdinalIgnoreCase);
+    // An active lease cannot proceed until its safety overlay is verified.
+    // The control loop does not activate or switch desktops.
     private bool started;
     private bool disposed;
     private bool tickInFlight;
@@ -553,7 +671,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             AgentDesktopControlPoolDocument stale = ReadControlPoolFile(controlPath);
             if (stale != null && stale.Controls != null && stale.Controls.Count > 0)
             {
-                RevokeAllControls();
+                RevokeAllControls("control_panel_startup_reset");
                 try { if (File.Exists(hudPath)) File.Delete(hudPath); } catch { }
                 if (notify != null) notify("Previous Agent Desktop controls were revoked after Control Panel restart.", false);
             }
@@ -937,7 +1055,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         try
         {
             RevokeControl(leaseId);
-            if (String.Equals(overlayLeaseId, leaseId, StringComparison.OrdinalIgnoreCase)) HideOverlayOnly();
+            HideOverlay(leaseId);
             RaiseStateChanged();
             Tick();
             if (notify != null) notify("Agent control exited. This desktop is back under manual control.", false);
@@ -948,11 +1066,14 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         }
     }
 
+    // A user may intentionally view a controlled desktop (e.g. to authenticate).
+    // Never call GoToDesktopNumber from this heartbeat/switch-notification loop.
+    // Safety HUDs are placed on their OWN desktops without activating them.
     private async void Tick()
     {
         if (disposed || tickInFlight) return;
         tickInFlight = true;
-        AgentDesktopControlDocument currentControl = null;
+        string checkedLeaseId = null;
         try
         {
             AgentDesktopControlPoolDocument state = ReadControlPoolFile(controlPath);
@@ -964,7 +1085,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             List<AgentDesktopControlDocument> controls = state?.Controls ?? new List<AgentDesktopControlDocument>();
             if (controls.Count == 0)
             {
-                if (overlay != null || File.Exists(hudPath)) HideOverlayAndHud();
+                if (overlays.Count > 0 || File.Exists(hudPath)) HideOverlayAndHud();
                 return;
             }
 
@@ -972,6 +1093,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             Dictionary<string, int> desktopNumberUpdates = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (AgentDesktopControlDocument control in controls)
             {
+                checkedLeaseId = control.LeaseId;
                 if (!ValidActiveControl(control, true))
                     throw new InvalidDataException("Agent Desktop active control state is invalid.");
                 bool bound = bindings.Exists(binding =>
@@ -997,6 +1119,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 if (control.DesktopNumber != liveDesktopNumber.Value && !String.IsNullOrWhiteSpace(control.LeaseId))
                     desktopNumberUpdates[control.LeaseId] = liveDesktopNumber.Value;
             }
+            checkedLeaseId = null;
             if (desktopNumberUpdates.Count > 0)
             {
                 state = UpdateControlDesktopNumbers(desktopNumberUpdates);
@@ -1008,66 +1131,70 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 }
             }
 
+            // Keep one safety overlay on each controlled desktop, including
+            // while the user remains on Desktop 1. Never foreground the overlay.
+            HashSet<string> activeLeases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (AgentDesktopControlDocument control in controls) activeLeases.Add(control.LeaseId);
+            foreach (string previousLease in new List<string>(overlays.Keys))
+                if (!activeLeases.Contains(previousLease)) HideOverlay(previousLease);
+
+            foreach (AgentDesktopControlDocument control in controls)
+            {
+                checkedLeaseId = control.LeaseId;
+                await EnsureSafetyOverlayAsync(control);
+            }
+            checkedLeaseId = null;
+
+            // A HUD is "ready" only after Windows confirms it is bound to the
+            // expected desktop. Visible means the user is viewing that desktop.
             Guid currentDesktopId = desktopClient.CurrentDesktopId();
-            currentControl = FindControlByDesktopId(controls, currentDesktopId);
-            if (currentControl == null)
-            {
-                if (overlay != null) HideOverlayOnly();
-            }
-            else
-            {
-                Guid boundDesktopId;
-                if (!Guid.TryParse(currentControl.DesktopId, out boundDesktopId) || boundDesktopId == Guid.Empty)
-                    throw new InvalidDataException("Agent Desktop control contains an invalid desktop id.");
-
-                bool replaceOverlay = overlay == null ||
-                    !String.Equals(overlayLeaseId, currentControl.LeaseId, StringComparison.OrdinalIgnoreCase) ||
-                    overlayGeneration != currentControl.Generation ||
-                    !overlay.IsOnDesktop(boundDesktopId);
-                if (replaceOverlay)
-                {
-                    HideOverlayOnly();
-                    string capturedLeaseId = currentControl.LeaseId;
-                    int capturedGeneration = currentControl.Generation;
-                    AgentDesktopOverlay next = new AgentDesktopOverlay(currentControl.TaskLabel, delegate { ExitControl(capturedLeaseId); });
-                    try
-                    {
-                        await next.ShowOnDesktopAsync(boundDesktopId, delegate
-                        {
-                            AgentDesktopControlPoolDocument liveState = ReadControlPoolFile(controlPath);
-                            AgentDesktopControlDocument live = liveState?.Controls?.Find(control =>
-                                control.Generation == capturedGeneration &&
-                                String.Equals(control.LeaseId, capturedLeaseId, StringComparison.OrdinalIgnoreCase));
-                            return live != null;
-                        });
-                        overlay = next;
-                        overlayLeaseId = capturedLeaseId;
-                        overlayGeneration = capturedGeneration;
-                        lastHeartbeatUtc = DateTime.MinValue;
-                    }
-                    catch
-                    {
-                        next.Dispose();
-                        throw;
-                    }
-                }
-            }
-
-            if (DateTime.UtcNow - lastHeartbeatUtc >= HeartbeatInterval)
-            {
-                WriteHudHeartbeats(controls, currentControl?.LeaseId);
-                lastHeartbeatUtc = DateTime.UtcNow;
-            }
+            AgentDesktopControlDocument currentControl = FindControlByDesktopId(controls, currentDesktopId);
+            WriteHudHeartbeats(controls, currentControl?.LeaseId);
+            // All active leases have validated safety HUDs at this point.
         }
         catch (Exception error)
         {
-            HideOverlayOnly();
-            TryRevokeAfterSafetyFailure(currentControl?.LeaseId, error.Message);
+            if (!String.IsNullOrWhiteSpace(checkedLeaseId)) HideOverlay(checkedLeaseId);
+            else HideOverlayOnly();
+            TryRevokeAfterSafetyFailure(checkedLeaseId, error.Message);
         }
         finally
         {
             tickInFlight = false;
         }
+    }
+
+    private async Task EnsureSafetyOverlayAsync(AgentDesktopControlDocument control)
+    {
+        Guid desktopId = Guid.Parse(control.DesktopId);
+        if (!overlays.TryGetValue(control.LeaseId, out AgentDesktopOverlay safetyOverlay))
+        {
+            string leaseId = control.LeaseId;
+            string expectedDesktopId = control.DesktopId;
+            safetyOverlay = new AgentDesktopOverlay(control.TaskLabel, () => ExitControl(leaseId));
+            overlays.Add(leaseId, safetyOverlay);
+            try
+            {
+                await safetyOverlay.ShowOnDesktopAsync(desktopId, () =>
+                {
+                    if (disposed) return false;
+                    AgentDesktopControlPoolDocument currentState = ReadControlPoolFile(controlPath);
+                    return currentState?.Controls?.Exists(row =>
+                        String.Equals(row.LeaseId, leaseId, StringComparison.OrdinalIgnoreCase) &&
+                        String.Equals(row.DesktopId, expectedDesktopId, StringComparison.OrdinalIgnoreCase)) == true;
+                });
+            }
+            catch
+            {
+                HideOverlay(leaseId);
+                throw;
+            }
+        }
+        if (!safetyOverlay.IsOnDesktop(desktopId))
+            throw new InvalidOperationException(
+                "Agent Desktop safety HUD is not on its bound desktop. edge=" +
+                safetyOverlay.DescribeEdgeDesktop(desktopId) + ", hud=" +
+                safetyOverlay.DescribeHudDesktop(desktopId));
     }
 
     private AgentDesktopControlPoolDocument UpdateControlDesktopNumbers(Dictionary<string, int> updates)
@@ -1092,6 +1219,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             if (changed)
             {
                 live.Generation = checked(live.Generation + 1);
+                RecordMutation(live, "control_panel_desktop_renumber", live.Controls.Count);
                 WriteControlPool(live);
             }
             return live;
@@ -1130,8 +1258,8 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         catch { }
         try
         {
-            if (!String.IsNullOrWhiteSpace(leaseId)) RevokeControl(leaseId);
-            else RevokeAllControls();
+            if (!String.IsNullOrWhiteSpace(leaseId)) RevokeControl(leaseId, "control_panel_safety_revocation");
+            else RevokeAllControls("control_panel_safety_revocation");
         }
         catch { }
         if (notify != null && !String.IsNullOrWhiteSpace(detail))
@@ -1139,7 +1267,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         RaiseStateChanged();
     }
 
-    private void RevokeControl(string leaseId)
+    private void RevokeControl(string leaseId, string reason = "control_panel_manual_exit")
     {
         using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
         {
@@ -1155,11 +1283,12 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             if (state.Controls.Count == before) return;
             state.SchemaVersion = 2;
             state.Generation = checked(state.Generation + 1);
+            RecordMutation(state, reason, before);
             WriteControlPool(state);
         }
     }
 
-    private void RevokeAllControls()
+    private void RevokeAllControls(string reason = "control_panel_safety_revocation")
     {
         using (CrossProcessDirectoryLock controlLock = CrossProcessDirectoryLock.Acquire(lockPath, "Agent Desktop control", LockTimeoutMs, 5000, 25))
         {
@@ -1169,24 +1298,30 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
                 Generation = 0,
                 Controls = new List<AgentDesktopControlDocument>()
             };
-            int nextGeneration = state.Controls != null && state.Controls.Count > 0 ? checked(state.Generation + 1) : state.Generation;
-            WriteControlPool(new AgentDesktopControlPoolDocument
-            {
-                SchemaVersion = 2,
-                Generation = nextGeneration,
-                Controls = new List<AgentDesktopControlDocument>()
-            });
+            int before = state.Controls?.Count ?? 0;
+            if (before == 0) return;
+            state.SchemaVersion = 2;
+            state.Generation = checked(state.Generation + 1);
+            state.Controls = new List<AgentDesktopControlDocument>();
+            RecordMutation(state, reason, before);
+            WriteControlPool(state);
         }
+    }
+
+    private void HideOverlay(string leaseId)
+    {
+        if (String.IsNullOrWhiteSpace(leaseId)) return;
+        if (!overlays.TryGetValue(leaseId, out AgentDesktopOverlay target)) return;
+        overlays.Remove(leaseId);
+        target.Dispose();
     }
 
     private void HideOverlayOnly()
     {
-        AgentDesktopOverlay current = overlay;
-        overlay = null;
-        overlayLeaseId = null;
-        overlayGeneration = -1;
-        lastHeartbeatUtc = DateTime.MinValue;
-        if (current != null) current.Dispose();
+        foreach (AgentDesktopOverlay safetyOverlay in overlays.Values)
+            safetyOverlay.Dispose();
+        overlays.Clear();
+        // Removed overlays are recreated only if a new control lease is granted.
     }
 
     private void HideOverlayAndHud()
@@ -1233,6 +1368,28 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
             Bindings = bindings ?? new List<AgentDesktopBindingDocument>()
         };
         RuntimeReliability.WriteAllTextAtomic(configPath, JsonSerializer.Serialize(document) + Environment.NewLine, false);
+    }
+
+    private static void RecordMutation(AgentDesktopControlPoolDocument state, string reason, int beforeCount)
+    {
+        var entry = new AgentDesktopControlMutationDocument
+        {
+            Reason = reason,
+            Generation = state.Generation,
+            AtUtc = DateTime.UtcNow.ToString("O"),
+            BeforeCount = beforeCount,
+            AfterCount = state.Controls?.Count ?? 0,
+            WriterPid = Environment.ProcessId
+        };
+        var history = state.RecentMutations != null
+            ? new List<AgentDesktopControlMutationDocument>(state.RecentMutations)
+            : state.LastMutation != null
+                ? new List<AgentDesktopControlMutationDocument> { state.LastMutation }
+                : new List<AgentDesktopControlMutationDocument>();
+        history.Add(entry);
+        if (history.Count > 32) history.RemoveRange(0, history.Count - 32);
+        state.LastMutation = entry;
+        state.RecentMutations = history;
     }
 
     private void WriteControlPool(AgentDesktopControlPoolDocument document)
@@ -1369,7 +1526,7 @@ internal sealed class AgentDesktopControlCoordinator : IDisposable
         timer.Stop();
         if (revokeActive)
         {
-            try { RevokeAllControls(); } catch { }
+            try { RevokeAllControls("control_panel_shutdown"); } catch { }
         }
         HideOverlayAndHud();
         try { UnregisterDesktopSwitchNotifications(); } catch { }

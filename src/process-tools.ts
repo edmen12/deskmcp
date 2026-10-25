@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AgentDesktopManager } from './agent-desktop-state.js';
 import type { AuditLogger } from './audit.js';
@@ -32,6 +33,7 @@ function resultText(result: DesktopBackendToolResult) {
 async function auditedProcessCall(
   audit: AuditLogger,
   policy: DesktopPolicy,
+  crossToolGuard: BrowserCrossToolGuard | undefined,
   tool: string,
   target: string | undefined,
   prefix: string,
@@ -45,7 +47,11 @@ async function auditedProcessCall(
   }
 
   try {
-    const result = await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
+    const result = await (crossToolGuard
+      ? crossToolGuard.runNonBrowserOperation(tool, action)
+      : action());
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     await audit.finish(operation, result.isError ? 'fail' : 'allow',
       result.isError ? new Error('DownstreamToolError') : undefined);
     return resultText(result);
@@ -218,13 +224,52 @@ export function registerProcessTools(
   policy: DesktopPolicy,
   audit: AuditLogger,
   sessions: ProcessSessionRegistry,
-  agentDesktop?: AgentDesktopManager
+  agentDesktop?: AgentDesktopManager,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
+  // This tool reads only the in-memory Gateway session registry. It must
+  // remain usable even when all 32 process slots are occupied: no shell,
+  // ProcessHost, or native process discovery is invoked to produce it.
+  server.registerTool(
+    'desktop_process_capacity',
+    {
+      title: 'Inspect Owned Process Capacity',
+      description: 'Read current Gateway process-session occupancy without starting a process. Duration buckets are observational, not termination criteria. This does not inspect OS process trees or infer that old sessions are stuck.',
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => auditedProcessCall(
+      audit,
+      policy,
+      crossToolGuard,
+      'desktop_process_capacity',
+      undefined,
+      'Process capacity inspection denied or failed',
+      async () => {
+        requireFullControl(policy);
+        const status = sessions.capacityStatus();
+        return {
+          text: JSON.stringify({
+            ...status,
+            interpretation: 'Active means the owned ProcessHost has not completed; age is not a failure signal.',
+            diagnostics: 'Read only. No process spawned. No sessions terminated.'
+          }),
+          isError: false
+        };
+      }
+    )
+  );
+
   server.registerTool(
     'desktop_start_process',
     {
       title: 'Start Owned Desktop Process',
-      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails.',
+      description: 'Start a terminal process in the session-only Full Control or Fully Unlocked profile and return an opaque Gateway-owned session ID instead of a Windows PID. For Windows project development and test commands, pass cwd instead of embedding cd/Set-Location in command: DeskMCP verifies the project directory, applies a legacy path-budget guard, and defaults TEMP/TMP to a short internal path to reduce MAX_PATH failures. When agent_desktop_lease_id is supplied, DeskMCP constrains visible windows from the owned process tree to that Agent Desktop and fails closed if the lease is invalid or placement verification fails. process_lifetime=job is only allowed with Agent Desktop and is intended for GUI launchers whose shell exits while owned descendants remain alive.',
       inputSchema: z.object({
         command: z.string().min(1).max(32768),
         timeout_ms: z.number().int().min(250).max(30000).optional().default(3000),
@@ -241,8 +286,11 @@ export function registerProcessTools(
         elevation: z.enum(['standard', 'admin']).optional().default('standard').describe(
           'Controls process privilege. admin uses the standard Windows UAC prompt and is valid with either hidden or visible window mode.'
         ),
+        process_lifetime: z.enum(['root', 'job']).optional().default('root').describe(
+          'root ends owned descendants when the shell exits. job keeps the owned Windows job alive until all descendants exit and is only allowed with Agent Desktop.'
+        ),
         agent_desktop_lease_id: z.string().uuid().optional().describe(
-          'Bind this owned process tree to an active Agent Desktop lease. GUI windows from the root process and descendants are moved and verified on that lease desktop.'
+          'Bind this owned process tree to an active Agent Desktop lease. On Windows, the process tree is created directly inside a lease-scoped isolated Win32 desktop object instead of being moved after launch.'
         )
       }),
       annotations: {
@@ -252,20 +300,25 @@ export function registerProcessTools(
         openWorldHint: true
       }
     },
-    async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, agent_desktop_lease_id }) => auditedProcessCall(
+    async ({ command, timeout_ms, shell, cwd, temp_mode, window_mode, elevation, process_lifetime, agent_desktop_lease_id }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_start_process',
       agent_desktop_lease_id ? `agent-desktop:${agent_desktop_lease_id}` : undefined,
       'Desktop process start denied or failed',
       async () => {
         requireFullControl(policy);
+        if (process_lifetime === 'job' && !agent_desktop_lease_id) {
+          throw new PolicyDeniedError('process_lifetime=job is only supported with agent_desktop_lease_id so owned GUI descendants remain scoped to an Agent Desktop lease.');
+        }
+        let desktopObjectName: string | undefined;
         if (agent_desktop_lease_id) {
           if (!agentDesktop) throw new PolicyDeniedError('Agent Desktop runtime is unavailable.');
           if (elevation === 'admin') {
             throw new PolicyDeniedError('Administrator process launch is not supported inside Agent Desktop background control. Exit Agent Control or launch without agent_desktop_lease_id.');
           }
-          await agentDesktop.assertLease(agent_desktop_lease_id);
+          desktopObjectName = await agentDesktop.desktopObjectNameForLease(agent_desktop_lease_id);
         }
         requireSupportedProcessPresentation(window_mode, elevation);
         const launchContext = await resolveProcessLaunchContext(policy, cwd, temp_mode);
@@ -282,9 +335,10 @@ export function registerProcessTools(
             shell,
             window_mode,
             elevation,
-            'root',
+            process_lifetime,
             launchContext.workingDirectory,
-            launchContext.tempDirectory
+            launchContext.tempDirectory,
+            desktopObjectName
           );
           if (result.isError) {
             sessions.releaseStart(reservationId);
@@ -292,12 +346,10 @@ export function registerProcessTools(
           }
           pid = extractStartedPid(result.text);
           sessionId = sessions.registerReserved(reservationId, pid, window_mode);
-          if (agent_desktop_lease_id && !resultShowsCompletedProcess(result)) {
-            await agentDesktop!.placeProcessTreeWindows(pid, agent_desktop_lease_id);
-          }
+          if (agent_desktop_lease_id) await agentDesktop!.assertLease(agent_desktop_lease_id);
           const sanitized = sanitizeProcessResult(result, pid, sessionId);
           let placed = agent_desktop_lease_id
-            ? sanitized.text + '\\nOwned process tree constrained to the active Agent Desktop lease.'
+            ? sanitized.text + '\\nOwned process tree launched inside the active Agent Desktop isolated desktop object.'
             : sanitized.text;
           if (launchContext.warning) placed += `\\n${launchContext.warning}`;
           if (launchContext.tempDirectory) placed += '\\nWindows short TEMP/TMP enabled for this owned process.';
@@ -337,6 +389,7 @@ export function registerProcessTools(
     async ({ session_id, timeout_ms, offset, length }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_read_process',
       session_id,
       'Desktop process read denied or failed',
@@ -373,6 +426,7 @@ export function registerProcessTools(
     async ({ session_id, input, timeout_ms, wait_for_prompt }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_interact_process',
       session_id,
       'Desktop process interaction denied or failed',
@@ -405,6 +459,7 @@ export function registerProcessTools(
     async ({ session_id }) => auditedProcessCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_terminate_process',
       session_id,
       'Desktop process termination denied or failed',

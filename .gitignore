@@ -1,6 +1,8 @@
 # Node / build
 node_modules/
 dist/
+!vendor/desktop-commander/dist/
+!vendor/desktop-commander/dist/**
 *.log
 
 # Runtime state, secrets, caches, local validation

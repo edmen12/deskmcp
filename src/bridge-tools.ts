@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
+import type { BrowserCrossToolGuard } from './browser-cross-tool-guard.js';
 import * as z from 'zod/v4';
 import type { AuditLogger, AuditRisk } from './audit.js';
 import type { DesktopBackendBridge } from './desktop-backend-bridge.js';
@@ -42,6 +43,7 @@ function lexicalTarget(rawPath: string): string {
 async function auditedCall(
   audit: AuditLogger,
   policy: DesktopPolicy,
+  crossToolGuard: BrowserCrossToolGuard | undefined,
   tool: string,
   risk: AuditRisk,
   target: string | undefined,
@@ -56,7 +58,11 @@ async function auditedCall(
   }
 
   try {
-    const result = await action();
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
+    const result = await (crossToolGuard
+      ? crossToolGuard.runNonBrowserOperation(tool, action)
+      : action());
+    crossToolGuard?.assertNonBrowserToolAllowed(tool);
     if (result.isError) {
       await audit.finish(operation, 'fail', new Error('DownstreamToolError'));
     } else {
@@ -79,7 +85,8 @@ export function registerDesktopBackendBridgeTools(
   bridge: DesktopBackendBridge,
   policy: DesktopPolicy,
   audit: AuditLogger,
-  observations: ObservationStore
+  observations: ObservationStore,
+  crossToolGuard?: BrowserCrossToolGuard
 ): void {
   const searches = new SafeSearchRunner(policy);
 
@@ -99,6 +106,7 @@ export function registerDesktopBackendBridgeTools(
     async () => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_policy_status',
       'read',
       undefined,
@@ -127,6 +135,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ path: rawPath, offset, length }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_read_file',
       'read',
       lexicalTarget(rawPath),
@@ -161,6 +170,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ path: rawPath, depth }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_list_directory',
       'read',
       lexicalTarget(rawPath),
@@ -188,6 +198,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ path: rawPath }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_get_file_info',
       'read',
       lexicalTarget(rawPath),
@@ -235,6 +246,7 @@ export function registerDesktopBackendBridgeTools(
     }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_search',
       'read',
       lexicalTarget(rawPath),
@@ -272,6 +284,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ path: rawPath }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_create_directory',
       'write',
       lexicalTarget(rawPath),
@@ -303,6 +316,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ source, destination, source_observation_id }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_move_file',
       'write',
       `${lexicalTarget(source)} -> ${lexicalTarget(destination)}`,
@@ -340,6 +354,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ path: rawPath, old_string, new_string, expected_replacements, observation_id }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_edit_file',
       'write',
       lexicalTarget(rawPath),
@@ -380,6 +395,7 @@ export function registerDesktopBackendBridgeTools(
     async ({ path: rawPath, content, mode, observation_id }) => auditedCall(
       audit,
       policy,
+      crossToolGuard,
       'desktop_write_file',
       'write',
       lexicalTarget(rawPath),

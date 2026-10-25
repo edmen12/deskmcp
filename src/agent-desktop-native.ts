@@ -29,6 +29,23 @@ export interface AgentDesktopWindowInfo {
   readonly onCurrentDesktop?: boolean;
 }
 
+export interface AgentDesktopPassiveInventory {
+  readonly desktopId: string;
+  readonly desktopNumber: number;
+  readonly currentDesktopNumber: number;
+  readonly windows: ReadonlyArray<{
+    readonly hwnd: number;
+    readonly processId: number;
+    readonly processName: string;
+    readonly className: string;
+    readonly title: string;
+    readonly desktopId: string;
+    readonly desktopNumber: number;
+    readonly onCurrentDesktop: boolean;
+    readonly isForeground: boolean;
+  }>;
+}
+
 export interface AgentDesktopMoveProcessResult {
   readonly processId: number;
   readonly moved: number;
@@ -103,6 +120,16 @@ export class AgentDesktopNativeBridge {
 
   desktopById(desktopId: string): Promise<AgentDesktopDesktopInfo> {
     return this.run<AgentDesktopDesktopInfo>(['desktop-by-id', '--desktop-id', normalizeDesktopId(desktopId)]);
+  }
+
+  /**
+   * Passive OS inventory only. Do not expose raw window identity as an MCP
+   * action capability; caller must redact titles, HWND and PID.
+   */
+  listVirtualWindows(desktopId: string): Promise<AgentDesktopPassiveInventory> {
+    return this.run<AgentDesktopPassiveInventory>([
+      'list-virtual-windows', '--desktop-id', normalizeDesktopId(desktopId)
+    ]);
   }
 
   windowInfo(hwnd: number): Promise<AgentDesktopWindowInfo> {

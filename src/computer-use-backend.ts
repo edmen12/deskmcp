@@ -9,6 +9,32 @@ import { PROJECT_ROOT } from './paths.js';
 export const WINAPP_VERSION = 'v0.5.0';
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
+const DEFAULT_PROCESS_HOST_ENTRY = path.basename(PROJECT_ROOT).toLowerCase() === 'gateway'
+  ? path.resolve(PROJECT_ROOT, '..', 'DeskMCP.ProcessHost.exe')
+  : path.join(
+      PROJECT_ROOT,
+      'runtime',
+      'process-host',
+      process.arch === 'arm64' ? 'win-arm64' : 'win-x64',
+      'DeskMCP.ProcessHost.exe'
+    );
+const DEFAULT_AGENT_DESKTOP_HOST_ENTRY = path.basename(PROJECT_ROOT).toLowerCase() === 'gateway'
+  ? path.resolve(PROJECT_ROOT, '..', 'DeskMCP.AgentDesktopHost.exe')
+  : path.join(
+      PROJECT_ROOT,
+      'runtime',
+      'agent-desktop-runtime',
+      process.arch === 'arm64' ? 'win-arm64' : 'win-x64',
+      'DeskMCP.AgentDesktopHost.exe'
+    );
+
+function encodeUtf8(value: string): string {
+  return Buffer.from(value, 'utf8').toString('base64');
+}
+
+function quotePowerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
 
 export interface ComputerWindow {
   readonly hwnd: number;
@@ -45,6 +71,8 @@ export interface WindowInspection {
   readonly hwnd: number;
   readonly title?: string;
   readonly elements: readonly UiElementSummary[];
+  /** True only when DeskMCP discarded elements returned by WinApp due to maxElements. */
+  readonly elementsTruncated?: boolean;
 }
 
 export interface ScreenshotResult {
@@ -139,18 +167,28 @@ export function sanitizeUiElementForMcp(value: UiElementSummary): UiElementSumma
   };
 }
 
-export function flattenUiElementsForMcp(values: readonly unknown[], maxElements: number): UiElementSummary[] {
-  const result: UiElementSummary[] = [];
+/** Limit the outgoing UI tree without silently treating clipped elements as absent.
+ * Only the projection's cap is measured; WinApp's own depth/filtering is independent.
+ */
+export function flattenUiElementsWithStatusForMcp(
+  values: readonly unknown[], maxElements: number
+): { elements: UiElementSummary[]; truncated: boolean } {
+  const elements: UiElementSummary[] = [];
   const limit = Math.max(0, Math.trunc(maxElements));
+  let truncated = false;
 
   const visit = (value: unknown, ancestors: readonly string[]): void => {
-    if (result.length >= limit || !value || typeof value !== 'object' || Array.isArray(value)) return;
+    if (truncated || !value || typeof value !== 'object' || Array.isArray(value)) return;
+    if (elements.length >= limit) {
+      truncated = true;
+      return;
+    }
     const record = value as Record<string, unknown>;
     const projected = sanitizeUiElementForMcp(record as UiElementSummary);
     const withAncestors = projected.ancestorPath || ancestors.length === 0
       ? projected
       : { ...projected, ancestorPath: [...ancestors] };
-    result.push(withAncestors);
+    elements.push(withAncestors);
 
     const nextAncestors = typeof projected.type === 'string'
       ? [...ancestors, projected.type]
@@ -158,16 +196,20 @@ export function flattenUiElementsForMcp(values: readonly unknown[], maxElements:
     if (Array.isArray(record.children)) {
       for (const child of record.children) {
         visit(child, nextAncestors);
-        if (result.length >= limit) break;
+        if (truncated) break;
       }
     }
   };
 
   for (const value of values) {
     visit(value, []);
-    if (result.length >= limit) break;
+    if (truncated) break;
   }
-  return result;
+  return { elements, truncated };
+}
+
+export function flattenUiElementsForMcp(values: readonly unknown[], maxElements: number): UiElementSummary[] {
+  return flattenUiElementsWithStatusForMcp(values, maxElements).elements;
 }
 
 function normalizeExecutablePath(raw: string): string {
@@ -195,21 +237,102 @@ export function resolveWinAppPath(): string {
 export class WinAppComputerBackend {
   constructor(private readonly executableResolver: () => string = resolveWinAppPath) {}
 
-  private async run(args: readonly string[], timeoutMs = 10_000): Promise<string> {
-    if (process.platform !== 'win32') throw new Error('Windows computer use is only available on Windows.');
-    const executable = this.executableResolver();
+  private async runAgentDesktopHost(args: readonly string[], timeoutMs = 10_000): Promise<string> {
+    if (process.platform !== 'win32') throw new Error('Agent Desktop is only available on Windows.');
+    const executable = process.env.DESKTOP_MCP_AGENT_DESKTOP_HOST?.trim() || DEFAULT_AGENT_DESKTOP_HOST_ENTRY;
+    if (!existsSync(executable)) throw new Error('DeskMCP Agent Desktop host is not installed.');
 
     return new Promise<string>((resolve, reject) => {
       const child = spawn(executable, [...args], {
         shell: false,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          WINAPP_CLI_TELEMETRY_OPTOUT: '1',
-          NO_COLOR: '1'
-        }
+        stdio: ['ignore', 'pipe', 'pipe']
       });
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let bytes = 0;
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+
+      const finish = (error?: Error, output?: string) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(output ?? '');
+      };
+
+      const append = (target: Buffer[], chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > MAX_OUTPUT_BYTES) {
+          child.kill();
+          finish(new Error('Agent Desktop host output exceeded the DeskMCP safety limit.'));
+          return;
+        }
+        target.push(chunk);
+      };
+
+      child.stdout.on('data', (chunk: Buffer) => append(stdout, chunk));
+      child.stderr.on('data', (chunk: Buffer) => append(stderr, chunk));
+      child.on('error', error => finish(new Error(`Agent Desktop host failed to start: ${error.message}`)));
+      child.on('close', code => {
+        const output = Buffer.concat(stdout).toString('utf8');
+        if (code === 0) return finish(undefined, output);
+        const detail = stripAnsi(Buffer.concat(stderr).toString('utf8')).trim();
+        const safeDetail = detail.length > 800 ? `${detail.slice(0, 800)}…` : detail;
+        finish(new Error(safeDetail ? `Agent Desktop host failed: ${safeDetail}` : `Agent Desktop host failed with exit code ${code ?? 'unknown'}.`));
+      });
+
+      timer = setTimeout(() => {
+        child.kill();
+        finish(new Error('Agent Desktop host timed out.'));
+      }, timeoutMs);
+      timer.unref?.();
+    });
+  }
+
+  private async run(
+    args: readonly string[],
+    timeoutMs = 10_000,
+    desktopObjectName?: string
+  ): Promise<string> {
+    if (process.platform !== 'win32') throw new Error('Windows computer use is only available on Windows.');
+    const executable = this.executableResolver();
+    const processHost = process.env.DESKTOP_MCP_PROCESS_HOST?.trim() || DEFAULT_PROCESS_HOST_ENTRY;
+    const command = desktopObjectName
+      ? `& ${quotePowerShellLiteral(executable)} ${args.map(quotePowerShellLiteral).join(' ')}; exit $LASTEXITCODE`
+      : undefined;
+
+    return new Promise<string>((resolve, reject) => {
+      const child = desktopObjectName
+        ? spawn(processHost, [
+            '--owner-pid', String(process.pid),
+            '--shell', 'powershell.exe',
+            '--command64', encodeUtf8(command!),
+            '--window-mode', 'hidden',
+            '--elevation', 'standard',
+            '--lifetime', 'root',
+            '--desktop-object64', encodeUtf8(desktopObjectName)
+          ], {
+            shell: false,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {
+              ...process.env,
+              WINAPP_CLI_TELEMETRY_OPTOUT: '1',
+              NO_COLOR: '1'
+            }
+          })
+        : spawn(executable, [...args], {
+            shell: false,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {
+              ...process.env,
+              WINAPP_CLI_TELEMETRY_OPTOUT: '1',
+              NO_COLOR: '1'
+            }
+          });
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let bytes = 0;
@@ -253,20 +376,37 @@ export class WinAppComputerBackend {
     });
   }
 
-  private async runJson<T>(args: readonly string[], timeoutMs = 10_000): Promise<T> {
-    return extractJson(await this.run([...args, '--json'], timeoutMs)) as T;
+  private async runJson<T>(
+    args: readonly string[],
+    timeoutMs = 10_000,
+    desktopObjectName?: string
+  ): Promise<T> {
+    return extractJson(await this.run([...args, '--json'], timeoutMs, desktopObjectName)) as T;
   }
 
-  async listWindows(app?: string): Promise<ComputerWindow[]> {
+  async listWindows(app?: string, desktopObjectName?: string): Promise<ComputerWindow[]> {
+    if (desktopObjectName) {
+      const raw = extractJson(await this.runAgentDesktopHost([
+        'object-windows',
+        '--desktop-object', desktopObjectName
+      ]));
+      const windows = parseComputerWindows(raw);
+      if (!app) return windows;
+      const needle = app.trim().toLowerCase();
+      return windows.filter(window =>
+        window.processName.toLowerCase().includes(needle)
+        || window.title?.toLowerCase().includes(needle) === true
+      );
+    }
     const args = ['ui', 'list-windows'];
     if (app) args.push('-a', app);
     return parseComputerWindows(await this.runJson<unknown>(args));
   }
 
-  async inspect(hwnd: number, interactiveOnly = true, maxElements = 80): Promise<WindowInspection> {
+  async inspect(hwnd: number, interactiveOnly = true, maxElements = 80, desktopObjectName?: string): Promise<WindowInspection> {
     const args = ['ui', 'inspect', '-w', String(hwnd), '--depth', interactiveOnly ? '8' : '5'];
     if (interactiveOnly) args.push('--interactive');
-    const raw = recordValue(await this.runJson<unknown>(args, 12_000), 'Computer backend inspection');
+    const raw = recordValue(await this.runJson<unknown>(args, 12_000, desktopObjectName), 'Computer backend inspection');
     if (!Array.isArray(raw.windows)) throw new Error('Computer backend inspection windows are invalid.');
     const windows = raw.windows.map((value, index) => {
       const item = recordValue(value, `Computer backend inspection window ${index}`);
@@ -282,14 +422,16 @@ export class WinAppComputerBackend {
     const window = windows.find(item => item.hwnd === hwnd) ?? windows[0];
     if (!window) throw new Error('Target window no longer exists.');
     if (window.hwnd !== hwnd) throw new Error('Computer backend inspection did not return the requested window.');
+    const projection = flattenUiElementsWithStatusForMcp(window.elements, maxElements);
     return {
       hwnd: window.hwnd,
       ...(window.title ? { title: window.title } : {}),
-      elements: flattenUiElementsForMcp(window.elements, maxElements)
+      elements: projection.elements,
+      elementsTruncated: projection.truncated
     };
   }
 
-  async screenshot(hwnd: number, options: { captureScreen?: boolean; focus?: boolean } = {}): Promise<ScreenshotResult> {
+  async screenshot(hwnd: number, options: { captureScreen?: boolean; focus?: boolean } = {}, desktopObjectName?: string): Promise<ScreenshotResult> {
     const directory = path.join(os.tmpdir(), 'deskmcp-computer-use');
     await mkdir(directory, { recursive: true });
     const output = path.join(directory, `${randomUUID()}.png`);
@@ -297,7 +439,7 @@ export class WinAppComputerBackend {
       const args = ['ui', 'screenshot', '-w', String(hwnd), '--output', output];
       if (options.captureScreen) args.push('--capture-screen');
       else if (options.focus) args.push('--focus');
-      const metadata = recordValue(await this.runJson<unknown>(args, 15_000), 'Computer backend screenshot metadata');
+      const metadata = recordValue(await this.runJson<unknown>(args, 15_000, desktopObjectName), 'Computer backend screenshot metadata');
       if (
         !Number.isSafeInteger(metadata.hwnd) || Number(metadata.hwnd) !== hwnd
         || typeof metadata.width !== 'number' || !Number.isFinite(metadata.width) || metadata.width <= 0 || metadata.width > 100_000
@@ -323,7 +465,7 @@ export class WinAppComputerBackend {
     }
   }
 
-  async act(hwnd: number, action: UiAction): Promise<unknown> {
+  async act(hwnd: number, action: UiAction, desktopObjectName?: string): Promise<unknown> {
     if (action.type === 'wait') {
       await new Promise(resolve => setTimeout(resolve, action.milliseconds));
       return { waitedMs: action.milliseconds };
@@ -332,19 +474,19 @@ export class WinAppComputerBackend {
     const target = ['-w', String(hwnd)];
     switch (action.type) {
       case 'invoke':
-        return this.runJson(['ui', 'invoke', action.selector, ...target]);
+        return this.runJson(['ui', 'invoke', action.selector, ...target], 10_000, desktopObjectName);
       case 'set_value':
-        return this.runJson(['ui', 'set-value', action.selector, action.value, ...target]);
+        return this.runJson(['ui', 'set-value', action.selector, action.value, ...target], 10_000, desktopObjectName);
       case 'click': {
         const args = ['ui', 'click', action.selector, ...target];
         if (action.double) args.push('--double');
         if (action.button === 'right') args.push('--right');
-        return this.runJson(args);
+        return this.runJson(args, 10_000, desktopObjectName);
       }
       case 'hover': {
         const args = ['ui', 'hover', action.selector, ...target];
         if (action.dwellMs !== undefined) args.push('--dwell-time', String(action.dwellMs));
-        return this.runJson(args);
+        return this.runJson(args, 10_000, desktopObjectName);
       }
       case 'scroll': {
         const args = ['ui', 'scroll'];
@@ -353,21 +495,24 @@ export class WinAppComputerBackend {
         if (action.direction) args.push('--direction', action.direction);
         if (action.to) args.push('--to', action.to);
         if (action.wheel !== undefined) args.push('--wheel', String(action.wheel));
-        return this.runJson(args);
+        // Isolated WinApp scroll may take close to 10s once the Desktop Object
+        // process-launch/COM startup overhead is included. A 10s deadline
+        // intermittently aborts a successful scroll as a false timeout.
+        return this.runJson(args, desktopObjectName ? 25_000 : 10_000, desktopObjectName);
       }
       case 'send_keys': {
         const args = ['ui', 'send-keys', action.keys, ...target, '--via', action.transport ?? 'send-input'];
         if (action.selector) args.push('--target', action.selector);
         if (action.verbatim) args.push('--verbatim');
         if (action.allowSystemKeys) args.push('--allow-system-keys');
-        return this.runJson(args);
+        return this.runJson(args, 10_000, desktopObjectName);
       }
       case 'drag': {
         const args = ['ui', 'drag', action.from, action.to, ...target];
         if (action.right) args.push('--right');
         if (action.holdMs !== undefined) args.push('--hold-ms', String(action.holdMs));
         if (action.dwellMs !== undefined) args.push('--dwell-ms', String(action.dwellMs));
-        return this.runJson(args);
+        return this.runJson(args, 10_000, desktopObjectName);
       }
     }
   }
