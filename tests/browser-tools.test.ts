@@ -737,6 +737,8 @@ test('candidate human takeover cross-tool quarantine denies filesystem, processe
       ['desktop_interact_process', {session_id:SESSION_ID,input:'bad'}],
       ['desktop_terminate_process', {session_id: SESSION_ID}],
       ['desktop_ui_windows', {}],
+      ['desktop_ui_object_windows', {agent_desktop_lease_id: SESSION_ID}],
+      ['desktop_ui_object_snapshot', {agent_desktop_lease_id: SESSION_ID, window_id: SESSION_ID}],
       ['desktop_ui_snapshot', {window_id: SESSION_ID}],
       ['desktop_ui_action', {window_id: SESSION_ID, computer_observation_id: OBSERVATION_ID, action: 'wait'}]
     ] as const) {
@@ -760,7 +762,9 @@ test('candidate human takeover cross-tool quarantine denies filesystem, processe
       assert.match(contentText(denied), /human takeover quarantine/i, name);
     }
     const registered = (await client.listTools()).tools.map(tool=>tool.name);
-    assert.equal(registered.length,28,'all current DeskMCP tool registrations are covered');
+    assert.equal(registered.length,30,'all current DeskMCP tool registrations are covered');
+    assert.ok(registered.includes('desktop_ui_object_windows'));
+    assert.ok(registered.includes('desktop_ui_object_snapshot'));
 
     const deniedPolicy = await client.callTool({name:'desktop_policy_status', arguments:{}});
     assert.equal(deniedPolicy.isError, true);

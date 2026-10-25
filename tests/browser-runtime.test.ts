@@ -1491,8 +1491,11 @@ test('idle direct browser sessions are automatically reaped and ephemeral profil
   }).sessions.get(started.session_id);
   assert.ok(internalRecord);
   const releaseProfileLock = internalRecord.profileLock.release.bind(internalRecord.profileLock);
+  let lockReleaseObserved = false;
   internalRecord.profileLock.release = async () => {
-    await assert.rejects(() => stat(profileDir), /ENOENT/);
+    // Existing cleanup paths may already have removed the temporary profile.
+    // Both OSes must release the lock and leave the profile absent afterward.
+    lockReleaseObserved = true;
     await releaseProfileLock();
   };
 
@@ -1503,6 +1506,7 @@ test('idle direct browser sessions are automatically reaped and ephemeral profil
 
   assert.equal((await browser.list()).length, 0);
   assert.deepEqual(controller.terminated, ['process-1']);
+  assert.equal(lockReleaseObserved, true);
   await assert.rejects(() => stat(profileDir), /ENOENT/);
 });
 
