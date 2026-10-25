@@ -33,18 +33,18 @@ const bin=(folder,name)=>path.join(original,'test-area',folder,'bin','Release','
 // Trust a specific source-provenance manifest and immutable single-file payload,
 // never an arbitrary binary regenerated in a mutable build directory.
 const stageRoot=path.join(repo,'test-area','desktop2-real-acceptance','runs',
- 'native-stage-2026-10-25T02-49-14-278Z');
+ 'native-stage-2026-10-25T02-52-49-189Z');
 const jobHost=path.join(stageRoot,'job-owned-process-host','DeskMCP.ProcessHost.exe');
 const shaFile=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const manifestPath=path.join(stageRoot,'manifest.json');
-const EXPECTED_STAGE_MANIFEST_SHA256='7657a4c7f156a18b7a118dcaec7d683a2035ea6adf432f7c3c1caa1892eabd47';
-const EXPECTED_JOB_HOST_SHA256='18789e4034b89c3baef6573e731d416b6af01b7a33863dd340bc8f0356b62f66';
+const EXPECTED_STAGE_MANIFEST_SHA256='57f823f0461062357e6d7e315c48f84f9268eb3c46bc9700ee1ab16f7adc2f48';
+const EXPECTED_JOB_HOST_SHA256='3cbf6517eb89147f7a7d3391f14c9e08e237b45030460032ff0e2fd4b515fa65';
 if(!fs.existsSync(manifestPath)||shaFile(manifestPath)!==EXPECTED_STAGE_MANIFEST_SHA256)
  throw Error('OWNED_JOB_STAGE_MANIFEST_NOT_PINNED');
 const staged=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
 const packageInfo=staged.nativePackages?.find(p=>p.name==='job-owned-process-host');
 if(staged.releaseApproved!==false||
-   staged.sourceHead!=='0279ee72f87888d4c0e17beb6032bbf6803a82da' ||
+   staged.sourceHead!=='46d2895a8943493a6c318b797887827fc900a62c' ||
    staged.nativeRuntimeSmoke?.passed!==true ||
    packageInfo?.packaging!=='self-contained-win-x64-single-file' ||
    packageInfo.assets?.length!==1 ||
