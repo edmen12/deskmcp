@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,8 +29,9 @@ function parseTool(result: {content?:unknown;isError?:unknown}) {
  return {isError:result.isError===true,raw:message,
   value:message.startsWith('{')?JSON.parse(message) as Record<string,unknown>:null};
 }
-async function harness(inject:boolean,enabled:boolean) {
+async function harness(inject:boolean,enabled:boolean,grantLifetimeMs=60_000) {
  const dir=await mkdtemp(path.join(os.tmpdir(),'d2-mcp-http-'));
+ const ownerToken=randomBytes(32).toString('hex');
  const state={started:0,stopped:0,performed:0};
  const bridge = {
   async start(){state.started++;},
@@ -52,10 +54,14 @@ async function harness(inject:boolean,enabled:boolean) {
   running=await startHttpServer('127.0.0.1',0,
    new DesktopBackendBridge(),policy,audit,new ObservationStore(),
    new ProcessSessionRegistry(),undefined,undefined,undefined,undefined,undefined,
-   undefined,agentDesktop,inject?bridge:undefined);
-  await cli.connect(new StreamableHTTPClientTransport(new URL(running.url+'/mcp')));
+   undefined,agentDesktop,inject?bridge:undefined,
+   inject && enabled ? {bearerToken:ownerToken,clientId:'trusted-owned-tester',expiresAtMs:Date.now()+grantLifetimeMs} : undefined);
+  await cli.connect(new StreamableHTTPClientTransport(
+   new URL(running.url+(inject && enabled?'/mcp/real-d2':'/mcp')),
+   inject && enabled ? {requestInit:{headers:{Authorization:'Bearer '+ownerToken}}} : undefined
+  ));
   const listed=(await cli.listTools()).tools.map(x=>x.name);
-  return {cli,running,dir,old,state,listed};
+  return {cli,running,dir,old,state,listed,ownerToken};
  } catch(error){
   await cli.close().catch(()=>undefined);
   await running?.close().catch(()=>undefined);
@@ -107,5 +113,53 @@ test('real loopback MCP client keeps one opaque native control permit across sep
   const stopped=await call('desktop2_real_owned_stop',{agent_desktop_lease_id:lease});
   assert.equal(stopped.isError,false,stopped.raw);
   assert.equal(h.state.stopped,1);
+ }finally{await close(h);}
+});
+
+test('ordinary MCP and unknown HTTP principals never gain the real-D2 write surface',async()=>{
+ const h=await harness(true,true);
+ const ordinary=client();
+ try {
+  await ordinary.connect(new StreamableHTTPClientTransport(new URL(h.running.url+'/mcp')));
+  const tools=(await ordinary.listTools()).tools.map(x=>x.name);
+  assert.equal(tools.some(n=>n.startsWith('desktop2_real_owned_')),false);
+  const endpoint=h.running.url+'/mcp/real-d2';
+  const absent=await fetch(endpoint,{method:'GET'});
+  assert.equal(absent.status,403);
+  const invalid=await fetch(endpoint,{method:'POST',headers:{
+    Authorization:'Bearer '+randomBytes(32).toString('hex'),
+    'Content-Type':'application/json'
+  },body:'{}'});
+  assert.equal(invalid.status,403);
+  assert.equal(h.state.started,0);
+  assert.equal(h.state.performed,0);
+ }finally{
+  await ordinary.close();
+  await close(h);
+ }
+});
+test('owner token cannot be substituted with the HUD lease ID or an arbitrary client header',async()=>{
+ const h=await harness(true,true);
+ try {
+  const fake=await fetch(h.running.url+'/mcp/real-d2',{
+   method:'POST',
+   headers:{Authorization:'Bearer '+lease,'X-Client-ID':'trusted-owned-tester'},
+   body:'{}'
+  });
+  assert.equal(fake.status,403);
+  assert.equal(h.state.started,0);
+ }finally{await close(h);}
+});
+
+test('expired trusted launcher grant rejects the same client before any native action',async()=>{
+ const h=await harness(true,true,3500);
+ try{
+  await new Promise(resolve=>setTimeout(resolve,3600));
+  const denied=await fetch(h.running.url+'/mcp/real-d2',{
+   method:'GET',headers:{Authorization:'Bearer '+h.ownerToken}
+  });
+  assert.equal(denied.status,403);
+  assert.equal(h.state.started,0);
+  assert.equal(h.state.performed,0);
  }finally{await close(h);}
 });

@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
@@ -106,12 +106,15 @@ async function createTestGateway(){
  const audit=new AuditLogger(path.join(out,'audit.jsonl'));
  await audit.init();
  process.env.DESKTOP_MCP_REAL_D2_OWNED_ACTION_EXPERIMENT='1';
+ const ownerToken=randomBytes(32).toString('hex');
  server=await startHttpServer('127.0.0.1',0,new DesktopBackendBridge(),
   policy,audit,new ObservationStore(),new ProcessSessionRegistry(),
-  undefined,undefined,undefined,undefined,undefined,undefined,leases,bridge);
+  undefined,undefined,undefined,undefined,undefined,undefined,leases,bridge,
+  {bearerToken:ownerToken,clientId:'job-owned-fixture',expiresAtMs:Date.now()+10*60_000});
  mcp=new Client({name:'owned-winforms-native-mcp-e2e',version:'1.0.0'},
   {versionNegotiation:{mode:'auto'}});
- await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp')));
+ await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp/real-d2'),
+  {requestInit:{headers:{Authorization:'Bearer '+ownerToken}}}));
  const names=(await mcp.listTools()).tools.map(v=>v.name);
  for(const n of ['start','windows','snapshot','action','stop'])
   if(!names.includes('desktop2_real_owned_'+n))throw Error('STAGING_MCP_TOOL_NOT_REGISTERED_'+n);

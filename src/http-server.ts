@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import http, { type Server as HttpServer } from 'node:http';
 import {
@@ -21,6 +22,14 @@ import type { ObservationStore } from './observation-store.js';
 import type { ProcessSessionRegistry } from './process-session-registry.js';
 import type { SkillStore } from './skill-store.js';
 import type { TaskContextStore } from './task-context.js';
+
+// Issued out-of-band by a trusted, owned-launch authority, never derived
+// from the caller's PID, window title, lease ID or HTTP headers.
+export interface RealD2OwnerGrant {
+  readonly bearerToken: string; // 32 cryptographically random bytes, lowercase hex
+  readonly clientId: string;
+  readonly expiresAtMs: number; // server-side expiry, never client-provided
+}
 
 export interface RunningHttpServer {
   readonly host: string;
@@ -195,7 +204,8 @@ export async function startHttpServer(
   skillStore?: SkillStore,
   agentDesktop?: AgentDesktopManager,
   // Staging-only injection. Production index.ts never supplies this object.
-  realD2Owned?: RealDesktop2OwnedControl
+  realD2Owned?: RealDesktop2OwnedControl,
+  realD2OwnerGrant?: RealD2OwnerGrant
 ): Promise<RunningHttpServer> {
   if (host !== '127.0.0.1' && host !== 'localhost') {
     throw new Error('Gateway refuses non-loopback bind addresses.');
@@ -204,6 +214,22 @@ export async function startHttpServer(
     throw new Error('Desktop policy, audit logger, observation store, and process registry are required when DeskMCP backend is enabled.');
   }
   const effectiveComputerUse = computerUse ?? (bridge ? createComputerUseRuntime() : undefined);
+  const wantsRealD2 = realD2Owned !== undefined &&
+    process.env.DESKTOP_MCP_REAL_D2_OWNED_ACTION_EXPERIMENT === '1';
+  if (realD2OwnerGrant && !wantsRealD2) {
+    throw new Error('REAL_D2_GRANT_WITHOUT_OWNED_ACTION_RUNTIME');
+  }
+  if (wantsRealD2 && (!bridge || !policy || !audit || !agentDesktop ||
+      !realD2OwnerGrant ||
+      !/^[0-9a-f]{64}$/u.test(realD2OwnerGrant.bearerToken) ||
+      !/^[A-Za-z0-9._-]{8,128}$/u.test(realD2OwnerGrant.clientId) ||
+      !Number.isSafeInteger(realD2OwnerGrant.expiresAtMs) ||
+      realD2OwnerGrant.expiresAtMs <= Date.now() ||
+      realD2OwnerGrant.expiresAtMs > Date.now() + 15*60_000)) {
+    throw new Error('REAL_D2_OWNER_ACCESS_GRANT_REQUIRED');
+  }
+  const ownerKey = wantsRealD2
+    ? Buffer.from(realD2OwnerGrant!.bearerToken, 'hex') : undefined;
 
   const mcpHandler = createMcpHandler(() =>
     createDesktopMcpServer(
@@ -219,9 +245,21 @@ export async function startHttpServer(
       browser,
       skillStore,
       agentDesktop,
-      realD2Owned
+      undefined // Ordinary /mcp must NEVER expose real Desktop2 mutation.
     )
   );
+  // Separate staging-only route. No caller-selected header or lease ID
+  // authorizes mutation without the out-of-band 256-bit owner grant.
+  const ownerMcpHandler = wantsRealD2 ? createMcpHandler(() =>
+    createDesktopMcpServer(
+      bridge, policy, audit, observations, processSessions, effectiveComputerUse,
+      taskStore, artifactStore, dynamicMcpHub, browser, skillStore, agentDesktop,
+      realD2Owned
+    )
+  ) : undefined;
+  const ownerNodeHandler = ownerMcpHandler ? toNodeHandler(ownerMcpHandler, {
+    onerror(error) { console.error('[deskmcp] isolated Desktop2 MCP adapter error:', error); }
+  }) : undefined;
   const nodeHandler = toNodeHandler(mcpHandler, {
     onerror(error) {
       console.error('[deskmcp] MCP adapter error:', error);
@@ -279,6 +317,30 @@ export async function startHttpServer(
       return;
     }
 
+    if (pathname === '/mcp/real-d2') {
+      if (!ownerNodeHandler || !ownerKey) {
+        writeJson(res, 404, { error: 'not_found' });
+        return;
+      }
+      if (!validateHost(req, res) || !validateOrigin(req, res)) return;
+      const bearer = req.headers.authorization;
+      const provided = typeof bearer === 'string'
+        ? /^Bearer ([0-9a-f]{64})$/u.exec(bearer)?.[1] : undefined;
+      if (!provided || Date.now() >= realD2OwnerGrant!.expiresAtMs ||
+          !timingSafeEqual(Buffer.from(provided, 'hex'), ownerKey)) {
+        writeJson(res, 403, { error: 'desktop2_owner_access_denied' });
+        return;
+      }
+      (req as typeof req & { auth: {
+        token: string; clientId: string; scopes: string[];
+      }}).auth = {
+        token: provided, clientId: realD2OwnerGrant!.clientId,
+        scopes: ['desktop2:owned']
+      };
+      void ownerNodeHandler(req as unknown as Parameters<typeof ownerNodeHandler>[0], res);
+      return;
+    }
+
     if (pathname !== '/mcp') {
       writeJson(res, 404, { error: 'not_found' });
       return;
@@ -311,7 +373,7 @@ export async function startHttpServer(
     port: actualPort,
     url: serverUrl,
     async close() {
-      await mcpHandler.close();
+      await Promise.all([mcpHandler.close(), ownerMcpHandler?.close()]);
       await new Promise<void>((resolve, reject) => {
         server.close(error => error ? reject(error) : resolve());
       });

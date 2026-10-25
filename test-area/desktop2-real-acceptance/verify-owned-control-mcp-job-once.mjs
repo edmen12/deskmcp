@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {AgentDesktopNativeBridge} from '../../dist/src/agent-desktop-native.js';
@@ -30,14 +30,27 @@ const repo=path.resolve(here,'../..');
 const original=repo;
 const sdk=path.resolve(repo,'../DeskMCP/runtime/dotnet-sdk');
 const bin=(folder,name)=>path.join(original,'test-area',folder,'bin','Release','net10.0-windows',name);
-const jobHost=path.join(repo,'process-host','bin','Release','net10.0-windows','win-x64','DeskMCP.ProcessHost.exe');
-const EXPECTED_JOB_HOST_SHA256='e1895f0061e6b95ac546e9b022e2239c6472a693679a4d73f71a80cf84cd2781';
-const jobHostDll=jobHost.replace(/\.exe$/iu,'.dll');
-const EXPECTED_JOB_HOST_CODE_SHA256='b84492cc0cc04204644672b77fa328fa28cdbc096b0909754aa42496530386bb';
+// Trust a specific source-provenance manifest and immutable single-file payload,
+// never an arbitrary binary regenerated in a mutable build directory.
+const stageRoot=path.join(repo,'test-area','desktop2-real-acceptance','runs',
+ 'native-stage-2026-10-25T02-49-14-278Z');
+const jobHost=path.join(stageRoot,'job-owned-process-host','DeskMCP.ProcessHost.exe');
 const shaFile=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-if(!fs.existsSync(jobHost)||shaFile(jobHost)!==EXPECTED_JOB_HOST_SHA256 ||
-   !fs.existsSync(jobHostDll)||shaFile(jobHostDll)!==EXPECTED_JOB_HOST_CODE_SHA256)
- throw Error('OWNED_JOB_HOST_APPHOST_OR_EXECUTABLE_CODE_NOT_PINNED');
+const manifestPath=path.join(stageRoot,'manifest.json');
+const EXPECTED_STAGE_MANIFEST_SHA256='7657a4c7f156a18b7a118dcaec7d683a2035ea6adf432f7c3c1caa1892eabd47';
+const EXPECTED_JOB_HOST_SHA256='18789e4034b89c3baef6573e731d416b6af01b7a33863dd340bc8f0356b62f66';
+if(!fs.existsSync(manifestPath)||shaFile(manifestPath)!==EXPECTED_STAGE_MANIFEST_SHA256)
+ throw Error('OWNED_JOB_STAGE_MANIFEST_NOT_PINNED');
+const staged=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
+const packageInfo=staged.nativePackages?.find(p=>p.name==='job-owned-process-host');
+if(staged.releaseApproved!==false||
+   staged.sourceHead!=='0279ee72f87888d4c0e17beb6032bbf6803a82da' ||
+   staged.nativeRuntimeSmoke?.passed!==true ||
+   packageInfo?.packaging!=='self-contained-win-x64-single-file' ||
+   packageInfo.assets?.length!==1 ||
+   packageInfo.assets[0]?.sha256!==EXPECTED_JOB_HOST_SHA256 ||
+   !fs.existsSync(jobHost)||shaFile(jobHost)!==EXPECTED_JOB_HOST_SHA256)
+ throw Error('OWNED_JOB_SELFCONTAINED_BINARY_NOT_PINNED');
 const files={
  dotnet:path.join(sdk,'dotnet.exe'),
  vda:path.resolve(repo,'../DeskMCP/runtime/agent-desktop-runtime/win-x64/virtual-desktop-accessor/VirtualDesktopAccessor.dll'),
@@ -115,12 +128,15 @@ async function createTestGateway(){
  const audit=new AuditLogger(path.join(out,'audit.jsonl'));
  await audit.init();
  process.env.DESKTOP_MCP_REAL_D2_OWNED_ACTION_EXPERIMENT='1';
+ const ownerToken=randomBytes(32).toString('hex');
  server=await startHttpServer('127.0.0.1',0,new DesktopBackendBridge(),
   policy,audit,new ObservationStore(),new ProcessSessionRegistry(),
-  undefined,undefined,undefined,undefined,undefined,undefined,leases,bridge);
+  undefined,undefined,undefined,undefined,undefined,undefined,leases,bridge,
+  {bearerToken:ownerToken,clientId:'job-owned-fixture',expiresAtMs:Date.now()+10*60_000});
  mcp=new Client({name:'owned-winforms-native-mcp-e2e',version:'1.0.0'},
   {versionNegotiation:{mode:'auto'}});
- await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp')));
+ await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url+'/mcp/real-d2'),
+  {requestInit:{headers:{Authorization:'Bearer '+ownerToken}}}));
  const names=(await mcp.listTools()).tools.map(v=>v.name);
  for(const n of ['start','windows','snapshot','action','stop'])
   if(!names.includes('desktop2_real_owned_'+n))throw Error('STAGING_MCP_TOOL_NOT_REGISTERED_'+n);

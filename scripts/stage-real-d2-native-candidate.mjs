@@ -15,7 +15,7 @@ const artifacts=[
  {name:'agent-desktop-host',rel:'agent-desktop-host',assembly:'DeskMCP.AgentDesktopHost'},
  {name:'desktop2-switch-observer',rel:'test-area/desktop2-switch-observer',assembly:'DeskMCP.Desktop2SwitchObserver'},
  {name:'desktop2-direct-uia',rel:'test-area/desktop2-direct-uia',assembly:'DeskMCP.Desktop2DirectUia'},
- {name:'job-owned-process-host',rel:'process-host',assembly:'DeskMCP.ProcessHost',runtimeSubdir:'win-x64'}
+ {name:'job-owned-process-host',rel:'process-host',assembly:'DeskMCP.ProcessHost',runtimeSubdir:'win-x64',singleFile:true}
 ];
 function exec(file,args){
  const run=spawnSync(file,args,{cwd:repo,windowsHide:true,shell:false,
@@ -43,7 +43,7 @@ try {
   status:'STAGED_NATIVE_HELPERS_ONLY_NOT_INSTALLABLE',
   sourceHead:head,
   sourceBase:pinnedBase,
-  runtimeContract:'.NET 10 windows / bundled runtime required',
+  runtimeContract:'Windows .NET10: source-built framework-dependent helpers, self-contained single-file Job Host',
   createdUtc:new Date().toISOString(),
   productionUpdatePerformed:false,
   releaseApproved:false,
@@ -54,13 +54,18 @@ try {
  for(const x of artifacts){
   const project=path.join(repo,x.rel,x.assembly+'.csproj');
   assert.ok(fs.existsSync(project),'Source project missing '+project);
-  exec(dotnet,['build',project,'--no-restore','-c','Release','--nologo','-v:q']);
+  if(x.singleFile){
+   exec(dotnet,['publish',project,'-c','Release','-r','win-x64','--self-contained','true',
+    '-p:PublishSingleFile=true','--no-restore','--nologo','-v:q']);
+  } else {
+   exec(dotnet,['build',project,'--no-restore','-c','Release','--nologo','-v:q']);
+  }
   const assemblyDir=path.join(path.dirname(project),'bin','Release','net10.0-windows',
-   ...(x.runtimeSubdir?[x.runtimeSubdir]:[]));
+   ...(x.runtimeSubdir?[x.runtimeSubdir]:[]),...(x.singleFile?['publish']:[]));
   const target=path.join(dest,x.name);
   fs.mkdirSync(target);
   const assets=[];
-  for(const ext of ['.exe','.dll','.deps.json','.runtimeconfig.json']){
+  for(const ext of (x.singleFile?['.exe']:['.exe','.dll','.deps.json','.runtimeconfig.json'])){
    const name=x.assembly+ext,from=path.join(assemblyDir,name),to=path.join(target,name);
    assert.ok(fs.existsSync(from),'Compiled Native asset missing '+from);
    fs.copyFileSync(from,to);
@@ -69,7 +74,9 @@ try {
   }
   const sources=fs.readdirSync(path.dirname(project)).filter(n=>n.endsWith('.cs')||n.endsWith('.csproj'))
    .sort().map(n=>({name:n,sha256:sha256(path.join(path.dirname(project),n))}));
-  manifest.nativePackages.push({name:x.name,assets,sources});
+  manifest.nativePackages.push({name:x.name,
+   packaging:x.singleFile?'self-contained-win-x64-single-file':'framework-dependent-net10',
+   assets,sources});
  }
  const guard=path.join(repo,'test-area','desktop2-direct-uia','native-release-guard.test.mjs');
  const check=exec(process.execPath,['--test',guard]);
@@ -78,6 +85,22 @@ try {
  manifest.negativeSecurityTests={passed:true,summary:'5 pass; zero fail',
   includes:['real D2 native OS policy','foreground watcher self-test',
    'no-observer rejects native Edit/Button/List','quarantined ValuePattern and Invoke']};
+ // A self-contained claim is not based on asset names or hashes alone.
+ // Execute ONLY our staged ProcessHost with a harmless owned CLI command.
+ // Missing hostpolicy/runtime, damaged bundle or job startup => refuse stage.
+ const ownerExe=path.join(dest,'job-owned-process-host','DeskMCP.ProcessHost.exe');
+ const outputMarker='STAGED_JOB_HOST_SELFCONTAINED_PASS';
+ const nativeCmd='Write-Output '+outputMarker;
+ const ownerTest=exec(ownerExe,[
+  '--owner-pid',String(process.pid),'--shell','powershell.exe',
+  '--command64',Buffer.from(nativeCmd,'utf8').toString('base64'),
+  '--window-mode','hidden','--elevation','standard','--lifetime','root',
+  '--working-directory64',Buffer.from(repo,'utf8').toString('base64')
+ ]);
+ if(!ownerTest.stdout.includes(outputMarker))
+  throw Error('STAGED_JOB_SELFCONTAINED_SMOKE_NOT_CONFIRMED');
+ manifest.nativeRuntimeSmoke={passed:true,mode:'staged-self-contained-job-host-cli',
+  doesNotStartGui:true};
  const manifestPath=path.join(dest,'manifest.json');
  fs.writeFileSync(manifestPath,JSON.stringify(manifest,null,2)+'\n',{encoding:'utf8',flag:'wx'});
  completed=true;
