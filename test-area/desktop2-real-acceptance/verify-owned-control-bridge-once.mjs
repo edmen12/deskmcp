@@ -38,7 +38,7 @@ process.env.DOTNET_ROOT=sdk;
 process.env.DOTNET_ROOT_X64=sdk;
 process.env.DESKTOP_MCP_VDA_PATH=files.vda;
 // SHA256 of the owned WinForms DLL freshly built from THIS branch's C# source.
-const EXPECTED_OWNED_FIXTURE_SHA256='f189d5c5c2352e6bdbde58386d92b07a6adc1149d64332b2d2844f7c086a9904';
+const EXPECTED_OWNED_FIXTURE_SHA256='7c3a867d9a028a1a66e5d8c998e8157636f05e92fbd64edd07484e6002af2880';
 const fixtureSha=createHash('sha256').update(fs.readFileSync(files.fixture)).digest('hex');
 if(fixtureSha!==EXPECTED_OWNED_FIXTURE_SHA256)
  throw Error('OWNED_FIXTURE_HASH_NOT_PINNED');

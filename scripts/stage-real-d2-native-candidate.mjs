@@ -54,6 +54,10 @@ try {
  for(const x of artifacts){
   const project=path.join(repo,x.rel,x.assembly+'.csproj');
   assert.ok(fs.existsSync(project),'Source project missing '+project);
+  // Fresh checkout has no obj/project.assets.json. Restore before build:
+  // otherwise only a previously compiled candidate can pass this release gate.
+  exec(dotnet,['restore',project,'--ignore-failed-sources',
+   '-p:NuGetAudit=false','--nologo','-v:q']);
   if(x.singleFile){
    exec(dotnet,['publish',project,'-c','Release','-r','win-x64','--self-contained','true',
     '-p:PublishSingleFile=true','--no-restore','--nologo','-v:q']);

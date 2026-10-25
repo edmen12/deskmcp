@@ -33,18 +33,18 @@ const bin=(folder,name)=>path.join(original,'test-area',folder,'bin','Release','
 // Trust a specific source-provenance manifest and immutable single-file payload,
 // never an arbitrary binary regenerated in a mutable build directory.
 const stageRoot=path.join(repo,'test-area','desktop2-real-acceptance','runs',
- 'native-stage-2026-10-25T02-52-49-189Z');
+ 'native-stage-2026-10-25T03-47-26-154Z');
 const jobHost=path.join(stageRoot,'job-owned-process-host','DeskMCP.ProcessHost.exe');
 const shaFile=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const manifestPath=path.join(stageRoot,'manifest.json');
-const EXPECTED_STAGE_MANIFEST_SHA256='57f823f0461062357e6d7e315c48f84f9268eb3c46bc9700ee1ab16f7adc2f48';
-const EXPECTED_JOB_HOST_SHA256='3cbf6517eb89147f7a7d3391f14c9e08e237b45030460032ff0e2fd4b515fa65';
+const EXPECTED_STAGE_MANIFEST_SHA256='517b4914845f8174c702a7b1ead736ff42abfc9f4d2ea3a93c6e0a52a73d8605';
+const EXPECTED_JOB_HOST_SHA256='8b470d107469ec8a208039ffb7f31db372f449e9422ad071de2b77368895908b';
 if(!fs.existsSync(manifestPath)||shaFile(manifestPath)!==EXPECTED_STAGE_MANIFEST_SHA256)
  throw Error('OWNED_JOB_STAGE_MANIFEST_NOT_PINNED');
 const staged=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
 const packageInfo=staged.nativePackages?.find(p=>p.name==='job-owned-process-host');
 if(staged.releaseApproved!==false||
-   staged.sourceHead!=='46d2895a8943493a6c318b797887827fc900a62c' ||
+   staged.sourceHead!=='77b718f1185b9cc133a646931002f19e5055cf24' ||
    staged.nativeRuntimeSmoke?.passed!==true ||
    packageInfo?.packaging!=='self-contained-win-x64-single-file' ||
    packageInfo.assets?.length!==1 ||
@@ -66,7 +66,7 @@ process.env.DOTNET_ROOT=sdk;
 process.env.DOTNET_ROOT_X64=sdk;
 process.env.DESKTOP_MCP_VDA_PATH=files.vda;
 // SHA256 of the owned WinForms DLL freshly built from THIS branch's C# source.
-const EXPECTED_OWNED_FIXTURE_SHA256='f189d5c5c2352e6bdbde58386d92b07a6adc1149d64332b2d2844f7c086a9904';
+const EXPECTED_OWNED_FIXTURE_SHA256='7c3a867d9a028a1a66e5d8c998e8157636f05e92fbd64edd07484e6002af2880';
 const fixtureSha=createHash('sha256').update(fs.readFileSync(files.fixture)).digest('hex');
 if(fixtureSha!==EXPECTED_OWNED_FIXTURE_SHA256)
  throw Error('OWNED_FIXTURE_HASH_NOT_PINNED');
