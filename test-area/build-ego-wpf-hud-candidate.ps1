@@ -25,7 +25,7 @@ $panelRsp=Join-Path $work 'wpf-full-panel.rsp'
 if($LASTEXITCODE -ne 0) { throw 'WPF panel source compilation failed' }
 $bootstrap=Join-Path $app 'DeskMCP.AgentDesktopHost.dll'
 $bootstrapRsp=Join-Path $work 'wpf-probe-bootstrap.rsp'
-$probeSources=@('test-area\ego-wpf-candidate-bootstrap.cs','test-area\ego-wpf-candidate-hud-probe.cs') |
+$probeSources=@('test-area\ego-wpf-candidate-bootstrap.cs','test-area\ego-wpf-candidate-hud-probe.cs','test-area\ego-wpf-candidate-coordinator-probe.cs') |
     ForEach-Object {'"'+(Join-Path $root $_)+'"'}
 [IO.File]::WriteAllLines($bootstrapRsp,[string[]](
     @('/nologo','/target:exe','/main:CandidateWpfTestBootstrap','/langversion:latest','/nullable:enable',
