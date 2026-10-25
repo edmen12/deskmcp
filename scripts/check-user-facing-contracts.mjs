@@ -21,7 +21,7 @@ const required = new Map([
   ['docs/SIGNPATH_APPLICATION.md', ['validates 29 tools', 'exposes 29 MCP tools', 'never replace or mutate any already-published release asset']],
   ['CONTRIBUTING.md', ['Exactly 29 production MCP tools are discoverable.']],
   ['RELEASE_CHECKLIST.md', ['Release-stage smoke: read-only profile, 29 tools', 'confirm ChatGPT scans exactly 29 tools', 'Settings → Browser Automation', '**Auto-detected**', '**Configured**', '**Clear**', '**Auto Detect**', 'current Windows release', 'published GitHub Release assets are treated as immutable', 'do not replace or mutate any already-published release assets']],
-  ['scripts/test-release-stage.ps1', ['TOOLS=29']]
+  ['scripts/test-release-stage.ps1', ['TOOLS=30']]
 ]);
 
 for (const [rel, needles] of required) {

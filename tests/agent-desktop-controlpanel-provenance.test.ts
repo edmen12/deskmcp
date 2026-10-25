@@ -288,6 +288,6 @@ test('unsigned candidate PackageOnly is explicitly opted in and cannot claim ins
   assert.ok(gate>0 && normalSmoke>gate);
   assert.match(script.slice(gate,normalSmoke),/return/);
   assert.doesNotMatch(script.slice(gate,normalSmoke),/--startup|--install-current-user/);
-  assert.equal((smoke.match(/TOOLS=29/g)||[]).length,2);
+  assert.equal((smoke.match(/TOOLS=30/g)||[]).length,2);
   assert.doesNotMatch(smoke,/TOOLS=27/);
 });
