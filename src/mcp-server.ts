@@ -4,6 +4,7 @@ import type { AgentDesktopManager } from './agent-desktop-state.js';
 import { registerAgentDesktopTools } from './agent-desktop-tools.js';
 import type { ArtifactStore } from './artifact-store.js';
 import { registerArtifactTools } from './artifact-tools.js';
+import { registerFileIngressTools } from './file-ingress-tools.js';
 import type { BrowserRuntime } from './browser-runtime.js';
 import { registerBrowserTools } from './browser-tools.js';
 import { registerDesktopBackendBridgeTools } from './bridge-tools.js';
@@ -50,6 +51,7 @@ export function createDesktopMcpServer(
     registerComputerUseTools(server, policy, audit, computerUse, agentDesktop);
     if (taskStore) registerTaskTools(server, policy, audit, taskStore, agentDesktop);
     if (artifactStore) registerArtifactTools(server, policy, audit, artifactStore);
+    if (process.env.DESKTOP_MCP_FILE_INGRESS_ROOT) registerFileIngressTools(server, policy, audit);
     if (dynamicMcpHub) registerDynamicMcpTools(server, policy, audit, dynamicMcpHub);
     if (agentDesktop) registerAgentDesktopTools(server, policy, audit, agentDesktop, taskStore);
     if (browser) registerBrowserTools(server, policy, audit, browser);
