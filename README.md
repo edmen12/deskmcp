@@ -135,6 +135,18 @@ Settings lists each bound desktop separately with its current state. **Ready** m
 
 Agent Desktop Browser sessions belong to the Agent Control lease rather than one tool call. The browser remains open, including page/login state, until that lease exits, is revoked, or its linked Task Room completes. The blue safety edge/HUD is shown only on the currently viewed controlled Agent Desktop; switching back to Desktop 1 hides the overlay without stopping agents running on other bound desktops.
 
+### Experimental native file reception (developer opt-in)
+
+Setting `DESKTOP_MCP_FILE_INGRESS_ROOT` locally to an existing dedicated inbox enables
+`desktop_receive_chatgpt_file` in addition to the standard 27 tools. The experimental
+tool uses the OpenAI MCP file parameter mechanism. It requires the existing write
+permission, checks the workspace policy, and accepts new PNG/APNG/ZIP files only
+in that flat inbox. It does not extract or execute files. Signed URLs are not
+intended to appear in audit records. The default tool surface remains unchanged.
+
+End-to-end ChatGPT attachment delivery, supported download origins, security review
+and production plugin/catalog integration remain unverified.
+
 ## Security model
 
 - Gateway HTTP binds only to `127.0.0.1:8765`.
